@@ -1,0 +1,37 @@
+[project]
+name = "web-search-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Scale OSS", email = "oss@scale.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4>=4.14.2",
+    "openai-agents[litellm]>=0.6.4",
+]
+
+[project.scripts]
+web-search-agent = "web_search_agent:main"
+
+[project.optional-dependencies]
+nb = [
+    "datasets>=4.2.0",
+    "jupyter>=1.1.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+scale-vero = { path = "../../../vero", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-json-report>=1.5.0",
+    "scale-vero",
+]

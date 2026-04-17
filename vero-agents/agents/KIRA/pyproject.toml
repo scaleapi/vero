@@ -1,0 +1,21 @@
+[project]
+name = "terminus-kira"
+version = "0.1.0"
+description = "Terminus KIRA agent"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "anthropic",
+    "datasets",
+    "harbor",
+    "litellm",
+    "tenacity",
+]
+
+[dependency-groups]
+dev = [
+    "scale-vero[evaluate]",
+]
+
+[tool.uv.sources]
+scale-vero = { path = "../../../vero", editable = true }

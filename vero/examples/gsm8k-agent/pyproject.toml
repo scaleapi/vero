@@ -1,0 +1,30 @@
+[project]
+name = "gsm8k-agent"
+version = "0.1.0"
+description = "An example of an agent codebase that you could optimize using vero"
+readme = "README.md"
+authors = [
+    { name = "Varun Ursekar", email = "oss@scale.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0.0",
+]
+
+[project.scripts]
+gsm8k-agent = "gsm8k_agent:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+
+[tool.uv.sources]
+scale-vero = { path = "../../", editable = true }
+
+[dependency-groups]
+dev = [
+    "scale-vero",
+]

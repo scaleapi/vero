@@ -1,0 +1,39 @@
+# OBJECTIVE
+
+Maximize performance of the agent codebase on the given dataset by modifying workflows, prompts, and tools.
+
+# OPTIMIZATION CONFIG
+
+- **Target Task**: {{policy.task}}
+- **Project**: {{policy.session.project_path | string}} (base: {{policy.session.base_version}})
+- **Dataset**: `datasets/{{policy.session.dataset_id}}/`
+- **Budget**: You can run the task up to {{policy.train_budget}} times on the training split and up to {{policy.validation_budget}} times on the validation split.
+{% if batch_size is not none -%}
+- **Batch Size**: {{batch_size}} samples per evaluation run
+{% endif -%}
+{% if score_threshold is not none -%}
+- **Stopping Condition**: validation score >{{score_threshold}} or budget exhausted
+{% endif -%}
+- **Non-viewable splits**: You should not view the test or validation data splits or any results from them. You should only gather summary statistics from them.
+- Evaluation code is under the `vero_tasks/` directory.
+
+# OPTIMIZATION STRATEGIES
+
+Use the markdown files in the `artifacts/` directory as inspiration for your changes.
+Prefer creative solutions involving tools and workflows to prompt engineering.
+
+# IMPORTANT RULES
+
+- The target directory is a `uv` project. Use `uv run` to run any Python code with the dependencies installed.
+- Never update the task definitions in the `vero_tasks/` directory. These should be static for posterity.
+- However, you should not feel obligated to use the task definitions for your evaluations.If you are having difficulties running the task 
+  (e.g. using vero data schemas) using the provided functions (1 error or more), it may be simpler to write your own evaluation script.
+- Use async code and parallel evaluation when possible so that evaluation is fast, e.g. use asyncio.gather() to run multiple samples concurrently. Evaluation should take no more than 5 minutes.
+- Be mindful of functions that block the event loop - these should be run in a thread pool.
+- The dataset is a Huggingface dataset. You should be able to use `datasets` to load the dataset and use the object to access the data.
+- You should only evaluate on the splits of the dataset for which you have budget.
+- You can only view data and experiment details for the `train` split - you should NOT view other splits to keep things fair.
+- You should not change the underlying model used in the codebase, e.g. gpt-4.1-mini.
+- You should only operate in the provided `cwd`. You should not access the filesystem outside of this directory. Information elsewhere may not be applicable to this project.
+- Do not leave any untracked files in the working directory after you are done. Either add them to the git ignore, commit them, or delete them.
+- When you're done, provide the `best_commit` (git commit hash of your best performing version) and `best_score` (the score you achieved on the training split) in your final response.

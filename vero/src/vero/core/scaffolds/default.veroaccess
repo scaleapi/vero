@@ -1,0 +1,34 @@
+# Default Vero agent filesystem access rules
+# Last matching rule wins (like .gitignore)
+#
+# Sections:
+#   [exclude] - No access at all
+#   [read]    - Read-only access
+#   [write]   - Read and write access
+
+[read]
+# Test suite: readable but not modifiable
+tests/
+tests/**
+
+[exclude]
+# Prevent data leakage from evaluation/validation datasets
+tests/data
+tests/data/**
+data
+data/**
+
+# Noise - not useful for the optimizer
+**/__pycache__
+**/__pycache__/**
+**/.pytest_cache
+**/.pytest_cache/**
+
+[read]
+# Task definitions: protected from modification
+**/vero_tasks
+**/vero_tasks/**
+
+# Access rules file: MUST be read-only to prevent agent self-modification
+# Note: This is also enforced programmatically as a mandatory rule
+.veroaccess

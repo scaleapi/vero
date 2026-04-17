@@ -1,0 +1,99 @@
+[project]
+name = "scale-vero"
+version = "0.4.7"
+description = "A package for optimizing uv-based agents with coding agents."
+readme = "README.md"
+authors = [
+    { name = "Varun Ursekar", email = "oss@scale.com" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "async-lru>=2.0.5",
+    "click>=8.0.0",
+    "datasets>=4.3.0",
+    "pydantic>=2.11.7",
+    "python-dotenv>=1.2.2",
+    "requests>=2.32.5",
+    "s3fs>=2025.9.0",
+    "tenacity>=9.1.2",
+    "toml>=0.10.2",
+    "tqdm>=4.67.1",
+]
+
+[project.scripts]
+vero = "vero.core.cli:main"
+
+[project.optional-dependencies]
+wandb = [
+    "wandb>=0.2.5",
+]
+sgp = [
+    "scale-gp-beta>=0.1.0a39",
+]
+docker = [
+    "docker>=7.1.0",
+]
+claude = [
+    "claude-agent-sdk>=0.1.56",
+]
+optimize = [
+    "async-lru>=2.0.5",
+    "beautifulsoup4>=4.14.2",
+    "datasets>=4.3.0",
+    "haikunator>=2.1.0",
+    "jinja2>=3.1.6",
+    "nest-asyncio>=1.6.0",
+    "openai>=2.6.1",
+    "openai-agents[litellm]>=0.4.2",
+    "pypdf>=6.2.0",
+    "rich>=13.9.4",
+    "s3fs>=2025.9.0",
+    "tabulate>=0.9.0",
+    "trafilatura>=2.0.0",
+    "wcmatch>=10.1",
+]
+jupyter = [
+    "jupyter>=1.1.1",
+]
+kaggle = [
+    "kagglehub>=0.3.13",
+]
+evaluate = [
+    "haikunator>=2.1.0",
+    "rich>=13.9.4",
+]
+plot = [
+    "matplotlib>=3.10.8",
+]
+notebook = [
+    "jupyterlab>=4.5.2",
+    "marimo[recommended]>=0.22.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vero"]
+
+[[tool.uv.index]]
+url = "https://pypi.org/simple"
+name = "pypi"
+
+[tool.uv.sources]
+vero = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+
+[dependency-groups]
+dev = [
+    "gitpython>=3.1.46",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-json-report>=1.5.0",
+    "scale-vero[optimize,evaluate,claude]",
+]

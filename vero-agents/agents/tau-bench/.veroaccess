@@ -1,0 +1,108 @@
+# Vero agent filesystem access rules for tau-bench
+# Last matching rule wins (like .gitignore)
+#
+# Sections:
+#   [exclude] - No access at all
+#   [read]    - Read-only access
+#   [write]   - Read and write access
+#
+# Goal: Optimizer can modify agent behavior, but NOT eval methodology
+
+[exclude]
+# =============================================================================
+# EVAL DATA - Must be excluded to prevent data leakage / gaming
+# =============================================================================
+
+# Task definitions - only exclude TEST split to prevent eval gaming
+tau_bench/envs/retail/tasks.py
+tau_bench/envs/retail/tasks_test.py
+tau_bench/envs/airline/tasks.py
+tau_bench/envs/airline/tasks_test.py
+
+# Grading rules (how success is determined)
+tau_bench/envs/retail/rules.py
+tau_bench/envs/airline/rules.py
+
+# Mock databases (ground truth data)
+tau_bench/envs/retail/data
+tau_bench/envs/retail/data/**
+tau_bench/envs/airline/data
+tau_bench/envs/airline/data/**
+
+# Historical trajectories (reference results)
+historical_trajectories
+historical_trajectories/**
+
+# Few-shot data (could leak task patterns)
+few_shot_data
+few_shot_data/**
+
+# =============================================================================
+# NOISE - Not useful for optimization
+# =============================================================================
+**/__pycache__
+**/__pycache__/**
+**/.pytest_cache
+**/.pytest_cache/**
+.git
+.git/**
+*.lock
+
+[read]
+# =============================================================================
+# EVAL HARNESS - Readable but not modifiable
+# =============================================================================
+
+# Run infrastructure
+run.py
+tau_bench/run.py
+tau_bench/types.py
+
+# Environment base classes and interfaces
+tau_bench/envs/__init__.py
+tau_bench/envs/base.py
+tau_bench/envs/tool.py
+tau_bench/envs/user.py
+
+# Tool definitions (agent needs to understand available tools)
+tau_bench/envs/retail/tools
+tau_bench/envs/retail/tools/**
+tau_bench/envs/airline/tools
+tau_bench/envs/airline/tools/**
+
+# Policy documentation (agent's reference material)
+tau_bench/envs/retail/wiki.md
+tau_bench/envs/retail/wiki.py
+tau_bench/envs/airline/wiki.md
+tau_bench/envs/airline/wiki.py
+
+# Environment entry points
+tau_bench/envs/retail/__init__.py
+tau_bench/envs/retail/env.py
+tau_bench/envs/airline/__init__.py
+tau_bench/envs/airline/env.py
+
+# Model utilities (API wrappers - read to understand, don't modify)
+tau_bench/model_utils
+tau_bench/model_utils/**
+
+# Vero task definitions
+tau_bench/vero_tasks
+tau_bench/vero_tasks/**
+
+# Config files
+setup.py
+README.md
+LICENSE
+
+# Access rules file: MUST be read-only to prevent agent self-modification
+.veroaccess
+
+[write]
+# =============================================================================
+# AGENT CODE - The optimizer's target
+# =============================================================================
+
+# Agent implementations (primary optimization target)
+tau_bench/agents
+tau_bench/agents/**
