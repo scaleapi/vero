@@ -1,0 +1,17 @@
+#!/bin/bash
+# Oracle "optimizer" used for the e2e smoke test: make one trivial edit, commit,
+# and measure it on the selection split. The auto-best verifier then scores the
+# selected commit on the hidden test split. A real optimizer agent replaces this.
+set -ex
+cd /work/agent
+git config user.email optimizer@example.com
+git config user.name optimizer
+
+# A no-op-ish "improvement" so there is a non-baseline commit to select.
+echo "# optimizer touch" >> README.md 2>/dev/null || echo "# optimizer touch" > NOTES.md
+git add -A
+git commit -m "optimizer candidate"
+
+vero harbor eval --dataset-id {{ dataset_id }} --split {{ selection_split }}{% if eval_num_samples %} --num-samples {{ eval_num_samples }}{% endif %}
+
+vero harbor status

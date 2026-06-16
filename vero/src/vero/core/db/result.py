@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Sequence
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from vero.core.constants import default_maximum_score, default_minimum_score
 from vero.core.db.dataset import DatasetSample
@@ -20,19 +19,41 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TaskOutput:
-    """Non-serializable output of an agent on a single task. Used within a subprocess to collate the outputs of the inference process.
+class TaskOutput(BaseModel):
+    """Serializable output of inference on a single task.
+
+    Persisted between the inference and scoring stages, so it must be
+    JSON-serializable. An ``Exception`` passed to ``error`` is coerced to its
+    string form, with the traceback captured into ``error_traceback``.
 
     Attributes:
         output: The output of the agent on the task.
-        error: An optional error string, e.g. the traceback of the error.
-        execution_trace: An optional list of spans indicating details of the inference process.
+        error: An error string (e.g. ``str(exception)``).
+        error_traceback: Full traceback string if inference raised.
+        execution_trace: An optional list of spans describing the inference process.
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     output: Any = None
-    error: Exception | None = None
+    error: str | None = None
+    error_traceback: str | None = None
     execution_trace: Sequence[Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_exception_error(cls, data: Any) -> Any:
+        """Accept an Exception in ``error`` and convert it to str + traceback."""
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, BaseException):
+                data = dict(data)
+                data["error"] = str(err)
+                if not data.get("error_traceback"):
+                    data["error_traceback"] = "".join(
+                        traceback.format_exception(type(err), err, err.__traceback__)
+                    )
+        return data
 
 
 class TaskResult(BaseModel):
@@ -62,21 +83,12 @@ class TaskResult(BaseModel):
 
     @classmethod
     def from_task_output(cls, task_output: TaskOutput, **kwargs: Any) -> TaskResult:
-        """Create a TaskResult from a TaskOutput."""
-
-        if isinstance(task_output.error, Exception):
-            kwargs["error"] = str(task_output.error)
-            kwargs["error_traceback"] = "".join(
-                traceback.format_exception(
-                    type(task_output.error),
-                    task_output.error,
-                    task_output.error.__traceback__,
-                )
-            )
-
-        kwargs["execution_trace"] = task_output.execution_trace
+        """Create a TaskResult from a (serializable) TaskOutput."""
         kwargs["output"] = task_output.output
-
+        kwargs["execution_trace"] = task_output.execution_trace
+        if task_output.error is not None:
+            kwargs.setdefault("error", task_output.error)
+            kwargs.setdefault("error_traceback", task_output.error_traceback)
         return cls(**kwargs)
 
 
@@ -112,6 +124,10 @@ class SampleResult(TaskResult):
             or self.score is None
             or self.error_traceback is not None
         )
+
+    def is_scored(self) -> bool:
+        """True once the scoring stage has run for this sample (score or eval_error set)."""
+        return self.score is not None or self.eval_error is not None
 
     def as_pandas_series(self, exclude: set[str] | None = None) -> Series:
         """Return the sample result in a pandas representation."""

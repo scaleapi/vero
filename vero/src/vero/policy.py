@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -17,7 +16,7 @@ from vero.core.dataset import (
 )
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluator import Evaluator
+from vero.evaluation.evaluator import Evaluator
 from vero.filesystem import AccessRule, AccessType
 from vero.logging import SessionLogger, log_experiments_to_wandb
 from vero.sandbox import Sandbox
@@ -31,6 +30,8 @@ if TYPE_CHECKING:
     import wandb
     from datasets import DatasetDict
     from jinja2 import Template
+
+    from vero.harbor.config import HarborConfig
 
     DatasetT = Path | str | DatasetDict
 
@@ -140,6 +141,11 @@ class Policy:
     # --- Sandbox ---
     sandbox: Sandbox | None = None
 
+    # --- Harbor (Mode B) ---
+    # When set, evaluation runs a nested `harbor run` (the agent-under-test on the
+    # configured Harbor tasks) instead of vero-native inference/scoring.
+    harbor: HarborConfig | None = None
+
     # --- Storage ---
     vero_home: Path | str | None = None
 
@@ -221,7 +227,7 @@ class Policy:
         # Git workspace — create via sandbox.run() git commands
         project_path = Path(self.project_path)
         if self.isolate:
-            from vero.evaluator import isolate_project
+            from vero.evaluation.evaluator import isolate_project
 
             project_path = isolate_project(
                 project_path, self.session_id, self.ref, sessions_dir=self.sessions_dir
@@ -337,6 +343,13 @@ class Policy:
         self._validate_budget_splits()
         self.session.budget = self.budget
 
+        # Mode B: inject a HarborRunner strategy when a HarborConfig is set.
+        eval_strategy = None
+        if self.harbor is not None:
+            from vero.harbor.runner import HarborRunner
+
+            eval_strategy = HarborRunner(self.harbor)
+
         # Evaluator — with explicit subprocess env
         self.session.evaluator = Evaluator(
             self.session.workspace,
@@ -345,6 +358,7 @@ class Policy:
             subprocess_env_vars=self.subprocess_env_vars,
             task_project=Path(self.task_project) if self.task_project else None,
             task_module=self.task_module,
+            eval_strategy=eval_strategy,
         )
 
         # Register artifact callbacks on evaluator so they fire for all eval paths

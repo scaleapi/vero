@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from vero.evaluator import run_evaluation
+from vero.evaluation.evaluator import run_evaluation
 
 
 def _init_git(path: Path) -> None:

@@ -525,6 +525,22 @@ agent = VeroAgent(
 )
 ```
 
+## Harbor integration
+
+vero can compile an optimization run into a [Harbor](https://www.harborframework.com) task, so the *optimizer* itself becomes a Harbor agent-under-test: any Harbor agent (Claude Code, an oracle script, …) edits a target repo and spends an evaluation budget, and the reward is the best candidate's score on a hidden split. This makes optimization runs reproducible and leaderboard-gradeable — the optimizer can't read hidden labels, modify the scorer, or bypass its budget.
+
+```bash
+uv pip install 'scale-vero[harbor]'
+vero harbor build -c build.yaml -o /tmp/opt-task        # compile a Harbor task
+vero harbor run   -c build.yaml -a claude-code -m claude-haiku-4-5 -e docker   # build + run
+```
+
+Two evaluation modes: **Mode A** (vero runs inference + scoring against vero-side labels) and **Mode B** (evaluation is delegated to a *nested* `harbor run`, e.g. on Modal). See:
+
+- [`docs/harbor/architecture.md`](docs/harbor/architecture.md) — what it is, the topology, and the leaderboard-integrity model.
+- [`docs/harbor/tutorial.md`](docs/harbor/tutorial.md) — build and run a task end to end.
+- [`examples/gsm8k-agent`](examples/gsm8k-agent) (Mode A) and [`examples/gaia-optimization`](examples/gaia-optimization) (Mode B).
+
 ## Examples
 
 See [`examples/matmul-kernel/`](examples/matmul-kernel/) for a complete runnable example that optimizes a matrix multiply kernel for speed. It demonstrates eval-only mode, full optimization with VeroAgent or Claude Code, filesystem artifacts, and resource-based editing.

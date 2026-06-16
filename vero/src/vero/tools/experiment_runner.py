@@ -2,88 +2,28 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, NoReturn
 
+from vero.core.budget import BudgetLedger, SplitBudget
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluator import Evaluator
+from vero.evaluation.evaluator import Evaluator
 from vero.exceptions import (
     ExperimentBudgetExceeded,
     ExperimentRunFailedError,
-    InvalidSplitError,
 )
+from vero.evaluation.engine import EvalRequest, EvaluationEngine
 from vero.tools.utils import is_tool
 
 logger = logging.getLogger(__name__)
 
+# SplitBudget moved to vero.core.budget; re-exported here for the public import path.
+__all__ = ["ExperimentRunnerTool", "SplitBudget"]
+
 
 def _default_on_fatal(msg: str) -> NoReturn:
     raise RuntimeError(msg)
-
-
-@dataclass
-class SplitBudget:
-    """A stateful object that tracks the remaining budget for running experiments."""
-
-    split: str
-    dataset_id: str = ""
-    total_sample_budget: int | None = None
-    remaining_sample_budget: int | None = field(init=False)
-    total_run_budget: int | None = None
-    remaining_run_budget: int | None = field(init=False)
-    max_samples_per_run: int | None = None
-
-    def __repr__(self) -> str:
-        repr_items = [
-            ("split", self.split),
-            ("dataset_id", self.dataset_id),
-            ("total_sample_budget", self.total_sample_budget),
-            ("total_run_budget", self.total_run_budget),
-        ]
-        repr_items = [item for item in repr_items if item[1] is not None]
-        return (
-            f"SplitBudget({', '.join([f'{item[0]}={item[1]}' for item in repr_items])})"
-        )
-
-    def __post_init__(self):
-        assert (
-            self.total_sample_budget is not None or self.total_run_budget is not None
-        ), "Either total sample budget or total run budget must be provided."
-        self.remaining_sample_budget = self.total_sample_budget
-        self.remaining_run_budget = self.total_run_budget
-
-        assert (
-            isinstance(self.total_sample_budget, int)
-            or self.total_sample_budget is None
-        )
-        assert isinstance(self.total_run_budget, int) or self.total_run_budget is None
-        assert (
-            isinstance(self.max_samples_per_run, int)
-            or self.max_samples_per_run is None
-        )
-
-    def has_run_budget(self) -> bool:
-        return self.remaining_run_budget is None or self.remaining_run_budget > 0
-
-    def decrement_run_budget(self) -> None:
-        if self.remaining_run_budget is not None:
-            self.remaining_run_budget -= 1
-
-    def has_sample_budget(self, num_samples: int) -> bool:
-        return (
-            self.remaining_sample_budget is None
-            or self.remaining_sample_budget >= num_samples
-        )
-
-    def decrement_sample_budget(self, num_samples: int) -> None:
-        if self.remaining_sample_budget is not None:
-            self.remaining_sample_budget -= num_samples
-
-    def exceeds_per_run_budget(self, num_samples: int) -> bool:
-        return (
-            self.max_samples_per_run is not None
-            and num_samples > self.max_samples_per_run
-        )
 
 
 @dataclass
@@ -101,15 +41,25 @@ class ExperimentRunnerTool:
     )
     _task: str | None = None
     db: ExperimentDatabase | None = None
-    _budget_map: dict[tuple[str, str], SplitBudget] = field(
-        default_factory=dict, repr=False
-    )
+    _vero_home: Path | None = None
+    _session_id: str | None = None
+    # The shared evaluation core. This tool is a thin frontend over it (formats
+    # results for the LLM, owns on_fatal); the Harbor sidecar is the other frontend.
+    engine: EvaluationEngine | None = field(default=None, repr=False)
 
     def __post_init__(self):
-        if self.split_budgets:
-            self._budget_map = {
-                (sb.split, sb.dataset_id): sb for sb in self.split_budgets
-            }
+        self._build_engine()
+
+    def _build_engine(self) -> None:
+        self.engine = EvaluationEngine(
+            evaluator=self.evaluator,
+            budget=BudgetLedger(self.split_budgets or []),
+            default_task=self._task,
+            db=self.db,
+            run_constraints=self.run_constraints,
+            session_id=self._session_id,
+            vero_home=self._vero_home,
+        )
 
     def bind(self, session) -> None:
         from copy import deepcopy
@@ -121,21 +71,23 @@ class ExperimentRunnerTool:
         self._vero_home = session.vero_home
         self.run_constraints = session.evaluation_parameters
         self._task = session.task
-        self._budget_map = {(sb.split, sb.dataset_id): sb for sb in self.split_budgets}
+        self._build_engine()
+
+    @property
+    def _budget_ledger(self) -> BudgetLedger:
+        return self.engine.budget
+
+    @property
+    def _budget_map(self) -> dict[tuple[str, str], SplitBudget]:
+        """Back-compat view of the budget ledger, keyed (split, dataset_id).
+
+        Returns the ledger's live SplitBudget objects (mutations propagate).
+        """
+        return self.engine.budget.status()
 
     def _get_dataset_info(self, dataset_id: str):
-        """Get dataset info from the store."""
-        from vero.core.dataset import DatasetInfo
-        from vero.core.dataset.store import load_dataset
-
-        sessions_dir = self._vero_home / "sessions" if self._vero_home else None
-        dataset_cache = self._vero_home / "datasets" if self._vero_home else None
-        dataset = load_dataset(sessions_dir, dataset_cache, self._session_id, dataset_id)
-        return DatasetInfo(
-            id=dataset_id,
-            splits={split: len(dataset[split]) for split in dataset},
-            features={split: list(dataset[split].features) for split in dataset},
-        )
+        """Get dataset info from the store (delegates to the shared service)."""
+        return self.engine._get_dataset_info(dataset_id)
 
     async def _resolve_commit(self, commit: str) -> str:
         """Resolve a commit reference to its full hash.
@@ -165,93 +117,32 @@ class ExperimentRunnerTool:
     def _get_samples_from_split(
         self, dataset_id: str, split: str, num_samples: int
     ) -> list[int] | None:
-        """Get a list of sample ids from a split. If num_samples is greater than or equal to the size of the split, return None."""
-        dataset_info = self._get_dataset_info(dataset_id)
-        split_size = dataset_info.splits[split]
-        num_samples = min(num_samples, split_size)
-
-        if num_samples >= split_size:
-            return None
-
-        sample_ids = list(range(num_samples))
-        return sample_ids
+        """First-N sample ids, or None for the whole split (delegates to the service)."""
+        return self.engine._get_samples_from_split(dataset_id, split, num_samples)
 
     def _validate_and_count_samples(
         self, dataset_id: str, split: str, sample_ids: list[int] | None = None
     ) -> int:
-        """Validate and count the number of samples in a split. If sample_ids is None, return the size of the split."""
-
-        dataset_info = self._get_dataset_info(dataset_id)
-        split_size = dataset_info.splits[split]
-
-        # If None, the full split is being evaluated
-        if sample_ids is None:
-            return split_size
-
-        # Validate that the sample ids are within the range of the split
-        invalid_sample_ids = []
-        for sample_id in sample_ids:
-            if sample_id < 0 or sample_id >= split_size:
-                invalid_sample_ids.append(sample_id)
-
-        if len(invalid_sample_ids) > 0:
-            raise ValueError(
-                f"The provided sample ids are outside the range of the split [0, {split_size - 1}]: {invalid_sample_ids}"
-            )
-
-        return len(sample_ids)
+        """Validate + count samples (delegates to the service)."""
+        return self.engine._validate_and_count_samples(dataset_id, split, sample_ids)
 
     def _validate_split_access(self, dataset_id: str, split: str) -> None:
         """Validate that the split and dataset combination is allowed."""
-
-        if (split, dataset_id) not in self._budget_map:
-            allowed_keys = list(self._budget_map.keys())
-            raise InvalidSplitError(
-                f"No split budget found for the combination (dataset_id={dataset_id}, split={split}) either because it does not exist or because it is not allowed. Allowed combinations: {allowed_keys}"
-            )
+        self._budget_ledger.validate(dataset_id, split)
 
     def _check_budget(
         self, dataset_id: str, split: str, requested_num_samples: int
-    ) -> str:
+    ) -> None:
         """Check that the budget allows for the requested number of samples."""
-
-        # Check if this split and dataset combination is allowed
-        self._validate_split_access(dataset_id, split)
-        budget = self._budget_map[(split, dataset_id)]
-
-        # Determine if we have enough runs left
-        if not budget.has_run_budget():
-            raise ExperimentBudgetExceeded(
-                f"No runs left for the {split} split of the {dataset_id} dataset."
-            )
-
-        # Check against remaining sample budget
-        if not budget.has_sample_budget(requested_num_samples):
-            raise ExperimentBudgetExceeded(
-                f"Requested {requested_num_samples} samples for the {split} split of the {dataset_id} dataset, but the remaining sample budget only allows for {budget.remaining_sample_budget} samples."
-            )
-
-        # Check against max samples per run constraint
-        if budget.exceeds_per_run_budget(requested_num_samples):
-            raise ExperimentBudgetExceeded(
-                f"Requested {requested_num_samples} samples for the {split} split of the {dataset_id} dataset, but only {budget.max_samples_per_run} are allowed per run."
-            )
+        self._budget_ledger.check(dataset_id, split, requested_num_samples)
 
     def _update_budget(self, dataset_id: str, split: str, num_samples: int) -> str:
-        """Update the remaining budget for a given dataset and split and return a message about the update."""
-
-        self._validate_split_access(dataset_id, split)
-        budget = self._budget_map[(split, dataset_id)]
+        """Decrement the budget for a given dataset and split; return a status message."""
+        budget = self._budget_ledger.record(dataset_id, split, num_samples)
 
         info = ""
-
-        # Update the remaining budget
-        budget.decrement_sample_budget(num_samples)
         if budget.total_sample_budget is not None:
             info += f"Used {num_samples} samples from the total {budget.total_sample_budget} sample budget. Remaining sample budget: {budget.remaining_sample_budget}. "
-
-        # Update the remaining runs
-        budget.decrement_run_budget()
         if budget.remaining_run_budget is not None:
             info += f"Used 1 run from the total {budget.total_run_budget} run budget. Remaining runs: {budget.remaining_run_budget}"
 
@@ -263,20 +154,18 @@ class ExperimentRunnerTool:
         dataset_id: str,
         split: str,
         sample_ids: list[int] | None = None,
-        add_to_db: bool = True,
     ) -> Experiment:
-        """Evaluate a version of the codebase specified by a Git commit on a subset of a dataset."""
+        """Run one evaluation via the shared EvaluationEngine.
 
+        Uses ``admin=True`` so the service does not meter the budget — this tool
+        owns budgeting via ``_check_budget``/``_update_budget`` (check-before,
+        decrement-after) to preserve its existing semantics.
+        """
+        req = EvalRequest(
+            dataset_id=dataset_id, split=split, commit=commit, sample_ids=sample_ids
+        )
         try:
-            return await self.evaluator.evaluate(
-                commit=commit,
-                dataset_id=dataset_id,
-                split=split,
-                task=self._task,
-                sample_ids=sample_ids,
-                db=self.db if add_to_db else None,
-                evaluation_parameters=self.run_constraints,
-            )
+            return await self.engine.evaluate(req, admin=True)
         except ExperimentRunFailedError as e:
             if e.returncode >= 3:
                 self.on_fatal(str(e))
@@ -295,8 +184,7 @@ class ExperimentRunnerTool:
         Returns:
             A string containing the remaining budget for the given dataset and split.
         """
-        self._validate_split_access(dataset_id, split)
-        budget = self._budget_map[(split, dataset_id)]
+        budget = self._budget_ledger.get(dataset_id, split)
 
         info = ""
         if budget.total_sample_budget is not None:
@@ -355,7 +243,6 @@ class ExperimentRunnerTool:
                 dataset_id=dataset_id,
                 split=split,
                 sample_ids=sample_ids,
-                add_to_db=True,
             )
         except Exception as e:
             raise e
@@ -385,7 +272,9 @@ class ExperimentRunnerTool:
         """
 
         accessible_splits = [
-            split for (split, ds_id) in self._budget_map.keys() if ds_id == dataset_id
+            split
+            for (split, ds_id) in self._budget_ledger.status().keys()
+            if ds_id == dataset_id
         ]
 
         logger.info(
@@ -403,7 +292,7 @@ class ExperimentRunnerTool:
 
         for split in accessible_splits:
             full_split_size = self._validate_and_count_samples(dataset_id, split)
-            budget = self._budget_map.get((split, dataset_id))
+            budget = self._budget_ledger.get(dataset_id, split)
 
             # Cap samples to remaining budget if needed
             requested_num_samples = full_split_size
@@ -436,7 +325,6 @@ class ExperimentRunnerTool:
                     dataset_id=dataset_id,
                     split=split,
                     sample_ids=sample_ids,
-                    add_to_db=True,
                 )
             except Exception as e:
                 results[split] = e

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from vero.core.dataset import SplitAccess
 from vero.core.db import ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluator import Evaluator
+from vero.evaluation.evaluator import Evaluator
 from vero.tools.experiment_runner import SplitBudget  # noqa: E402 — direct import avoids tools/__init__.py
 from vero.workspace import Workspace
 

@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import json
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 from datasets import Dataset, DatasetDict
 from vero.core.dataset import (
-    DatasetInfo,
     DefaultSplitNames,
-    SplitAccess,
     default_split_accesses,
-    get_non_viewable_splits,
 )
 from vero.core.dataset.store import save_dataset
 from vero.policy import Session

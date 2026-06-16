@@ -1,0 +1,45 @@
+# Merged LAST by Harbor over its build template (which auto-configures `main`
+# from environment/Dockerfile). We add the eval-sidecar + volumes and wire main.
+services:
+  main:
+    # Run as root so the seed step can chown the repo and the verifier (shared
+    # mode) can read the root:600 admin token. Harbor execs the optimizer as the
+    # [agent].user ("agent") declared in task.toml.
+    command: ["/opt/seed.sh"]
+    environment:
+      VERO_EVAL_URL: "http://eval-sidecar:8000"
+    volumes:
+      - agent_repo:/work/agent
+      - agent_results:/state/agent-results:ro
+      - token_state:/state/token:ro
+    depends_on:
+      eval-sidecar:
+        condition: service_healthy
+
+  eval-sidecar:
+    build:
+      context: .
+      dockerfile: sidecar/Dockerfile
+    command: ["vero", "harbor", "serve", "--config", "/opt/serve.json"]
+    environment:
+      VERO_HOME_DIR: "/opt/vero_home"
+{% for secret in secrets %}
+      {{ secret }}: "${{ '{' }}{{ secret }}{{ '}' }}"
+{% endfor %}
+    volumes:
+      - agent_repo:/work/agent:ro
+      - agent_results:/state/agent-results
+      - admin_state:/state/admin
+      - token_state:/state/token
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+volumes:
+  agent_repo:
+  agent_results:
+  admin_state:
+  token_state:
