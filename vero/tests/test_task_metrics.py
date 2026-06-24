@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vero.evaluator import Evaluator
+from vero.evaluation.evaluator import Evaluator
 from vero.utils.asyncio import SubprocessResult
 
 pytestmark = pytest.mark.asyncio
@@ -43,8 +43,8 @@ async def test_run_task_reads_metrics_from_file(evaluator, experiment_dir):
             returncode=0,
         )
 
-    with patch("vero.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
-        with patch("vero.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
+    with patch("vero.evaluation.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
+        with patch("vero.evaluation.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
             result = await evaluator._run_task(
                 Path("/fake/project"), "test_task", params_file
             )
@@ -59,8 +59,8 @@ async def test_run_task_returns_none_when_no_metrics_file(evaluator, experiment_
     def fake_subprocess(*args, **kwargs):
         return SubprocessResult(args=["fake"], stdout="", stderr="", returncode=0)
 
-    with patch("vero.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
-        with patch("vero.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
+    with patch("vero.evaluation.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
+        with patch("vero.evaluation.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
             result = await evaluator._run_task(
                 Path("/fake/project"), "test_task", params_file
             )
@@ -76,8 +76,8 @@ async def test_run_task_returns_none_on_invalid_metrics_json(evaluator, experime
         (tmp_path / "metrics.json").write_text("not valid json {{{")
         return SubprocessResult(args=["fake"], stdout="", stderr="", returncode=0)
 
-    with patch("vero.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
-        with patch("vero.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
+    with patch("vero.evaluation.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
+        with patch("vero.evaluation.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
             result = await evaluator._run_task(
                 Path("/fake/project"), "test_task", params_file
             )
@@ -98,8 +98,8 @@ async def test_run_task_saves_subprocess_output(evaluator, experiment_dir):
             returncode=0,
         )
 
-    with patch("vero.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
-        with patch("vero.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
+    with patch("vero.evaluation.evaluator.run_subprocess_with_tee", new=AsyncMock(side_effect=fake_subprocess)):
+        with patch("vero.evaluation.evaluator.UvRunParameters.from_env", return_value=MagicMock(get_cmd=lambda: ["uv", "run"])):
             await evaluator._run_task(Path("/fake/project"), "test_task", params_file)
 
     assert (tmp_path / "subprocess_stdout.log").read_text() == "some stdout"

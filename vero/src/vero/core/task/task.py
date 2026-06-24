@@ -14,7 +14,12 @@ from pydantic import JsonValue
 from vero.core.db.dataset import DatasetSample
 from vero.core.db.result import SampleResult, TaskOutput, TaskResult
 from vero.core.evaluation import EvaluationParameters
-from vero.core.sessions import get_vero_home_dir, save_sample_result
+from vero.core.sessions import (
+    get_vero_home_dir,
+    load_all_sample_results,
+    load_sample_result,
+    save_sample_result,
+)
 from vero.core.utils import limited_gather, maybe_await
 
 logger = logging.getLogger(__name__)
@@ -79,6 +84,7 @@ class VeroTask:
         register: bool = True,
         task_parameters_type: type | None = None,
         required_env_vars: list[str] | None = None,
+        label_fields: list[str] | None = None,
     ):
         """Initialize a VeroTask.
 
@@ -90,12 +96,16 @@ class VeroTask:
             required_env_vars: Environment variables that must be set for this task
                 to run (e.g. ``["LITELLM_BASE_URL", "LITELLM_API_KEY"]``).
                 Checked before the evaluation subprocess starts.
+            label_fields: Dataset columns holding labels/ground truth. Stripped from
+                each sample before inference (so inference never sees them); scoring
+                receives the full row. Static, immutable task property.
         """
         self.name = name
         self._functions: dict[str, Callable] = {}
         self._batch_functions: dict[str, Callable] = {}
         self._task_parameters_type = task_parameters_type
         self.required_env_vars: list[str] = required_env_vars or []
+        self.label_fields: list[str] = label_fields or []
 
         if register:
             if name in VeroTask._registry:
@@ -502,76 +512,111 @@ class VeroTask:
     # Results
     # -------------------------------------------------------------------------
 
-    def compile_and_save_sample_results(
-        self,
-        evaluation_parameters: EvaluationParameters,
-        results: list[TaskResult | Exception],
-        task_data: Sequence[dict[str, JsonValue]] | None = None,
-    ) -> dict[str, int | float | None]:
-        """Compile results into SampleResult objects and save to disk.
+    # -------------------------------------------------------------------------
+    # Per-stage persistence
+    #
+    # Each sample is persisted to its own ``samples/{id}.json`` file as it
+    # completes: a partial SampleResult after inference (score=None), then the
+    # same file updated with scoring fields. This makes every stage independently
+    # runnable and resumable from any partial state.
+    # -------------------------------------------------------------------------
 
-        Args:
-            evaluation_parameters: Evaluation parameters.
-            results: List of evaluation results or exceptions.
-            task_data: Raw task data dicts for each sample (used to populate input field).
+    def _sessions_dir(self) -> Path:
+        return get_vero_home_dir() / "sessions"
 
-        Returns:
-            Metrics dictionary.
+    def _scrub_inputs(self, row: Any) -> Any:
+        """Strip ``label_fields`` from a sample before it reaches inference.
+
+        Only applies to mapping rows; non-mapping rows pass through unchanged.
         """
+        if not self.label_fields:
+            return row
+        try:
+            return {k: v for k, v in dict(row).items() if k not in self.label_fields}
+        except (TypeError, ValueError):
+            return row
+
+    def _dataset_sample(
+        self, params: EvaluationParameters, sample_id: int
+    ) -> DatasetSample:
+        return DatasetSample(
+            sample_id=sample_id,
+            split=params.run.dataset_subset.split,
+            dataset_id=params.run.dataset_subset.dataset_id,
+        )
+
+    def _save_inference(
+        self,
+        params: EvaluationParameters,
+        sample_id: int,
+        task_data: Sequence[dict[str, JsonValue]] | None,
+        pos: int,
+        output: TaskOutput,
+    ) -> None:
+        """Persist a partial SampleResult holding only the inference output."""
+        sample_input = (
+            self._scrub_inputs(dict(task_data[pos]))
+            if task_data is not None and pos < len(task_data)
+            else None
+        )
+        sample_result = SampleResult.from_task_result(
+            dataset_sample=self._dataset_sample(params, sample_id),
+            task_result=TaskResult.from_task_output(output),
+            commit=params.run.candidate.commit,
+            result_id=params.result_id,
+            input=sample_input,
+        )
+        save_sample_result(
+            self._sessions_dir(),
+            params.session_id,
+            params.result_id,
+            sample_id=sample_id,
+            result=sample_result,
+        )
+
+    def _save_score(
+        self,
+        params: EvaluationParameters,
+        sample_result: SampleResult,
+        task_result: TaskResult,
+    ) -> None:
+        """Update a persisted SampleResult with scoring-stage fields and re-save."""
+        sample_result.score = task_result.score
+        sample_result.feedback = task_result.feedback
+        sample_result.metrics = task_result.metrics
+        sample_result.eval_error = task_result.eval_error
+        sample_result.eval_trace = task_result.eval_trace
+        if task_result.error_traceback and sample_result.error_traceback is None:
+            sample_result.error_traceback = task_result.error_traceback
+        save_sample_result(
+            self._sessions_dir(),
+            params.session_id,
+            params.result_id,
+            sample_id=sample_result.dataset_sample.sample_id,
+            result=sample_result,
+        )
+
+    def compute_metrics(
+        self, params: EvaluationParameters
+    ) -> dict[str, int | float | None]:
+        """Compute metrics from the SampleResults persisted on disk."""
         from vero.core.constants import default_minimum_score
 
-        metrics = {
-            "num_samples": len(results),
+        sample_results = load_all_sample_results(
+            self._sessions_dir(), params.session_id, params.result_id
+        )
+
+        metrics: dict[str, int | float | None] = {
+            "num_samples": len(sample_results),
             "num_errors": 0,
             "avg_score": 0,
             "avg_filled_score": None,
         }
-
-        sample_results: dict[int, SampleResult] = {}
-        sample_ids = evaluation_parameters.run.dataset_subset.sample_ids
-        if sample_ids is None:
-            sample_ids = list(range(len(results)))
-
-        commit = evaluation_parameters.run.candidate.commit
-        result_id = evaluation_parameters.result_id
-
-        for idx, (sample_id, result) in enumerate(zip(sample_ids, results)):
-            dataset_sample = DatasetSample(
-                sample_id=sample_id,
-                split=evaluation_parameters.run.dataset_subset.split,
-                dataset_id=evaluation_parameters.run.dataset_subset.dataset_id,
-            )
-
-            sample_input = (
-                dict(task_data[idx])
-                if task_data is not None and idx < len(task_data)
-                else None
-            )
-            common_kwargs = {
-                "commit": commit,
-                "result_id": result_id,
-                "input": sample_input,
-            }
-
-            if isinstance(result, Exception):
-                error = "".join(
-                    traceback.format_exception(
-                        type(result), result, result.__traceback__
-                    )
-                )
-                sample_results[sample_id] = SampleResult(
-                    dataset_sample=dataset_sample, error=error, **common_kwargs
-                )
-                metrics["num_errors"] = metrics["num_errors"] + 1
-            else:
-                sample_results[sample_id] = SampleResult.from_task_result(
-                    dataset_sample=dataset_sample, task_result=result, **common_kwargs
-                )
-
-                if result.error is not None or result.eval_error is not None:
-                    metrics["num_errors"] = metrics["num_errors"] + 1
-                elif result.score is not None:
-                    metrics["avg_score"] = metrics["avg_score"] + result.score
+        for sr in sample_results.values():
+            if sr.error is not None or sr.eval_error is not None:
+                metrics["num_errors"] += 1
+            elif sr.score is not None:
+                metrics["avg_score"] += sr.score
 
         metrics["num_successes"] = metrics["num_samples"] - metrics["num_errors"]
 
@@ -581,7 +626,6 @@ class VeroTask:
             metrics["avg_score"] = None
 
         metrics["avg_filled_score"] = metrics["avg_score"]
-
         if metrics["avg_score"] is None:
             metrics["avg_filled_score"] = default_minimum_score
         elif metrics["num_errors"] > 0:
@@ -589,19 +633,6 @@ class VeroTask:
                 metrics["num_successes"] * metrics["avg_score"]
                 + metrics["num_errors"] * default_minimum_score
             ) / metrics["num_samples"]
-
-        if sample_results:
-            vero_home = get_vero_home_dir()
-            sessions_dir = vero_home / "sessions"
-            for sample_id, result in sample_results.items():
-                save_sample_result(
-                    sessions_dir,
-                    evaluation_parameters.session_id,
-                    evaluation_parameters.result_id,
-                    sample_id=sample_id,
-                    result=result,
-                )
-            logger.info(f"Saved {len(sample_results)} sample results")
 
         return metrics
 
@@ -639,14 +670,160 @@ class VeroTask:
                 + "\n".join(f"  - {e}" for e in errors)
             )
 
+    async def run_inference_stage(self, params: EvaluationParameters) -> None:
+        """Run (or resume) inference, persisting each sample as it completes.
+
+        Resume: samples whose ``samples/{id}.json`` already exists are skipped.
+        Per-sample inference persists incrementally; a batch inference function
+        persists after the batch returns.
+        """
+        tasks, task_data = self._load_and_prepare_data(params)
+        sample_ids = params.run.dataset_subset.sample_ids
+        if sample_ids is None:
+            sample_ids = list(range(len(tasks)))
+
+        sessions_dir = self._sessions_dir()
+        pending = [
+            (pos, sid)
+            for pos, sid in enumerate(sample_ids)
+            if load_sample_result(sessions_dir, params.session_id, params.result_id, sid)
+            is None
+        ]
+        if not pending:
+            logger.info("Inference stage: all samples already persisted; skipping")
+            return
+
+        single_fn = self.get("run_inference", batch=False)
+        batch_fn = self.get("run_inference", batch=True)
+        if single_fn is None and batch_fn is None:
+            raise RuntimeError(
+                "No inference function registered. "
+                "Use @task.inference() or @task.inference(batch=True) to register one."
+            )
+
+        if single_fn is not None:
+
+            async def infer_and_save(pos: int, sid: int) -> TaskOutput:
+                output = self.cast_to_task_output(
+                    await maybe_await(single_fn(self._scrub_inputs(tasks[pos]), params))
+                )
+                self._save_inference(params, sid, task_data, pos, output)
+                return output
+
+            results = await limited_gather(
+                coro_factories=[
+                    (lambda p=pos, s=sid: infer_and_save(p, s)) for pos, sid in pending
+                ],
+                limit=params.max_concurrency,
+                retry_config=params.retry_config,
+                desc="Running inference",
+                return_exceptions=True,
+                timeout=params.sample_timeout,
+                run_in_thread=params.use_threading,
+            )
+            # Persist an error record for samples that exhausted retries.
+            for (pos, sid), res in zip(pending, results):
+                if isinstance(res, Exception):
+                    self._save_inference(
+                        params, sid, task_data, pos, TaskOutput(error=res)
+                    )
+        else:
+            outputs = await self.run_batch_inference(
+                [self._scrub_inputs(tasks[pos]) for pos, _ in pending], params
+            )
+            for (pos, sid), output in zip(pending, outputs):
+                self._save_inference(params, sid, task_data, pos, output)
+
+        logger.info(f"Inference stage complete: {len(pending)} samples")
+
+    async def run_scoring_stage(self, params: EvaluationParameters) -> None:
+        """Run (or resume) scoring over persisted inference outputs.
+
+        Skips samples that errored during inference (terminal) or are already
+        scored. Reads inference outputs from disk and re-persists with scores.
+        """
+        tasks, _ = self._load_and_prepare_data(params)
+        sample_ids = params.run.dataset_subset.sample_ids
+        if sample_ids is None:
+            sample_ids = list(range(len(tasks)))
+
+        existing = load_all_sample_results(
+            self._sessions_dir(), params.session_id, params.result_id
+        )
+        pending: list[tuple[int, SampleResult]] = []
+        for pos, sid in enumerate(sample_ids):
+            sr = existing.get(sid)
+            if sr is None:
+                logger.warning(
+                    f"Scoring stage: no inference result for sample {sid}; skipping"
+                )
+                continue
+            if sr.error is not None:  # inference error is terminal
+                continue
+            if sr.is_scored():
+                continue
+            pending.append((pos, sr))
+        if not pending:
+            logger.info("Scoring stage: nothing to score; skipping")
+            return
+
+        single_fn = self.get("run_evaluation", batch=False)
+        batch_fn = self.get("run_evaluation", batch=True)
+        if single_fn is None and batch_fn is None:
+            raise RuntimeError(
+                "No evaluation function registered. "
+                "Use @task.evaluation() or @task.evaluation(batch=True) to register one."
+            )
+
+        def _output(sr: SampleResult) -> TaskOutput:
+            return TaskOutput(
+                output=sr.output, error=sr.error, execution_trace=sr.execution_trace
+            )
+
+        if single_fn is not None:
+
+            async def score_and_save(pos: int, sr: SampleResult) -> None:
+                result = await maybe_await(single_fn(tasks[pos], _output(sr), params))
+                self._save_score(params, sr, self.cast_to_task_result(_output(sr), result))
+
+            results = await limited_gather(
+                coro_factories=[
+                    (lambda p=pos, r=sr: score_and_save(p, r)) for pos, sr in pending
+                ],
+                limit=params.max_concurrency,
+                retry_config=params.retry_config,
+                desc="Evaluating samples",
+                return_exceptions=True,
+                timeout=params.sample_timeout,
+                run_in_thread=params.use_threading,
+            )
+            for (pos, sr), res in zip(pending, results):
+                if isinstance(res, Exception):
+                    self._save_score(
+                        params, sr, self.cast_to_task_result(_output(sr), res)
+                    )
+        else:
+            eval_results = await self.run_batch_evaluation(
+                [tasks[pos] for pos, _ in pending],
+                [_output(sr) for _, sr in pending],
+                params,
+            )
+            for (pos, sr), task_result in zip(pending, eval_results):
+                self._save_score(params, sr, task_result)
+
+        logger.info(f"Scoring stage complete: {len(pending)} samples")
+
     async def run(self, params: EvaluationParameters) -> dict[str, Any]:
-        """Run the complete evaluation pipeline.
+        """Run the full evaluation pipeline as two resumable stages.
+
+        Inference and scoring each persist per-sample as they complete and skip
+        already-done samples, so a crashed run resumes from its partial state.
 
         Args:
             params: Evaluation parameters.
 
         Returns:
-            Metrics dictionary.
+            Metrics dictionary (computed from the persisted sample results).
 
         Raises:
             RuntimeError: If required functions are not registered.
@@ -660,21 +837,11 @@ class VeroTask:
         # Validate required functions are registered
         self._validate_required_functions()
 
-        # Step 1: Load and prepare data
-        tasks, task_data = self._load_and_prepare_data(params)
-        logger.info(f"Loaded {len(tasks)} samples")
+        await self.run_inference_stage(params)
+        await self.run_scoring_stage(params)
 
-        # Step 2: Run inference
-        outputs = await self.run_batch_inference(tasks, params)
-
-        # Step 3: Run evaluation
-        results = await self.run_batch_evaluation(tasks, outputs, params)
-        logger.info(f"Processed {len(results)} samples")
-
-        # Step 4: Compile and save results
-        metrics = self.compile_and_save_sample_results(params, results, task_data)
+        metrics = self.compute_metrics(params)
         logger.info(f"Logged results: {metrics}")
-
         return metrics
 
     def __repr__(self) -> str:

@@ -83,6 +83,16 @@ def main():
     setup_logging()
 
 
+# Optional `vero harbor` group (requires the `harbor` extra). Registered lazily so the
+# base CLI works without it.
+try:
+    from vero.harbor.cli import harbor as _harbor_group
+
+    main.add_command(_harbor_group)
+except ImportError:
+    pass
+
+
 @main.group()
 def init():
     """Initialize evaluation scaffolds for your uv project."""
@@ -578,7 +588,7 @@ def check(
     if errors:
         click.echo("\n  Skipping task discovery (project issues above)")
     else:
-        from vero.evaluator import Evaluator
+        from vero.evaluation.evaluator import Evaluator
         from vero.workspace.git import GitWorkspace
 
         async def _discover():
@@ -760,7 +770,7 @@ def evaluate(
     """Run an evaluation on an agent codebase."""
     import asyncio
 
-    from vero.evaluator import run_evaluation
+    from vero.evaluation.evaluator import run_evaluation
 
     asyncio.run(
         run_evaluation(

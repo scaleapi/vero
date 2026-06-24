@@ -49,7 +49,7 @@ async def test_matmul_kernel_evaluates(workspace):
     """Naive kernel evaluates correctly — all samples produce valid scores."""
     kernel_dir, task_dir, dataset_path, vero_home = workspace
 
-    from vero.evaluator import run_evaluation
+    from vero.evaluation.evaluator import run_evaluation
 
     result = await run_evaluation(
         project_path=kernel_dir,
@@ -77,7 +77,7 @@ async def test_kernel_change_changes_score(workspace):
     """Modifying kernel code and re-evaluating produces different scores."""
     kernel_dir, task_dir, dataset_path, vero_home = workspace
 
-    from vero.evaluator import run_evaluation
+    from vero.evaluation.evaluator import run_evaluation
 
     # Evaluate naive kernel
     result_v1 = await run_evaluation(
@@ -170,7 +170,7 @@ async def test_workspace_save_and_evaluate(workspace):
     from datasets import DatasetDict
 
     from vero.core.dataset.store import save_dataset
-    from vero.evaluator import Evaluator
+    from vero.evaluation.evaluator import Evaluator
 
     session_id = "test-workspace-eval"
     ds = DatasetDict.load_from_disk(str(dataset_path))

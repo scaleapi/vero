@@ -8,7 +8,6 @@ and a 'consumer' package that depends on greeter. Verifies that:
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import textwrap
 from pathlib import Path

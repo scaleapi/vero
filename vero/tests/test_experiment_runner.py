@@ -1,6 +1,6 @@
 """Tests for ExperimentRunnerTool and SplitBudget."""
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -23,14 +23,18 @@ _DEFAULT_DATASET_INFO = DatasetInfo(
 
 @pytest.fixture(autouse=True)
 def mock_dataset_info(monkeypatch):
-    """Mock _get_dataset_info to avoid dataset store dependency in tests."""
-    original = ExperimentRunnerTool._get_dataset_info
+    """Mock _get_dataset_info to avoid dataset store dependency in tests.
+
+    The tool delegates dataset resolution to EvaluationEngine, so patch there
+    (the tool's own _get_dataset_info also delegates to the service).
+    """
+    from vero.evaluation.engine import EvaluationEngine
 
     def patched_get_dataset_info(self, dataset_id):
         return _DEFAULT_DATASET_INFO
 
     monkeypatch.setattr(
-        ExperimentRunnerTool, "_get_dataset_info", patched_get_dataset_info
+        EvaluationEngine, "_get_dataset_info", patched_get_dataset_info
     )
 
 

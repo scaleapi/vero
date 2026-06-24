@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 
 import pytest
 from pydantic import ValidationError
@@ -369,3 +368,46 @@ class TestPipeline:
         params = _make_eval_params()
         with pytest.raises(RuntimeError, match="No evaluation function"):
             await t.run(params)
+
+
+# ---------------------------------------------------------------------------
+# Label scrubbing (Mode A)
+# ---------------------------------------------------------------------------
+
+
+class TestLabelScrubbing:
+    def test_scrub_inputs_helper(self):
+        t = create_task("scrub-helper", register=False, label_fields=["answer"])
+        # mapping rows have label fields removed
+        assert t._scrub_inputs({"q": "x", "answer": "y"}) == {"q": "x"}
+        # non-mapping rows pass through unchanged
+        assert t._scrub_inputs("notadict") == "notadict"
+        # no label_fields configured -> no-op
+        t2 = create_task("scrub-helper-2", register=False)
+        assert t2._scrub_inputs({"q": "x", "answer": "y"}) == {"q": "x", "answer": "y"}
+
+    @pytest.mark.asyncio
+    async def test_inference_never_sees_labels_scoring_does(self):
+        t = create_task("scrub-e2e", register=False, label_fields=["answer"])
+        seen_by_inference = {}
+
+        @t.load_data()
+        def load(evaluation_parameters):
+            return [{"q": "2+2", "answer": "4"}]
+
+        @t.inference()
+        async def infer(task, evaluation_parameters):
+            seen_by_inference["keys"] = sorted(task.keys())
+            return TaskOutput(output="4")
+
+        @t.evaluation()
+        async def evaluate(task, output, evaluation_parameters):
+            # scoring receives the full row, including the label
+            assert "answer" in task
+            return TaskResult(score=1.0 if output.output == task["answer"] else 0.0)
+
+        params = _make_eval_params(num_samples=1)
+        metrics = await t.run(params)
+
+        assert seen_by_inference["keys"] == ["q"]  # label stripped from inference
+        assert metrics["avg_score"] == 1.0

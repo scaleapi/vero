@@ -1,11 +1,10 @@
 """Tests for project isolation with dependency resolution."""
 
 import subprocess
-from pathlib import Path
 
 import pytest
 
-from vero.evaluator import _resolve_vero_dependency
+from vero.evaluation.evaluator import _resolve_vero_dependency
 
 
 @pytest.fixture
