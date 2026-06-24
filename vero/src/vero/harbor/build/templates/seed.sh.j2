@@ -1,0 +1,21 @@
+#!/bin/sh
+# Seed the optimizer's working repo onto the shared volume and apply write-access
+# rules, then keep `main` alive. Runs as root at container start.
+set -e
+
+if [ ! -d /work/agent/.git ]; then
+  cp -a /opt/agent-seed/. /work/agent/
+fi
+
+# Whole repo is the optimizer's to edit...
+chown -R agent:agent /work/agent
+git config --system --add safe.directory /work/agent
+{% for p in read_only_paths %}
+# ...except locked paths (e.g. the scorer): root-owned + unwritable.
+if [ -e "/work/agent/{{ p }}" ]; then
+  chown -R root:root "/work/agent/{{ p }}"
+  chmod -R a-w "/work/agent/{{ p }}"
+fi
+{% endfor %}
+
+exec sleep infinity

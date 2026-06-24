@@ -1,0 +1,10 @@
+#!/bin/bash
+# Verifier (shared mode, root). Reads the admin token (root:600, unreadable by the
+# optimizer) and asks the eval sidecar to select + score the commit on the hidden
+# test split, writing the reward.
+set -e
+mkdir -p /logs/verifier
+vero harbor finalize \
+  --token-file /state/token/admin.token \
+  --output /logs/verifier/reward.json
+cat /logs/verifier/reward.json

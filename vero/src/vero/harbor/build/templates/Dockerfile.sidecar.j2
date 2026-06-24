@@ -1,0 +1,29 @@
+# eval-sidecar: the evaluation engine. Holds the dataset + scoring + baseline repo
+# + ledger + creds. Runs `vero harbor serve` (HTTP). Secrets reach this container
+# only (compose); the admin volume is never mounted to main.
+FROM {{ base_image_sidecar }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY vero /opt/vero
+RUN uv pip install --system "/opt/vero[harbor]"
+
+# baseline repo = the engine's GitWorkspace (fetches the optimizer's commits from
+# the ro-mounted /work/agent); baked vero_home (registered dataset{% if mode == 'A' %} + scoring{% endif %}).
+COPY agent-baseline /opt/agent-baseline
+COPY sidecar/vero_home /opt/vero_home
+COPY sidecar/serve.json /opt/serve.json
+{% if bake_inner_task %}
+# inner Harbor task (the protected benchmark the candidate agent is run against)
+COPY sidecar/inner-task /opt/inner-task
+{% endif %}
+
+# warm the uv cache so eval-time `uv run --project <worktree>` resolves offline-fast
+RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
+
+# allow the engine to fetch from the ro-mounted agent repo (different owner)
+RUN git config --system --add safe.directory '*'
+
+WORKDIR /opt

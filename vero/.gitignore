@@ -11,6 +11,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# ...but the harbor compiler package is source, not a packaging artifact:
+!src/vero/harbor/build/
 
 # Testing
 .pytest_cache/

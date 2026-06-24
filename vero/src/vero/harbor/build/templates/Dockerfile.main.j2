@@ -1,0 +1,20 @@
+# main: the optimizer's workbench. Harbor installs the `-a` optimizer agent here
+# and runs it against instruction.md. Holds the target repo (rw, minus locked
+# paths) + the `vero` CLI client. Runs the container as root (for seed + verifier);
+# the optimizer is exec'd as the de-privileged `agent` user.
+FROM {{ base_image_main }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# vero + CLI client (eval / submit / status / finalize over VERO_EVAL_URL)
+COPY vero /opt/vero
+RUN uv pip install --system "/opt/vero[harbor]"
+
+# baseline target repo (seeded onto the shared volume at start) + the seed script
+COPY agent-seed /opt/agent-seed
+COPY main/seed.sh /opt/seed.sh
+RUN chmod +x /opt/seed.sh && useradd -m -u 1001 agent
+
+WORKDIR /work/agent
