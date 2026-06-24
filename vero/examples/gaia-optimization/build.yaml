@@ -1,0 +1,63 @@
+# `vero harbor build -c build.yaml -o <task-dir>` compiles this into a Harbor task.
+# Then: `harbor run -p <task-dir> -a <optimizer-agent> -m <optimizer-model> -e docker`
+# (or use `vero harbor run -c build.yaml -a ...` to build + run in one step).
+#
+# Mode B: the optimizer edits the GaiaAgent prompt in this repo; the eval sidecar
+# scores candidates by a *nested* `harbor run` of the agent on real GAIA tasks
+# (here on Modal). Reward = accuracy on the hidden `validation` split.
+
+name: examples/gaia-optimization
+description: Optimize a terminus-2 GAIA agent's prompt; reward = accuracy on hidden GAIA tasks.
+
+agent_repo: .                       # this directory (the GaiaAgent the optimizer edits)
+mode: B
+
+harbor:
+  agent_import_path: "gaia_agent:GaiaAgent"
+  task_source: gaia/gaia            # Harbor registry benchmark (enumerated below)
+  environment: modal                # inner provider; needs MODAL_TOKEN_ID/SECRET (see README)
+  # The inner GAIA agent's model. `openai/<name>` routes via OPENAI_BASE_URL, so this
+  # works against OpenAI directly or any OpenAI-compatible gateway you point it at.
+  model: openai/gpt-4o-mini
+  max_retries: 1
+
+# A small subset of gaia/gaia: 5 tasks the optimizer may measure on (train) and
+# 5 held-out tasks scored once at the end (validation). Swap in your own ids;
+# list them with: DatasetConfig(name="gaia/gaia").get_task_configs()
+partition:
+  train:
+    - gaia/00d579ea-0889-4fd9-a771-2c8d79835c8d
+    - gaia/023e9d44-96ae-4eed-b912-244ee8c3b994
+    - gaia/0383a3ee-47a7-41a4-b493-519bdefe0488
+    - gaia/04a04a9b-226c-43fd-b319-d5e89743676f
+    - gaia/0512426f-4d28-49f0-be77-06d05daec096
+  validation:
+    - gaia/05407167-39ec-4d3a-a234-73a9120c325d
+    - gaia/076c8171-9b3b-49b9-a477-244d2a532826
+    - gaia/08c0b6e9-1b43-4c2e-ae55-4e3fce2c2715
+    - gaia/08cae58d-4084-4616-b6dd-dd6534e4825b
+    - gaia/08f3a05f-5947-4089-a4c4-d4bcfaa6b7a0
+
+splits:
+  - { split: train, access: non_viewable }   # optimizer sees aggregate scores only
+  - { split: validation, access: no_access }  # hidden; never reaches the optimizer
+
+budgets:
+  - { split: train, total_run_budget: 3 }      # up to 3 measured evals of the train split
+
+reward_mode: auto_best                          # best train commit is auto-selected
+selection_split: train
+targets:
+  - { split: validation, reward_key: accuracy }
+
+# Secrets are resolved from your shell env and injected into the eval sidecar only,
+# never into the optimizer's container. These are variable NAMES, not values.
+secrets:
+  - OPENAI_API_KEY
+  - OPENAI_BASE_URL
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+
+timeout: 3600
+sample_timeout: 900
+max_concurrency: 5
