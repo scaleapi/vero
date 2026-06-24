@@ -1,0 +1,28 @@
+# Optimization task
+
+You are optimizing the code in `/work/agent`. Improve it so it scores as high as
+possible on a **hidden test split** — but you never see the test split. You measure
+progress on the splits you *are* allowed to evaluate, within a fixed budget.
+
+## Workflow
+
+1. Edit the repo at `/work/agent`. Some paths are read-only (the scorer) — leave them.
+2. Commit your changes (`git commit`).
+3. Measure a commit on an allowed split:
+
+   ```
+   vero harbor eval --dataset-id {{ dataset_id }} --split {{ selection_split }}
+   ```
+
+   (defaults to your current `HEAD`). Returns an aggregate score and remaining budget.
+4. Check budget / which splits are evaluable anytime: `vero harbor status`.
+{% if submit_enabled %}5. When done, nominate your best commit: `vero harbor submit`.{% else %}
+The best commit you evaluate on `{{ selection_split }}` is selected automatically and
+scored on the hidden test split at the end.{% endif %}
+
+## Rules
+
+- Budget is finite and metered per split — spend it wisely.
+- The test split is hidden: you cannot evaluate it, and its labels never reach this
+  container. Trying to read it will fail.
+- The scorer is locked. Only the eval sidecar scores.

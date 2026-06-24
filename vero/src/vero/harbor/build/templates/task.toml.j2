@@ -1,0 +1,23 @@
+schema_version = "1.3"
+
+[task]
+name = "{{ name }}"
+description = "{{ description }}"
+
+[agent]
+# The optimizer runs as a de-privileged user so it cannot read the admin token
+# (root:600) or the admin volume. It edits the target repo + calls `vero harbor eval`.
+user = "agent"
+
+[verifier]
+# Shared mode: Harbor runs tests/test.sh in `main` with the whole env (incl. the
+# eval-sidecar) still up. The verifier runs as root, reads the admin token, and
+# calls the sidecar's `finalize` endpoint to score the selected commit.
+environment_mode = "shared"
+timeout_sec = {{ timeout }}
+
+[environment]
+# Compose-based environment: environment/docker-compose.yaml adds the eval-sidecar
+# service + volumes and wires `main`. Secrets are injected into the sidecar only
+# (see the compose file), never declared here (this section's env reaches `main`).
+build_timeout_sec = 1800
