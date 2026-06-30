@@ -44,8 +44,13 @@ class TestTier:
         assert tier_for_split("test", accesses) == SplitAccessLevel.no_access
         assert tier_for_split("validation", accesses) == SplitAccessLevel.non_viewable
 
-    def test_unlisted_defaults_viewable(self):
-        assert tier_for_split("train", []) == SplitAccessLevel.viewable
+    def test_unlisted_fails_closed_to_no_access(self):
+        # An undeclared split must fail CLOSED, never default to viewable.
+        assert tier_for_split("train", []) == SplitAccessLevel.no_access
+        assert (
+            tier_for_split("train", [SplitAccess.no_access("test")])
+            == SplitAccessLevel.no_access
+        )
 
 
 class TestSummarize:
@@ -74,13 +79,15 @@ class TestBuildStatus:
             ("train", "ds1"): SplitBudget(split="train", dataset_id="ds1", total_run_budget=10),
             ("validation", "ds1"): SplitBudget(split="validation", dataset_id="ds1", total_run_budget=3),
         }
-        accesses = [SplitAccess.non_viewable("validation")]  # train defaults viewable
+        accesses = [SplitAccess.non_viewable("validation")]  # train left unlisted -> fails closed
         status = build_status(submit_enabled=True, budget=budget, split_accesses=accesses)
 
         assert status.submit_enabled is True
         by_split = {s["split"]: s for s in status.splits}
-        assert by_split["train"]["tier"] == str(SplitAccessLevel.viewable)
-        assert by_split["train"]["agent_evaluable"] is True
+        # An unlisted split now fails CLOSED (no_access), not open (viewable): a
+        # budgeted split must be tiered explicitly or the sidecar denies it.
+        assert by_split["train"]["tier"] == str(SplitAccessLevel.no_access)
+        assert by_split["train"]["agent_evaluable"] is False
         assert by_split["validation"]["tier"] == str(SplitAccessLevel.non_viewable)
         assert by_split["validation"]["agent_evaluable"] is True
         assert by_split["validation"]["remaining_run_budget"] == 3

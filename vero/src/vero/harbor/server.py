@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -163,6 +164,12 @@ class EvaluationSidecar:
 
         commit = experiment.run.candidate.commit
         dest = self.agent_volume / "results" / f"{split}__{commit[:12]}"
+        # Recreate the dir so it reflects exactly this metered run. The dir is keyed
+        # only on (split, commit[:12]); a prior eval of the same commit on a larger
+        # sample set would otherwise leave stale per-sample files behind that this
+        # run did not produce, and result_path would surface them as if they were.
+        if dest.exists():
+            shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
         # Aggregate summary is label-safe for both visible and partial tiers.

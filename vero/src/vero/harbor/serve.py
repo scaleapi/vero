@@ -8,8 +8,10 @@ contract.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -60,7 +62,7 @@ class ServeConfig(BaseModel):
     harbor: dict | None = None  # HarborConfig kwargs
 
     # selection / reward
-    reward_mode: str = "auto_best"
+    reward_mode: Literal["submit", "auto_best"] = "auto_best"
     selection_split: str = "validation"
     targets: list[_TargetCfg] = Field(default_factory=list)
     base_commit: str | None = None
@@ -85,15 +87,73 @@ class ServeConfig(BaseModel):
         return cls.model_validate_json(Path(path).read_text())
 
 
+def _load_or_build_ledger(
+    budget_cfgs: list[dict], persist_path: Path
+) -> BudgetLedger:
+    """Build the durable ledger, reloading spent budget from ``persist_path`` if present.
+
+    The ledger flushes every mutation to ``persist_path``; without reloading it,
+    a sidecar restart would reset all spent budget to full, letting the agent
+    regain its full evaluation budget by triggering a restart. On startup we
+    reconstruct each SplitBudget and restore its persisted ``remaining_*`` values.
+    Falls back to the configured budgets if the file is missing or unreadable
+    (fail-safe to the configured budget, never to unlimited).
+    """
+    if persist_path.exists():
+        try:
+            persisted = json.loads(persist_path.read_text())
+            budgets: list[SplitBudget] = []
+            for entry in persisted:
+                b = SplitBudget(
+                    split=entry["split"],
+                    dataset_id=entry.get("dataset_id", ""),
+                    total_sample_budget=entry.get("total_sample_budget"),
+                    total_run_budget=entry.get("total_run_budget"),
+                    max_samples_per_run=entry.get("max_samples_per_run"),
+                )
+                # __post_init__ reset remaining_* to total_*; restore spent state.
+                b.remaining_sample_budget = entry.get("remaining_sample_budget")
+                b.remaining_run_budget = entry.get("remaining_run_budget")
+                budgets.append(b)
+            logger.info(
+                "Reloaded persisted budget ledger from %s (%d splits).",
+                persist_path,
+                len(budgets),
+            )
+            return BudgetLedger(budgets, persist_path=persist_path)
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            logger.warning(
+                "Could not reload persisted ledger %s (%s); using configured budgets.",
+                persist_path,
+                e,
+            )
+    return BudgetLedger(
+        [SplitBudget(**b) for b in budget_cfgs], persist_path=persist_path
+    )
+
+
 async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Verifier, str]:
     """Assemble the sidecar + verifier (sharing one engine) and the admin token."""
     vero_home = get_vero_home_dir()
+
+    # Integrity guard: in Mode A the vero scorer (@task.evaluation()) is resolved
+    # and executed by the Evaluator. With task_project unset, that scorer would be
+    # discovered from the AGENT's committed repo, so a committed scorer returning
+    # 1.0 would win the hidden-split/admin reward. Require a sidecar-baked task
+    # project so the scorer is trusted (agent code is layered as --with-editable,
+    # never the scorer's source). Mode B (config.harbor set) uses an eval_strategy
+    # that ignores the vero scorer and is exempt.
+    if config.harbor is None and not config.task_project:
+        raise ValueError(
+            "Mode A requires `task_project` so the scorer is loaded from the "
+            "sidecar-baked task project, not the agent's committed repo. Refusing "
+            "to start: with task_project unset the agent controls its own scoring."
+        )
+
     workspace = await GitWorkspace.create(config.repo_path)
 
-    budget = BudgetLedger(
-        [SplitBudget(**b) for b in config.budgets],
-        persist_path=Path(config.admin_volume) / "ledger.json",
-    )
+    persist_path = Path(config.admin_volume) / "ledger.json"
+    budget = _load_or_build_ledger(config.budgets, persist_path)
 
     eval_strategy = None
     if config.harbor is not None:
@@ -142,10 +202,12 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
     verifier = Verifier(
         engine=engine,
         admin_volume=Path(config.admin_volume),
-        reward_mode=config.reward_mode,  # type: ignore[arg-type]
+        reward_mode=config.reward_mode,
         targets=[VerificationTarget(**t.model_dump()) for t in config.targets],
         selection_split=config.selection_split,
         base_commit=config.base_commit,
+        selection_task=config.task,
+        selection_dataset_id=config.dataset_id,
     )
 
     token = generate_token()

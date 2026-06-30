@@ -1,7 +1,9 @@
 """Tests for vero.harbor.app — FastAPI routes + agent/admin auth."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from vero.exceptions import ExperimentBudgetExceeded
@@ -83,3 +85,71 @@ class TestAdminEndpoint:
         r = client.post("/finalize", headers={"Authorization": f"Bearer {TOKEN}"})
         assert r.status_code == 200 and r.json() == {"reward": 1.0}
         verifier.finalize.assert_awaited_once()
+
+
+class TestServeIntegrityGuards:
+    @pytest.mark.asyncio
+    async def test_mode_a_without_task_project_rejected(self, tmp_path):
+        # Mode A (no `harbor`) with task_project unset would load the scorer from
+        # the agent repo. build_components must refuse to start.
+        from vero.harbor.serve import ServeConfig, build_components
+
+        cfg = ServeConfig(
+            repo_path=str(tmp_path / "repo"),
+            agent_repo_path=str(tmp_path / "agent"),
+            session_id="s",
+            dataset_id="ds",
+            split_accesses=[{"split": "test", "access": "no_access"}],
+            budgets=[{"split": "validation", "dataset_id": "ds", "total_run_budget": 1}],
+            task="math",
+            task_project=None,  # the vulnerability
+            agent_volume=str(tmp_path / "agent_vol"),
+            admin_volume=str(tmp_path / "admin_vol"),
+            admin_token_path=str(tmp_path / "admin_vol" / "token"),
+        )
+        with pytest.raises(ValueError, match="task_project"):
+            await build_components(cfg)
+
+
+class TestNoAccessRejection:
+    def test_eval_on_no_access_split_maps_to_400(self):
+        # A no_access split is rejected in the engine (InvalidSplitError); the app
+        # must surface that as 400 so the agent can never evaluate it. Mirrors the
+        # 429 budget-exceeded mapping. The end-to-end engine guarantee (the gate
+        # fires before any scoring) is covered by the no_access gate test in
+        # test_engine.py on the core PR.
+        from vero.exceptions import InvalidSplitError
+
+        sidecar = MagicMock()
+        sidecar.evaluate = AsyncMock(side_effect=InvalidSplitError("no_access split"))
+        r = _client(sidecar=sidecar).post(
+            "/eval", json={"dataset_id": "ds", "split": "test"}
+        )
+        assert r.status_code == 400
+        sidecar.evaluate.assert_awaited_once()
+
+
+class TestTokenFilePermissions:
+    def test_token_file_not_world_or_group_readable(self, tmp_path):
+        # The admin token gates /finalize; agent.user (a different uid) must not be
+        # able to read it. The portable OS guarantee is the 0o600 mode bit.
+        tok = generate_token()
+        p = write_admin_token(tmp_path / "token", tok)
+        mode = p.stat().st_mode & 0o777
+        assert mode == 0o600
+        assert mode & 0o077 == 0, "token must not be group/other readable"
+
+    @pytest.mark.skipif(
+        os.geteuid() != 0,
+        reason="uid-drop read test requires running as root to seteuid to a non-owner",
+    )
+    def test_non_owner_uid_cannot_read_token(self, tmp_path):
+        tok = generate_token()
+        p = write_admin_token(tmp_path / "token", tok)
+        os.chown(p, 0, 0)  # root-owned, like the real sidecar
+        try:
+            os.seteuid(65534)  # nobody
+            with pytest.raises(PermissionError):
+                read_admin_token(p)
+        finally:
+            os.seteuid(0)
