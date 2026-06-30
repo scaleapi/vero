@@ -5,9 +5,13 @@ task**. The agent-under-test of that Harbor task is an *optimizer*: any Harbor a
 (Claude Code, an oracle script, …) edits a target repository and spends an evaluation
 budget; the reward is the best candidate's score on a hidden test split.
 
-This lets anyone optimize a coding agent with plain `harbor run`, and makes the result
-leaderboard-gradeable — the optimizer cannot read hidden labels, modify the scorer, or
-bypass its budget.
+This lets anyone optimize a coding agent with plain `harbor run`, and aims to make the
+result leaderboard-gradeable. On a best-effort, OS/process-level basis the integration
+withholds per-sample labels from the agent volume, meters every agent evaluation against
+a budget, applies read-only paths, and gates final hidden-split scoring behind a
+`root:600` token the de-privileged optimizer cannot read (a container escape is out of
+scope). See [Leaderboard integrity](#leaderboard-integrity-the-trust-boundary) for the
+exact mechanisms and their limits.
 
 ```
 harbor run -p <task> -a <optimizer> -m <model> -e <provider>
@@ -44,8 +48,10 @@ harbor run -p <task> -a <optimizer> -m <model> -e <provider>
 The seam is a single injection point on the `Evaluator` (`eval_strategy`):
 
 - **Mode A — vero scores** (`task_project`/`task` + dataset). vero runs the agent's
-  inference and a vero scoring function against vero-side labels. Example:
-  [`examples/gsm8k-agent`](../../examples/gsm8k-agent).
+  inference and a vero scoring function against vero-side labels. Example agent:
+  [`examples/gsm8k-agent`](../../examples/gsm8k-agent) (note: it ships the agent and
+  vero task but not yet a `build.yaml`; see the Mode A `build.yaml` snippet in the
+  [tutorial](./tutorial.md) for a runnable config).
 - **Mode B — Harbor scores** (`HarborConfig`). Inference is delegated: for each
   candidate, `HarborRunner` runs a *nested* `harbor run` of the agent on a set of
   Harbor tasks (e.g. on Modal) and collates the verifier rewards. One Harbor task =
@@ -60,8 +66,12 @@ The optimizer is untrusted. Integrity rests on a few mechanisms, all best-effort
 the OS/process level (a container escape is out of scope):
 
 - **3-tier split visibility** (`SplitAccessLevel`): `visible` (aggregate + per-sample
-  results), `non_viewable` (aggregate score only — no labels), `no_access` (hidden;
-  never evaluable by the agent, never written to its volume).
+  results), `non_viewable` (aggregate score only, no labels), `no_access` (hidden;
+  never evaluable by the agent, never written to its volume). **A split not listed in
+  `splits:` currently defaults to viewable (fail-open).** List *every* split explicitly
+  and give held-out splits `no_access`; do not rely on omission to hide a split. (Once
+  the protocol fix lands this default becomes fail-closed: an unlisted split defaults to
+  `no_access`.)
 - **Write-routing by tier**: the sidecar writes only the agent-permitted projection of
   each result to the *agent-results* volume (read-only in `main`). Full results, the
   dataset, the ledger, and creds live on the *admin* volume, **never** mounted to `main`.
@@ -74,13 +84,21 @@ the OS/process level (a container escape is out of scope):
 - **Commit transfer**: the sidecar `git fetch`es the agent's commit from the mounted
   repo into its *own* repo with hooks disabled and `file://` (object copy, no
   alternates), so the evaluated tree is fully owned by the sidecar and tamper-evident.
-- **Protected scorer / write-access**: the scorer is sidecar-only; `read_only_paths`
-  in `build.yaml` are applied as unix perms in `main` before the optimizer runs.
+- **Protected scorer / write-access** (mode-dependent): in **Mode B** the scorer,
+  dataset, and creds are sidecar-only and never share a filesystem with the optimizer.
+  In **Mode A** the scoring function is vero task code that lives inside the agent's
+  *editable* `agent_repo` (e.g. `src/gsm8k_agent/vero_tasks`); it is protected only by
+  `read_only_paths` in `build.yaml`, applied as unix perms in `main` before the
+  optimizer runs (best-effort, not container isolation). Full Mode A scorer isolation
+  requires baking the task project into the sidecar instead of the agent repo, which
+  lands with the `serve.py` fix.
 
 ### Why a sidecar + shared verifier
 
-The evaluation engine, dataset, scorer, and creds live in a separate container so the
-optimizer never shares a filesystem or process space with them. We use Harbor's
+The evaluation engine, dataset, and creds live in a separate container so the optimizer
+never shares a filesystem or process space with them (in **Mode B** the scorer too; in
+**Mode A** the scorer currently lives in the agent's editable repo and is guarded only by
+`read_only_paths`, until the `serve.py` fix bakes a Mode A task project into the sidecar). We use Harbor's
 **shared verifier** (the env, including the sidecar, stays up during `tests/test.sh`)
 so the verifier can reach the live engine over HTTP and stay the single source of
 truth — avoiding shipping the repo/dataset/ledger into a fresh verifier container. The
@@ -104,6 +122,7 @@ vero/harbor/
 ├── runner.py         HarborRunner (Mode-B EvalStrategy): nested `harbor run` → collate
 ├── dataset.py        Mode-B {split: [task_names]} partition → DatasetDict
 └── protocol.py       aggregate-safe wire types + the redaction of an Experiment
+                      (note: an unlisted split currently defaults to viewable / fail-open)
 
 vero/evaluation/
 ├── engine.py         EvaluationEngine: budget metering + the single evaluate() entry point
@@ -117,5 +136,5 @@ the optimizer↔sidecar contract is the HTTP API in `app.py` (+ the `vero harbor
 ## See also
 
 - [Tutorial](./tutorial.md) — build and run an optimization task end to end.
-- [`examples/gsm8k-agent`](../../examples/gsm8k-agent) — Mode A.
+- [`examples/gsm8k-agent`](../../examples/gsm8k-agent) (Mode A agent; no `build.yaml` yet, use the tutorial's Mode A snippet).
 - [`examples/gaia-optimization`](../../examples/gaia-optimization) — Mode B (nested Harbor on Modal).

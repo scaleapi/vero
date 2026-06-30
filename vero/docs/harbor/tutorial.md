@@ -129,6 +129,6 @@ cat <jobs-dir>/*/*/verifier/reward.json
 
 ## Examples
 
-- [`examples/gsm8k-agent`](../../examples/gsm8k-agent) — Mode A (vero scores gsm8k).
+- [`examples/gsm8k-agent`](../../examples/gsm8k-agent) (Mode A agent, vero scores gsm8k). It ships the agent + vero task but not a `build.yaml` yet; use the Mode A `build.yaml` snippet above to drive it.
 - [`examples/gaia-optimization`](../../examples/gaia-optimization) — Mode B (terminus on
   GAIA via nested Harbor on Modal), with an editable-prompt optimization surface.
