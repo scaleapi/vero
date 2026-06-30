@@ -49,7 +49,11 @@ def _sidecar(tmp_path, *, split, submit_enabled=False):
     )
     sidecar = EvaluationSidecar(
         engine=engine,
-        split_accesses=[SplitAccess.non_viewable("validation"), SplitAccess.no_access("test")],
+        split_accesses=[
+            SplitAccess.viewable("train"),
+            SplitAccess.non_viewable("validation"),
+            SplitAccess.no_access("test"),
+        ],
         agent_repo_path=tmp_path / "agent_repo",
         agent_volume=tmp_path / "agent_vol",
         admin_volume=tmp_path / "admin_vol",
@@ -63,7 +67,7 @@ def _sidecar(tmp_path, *, split, submit_enabled=False):
 class TestRouting:
     @pytest.mark.asyncio
     async def test_visible_split_writes_full_per_sample(self, tmp_path):
-        sidecar = _sidecar(tmp_path, split="train")  # train defaults to viewable
+        sidecar = _sidecar(tmp_path, split="train")  # train is declared viewable
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
 
         dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
