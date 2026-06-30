@@ -539,7 +539,7 @@ Two evaluation modes: **Mode A** (vero runs inference + scoring against vero-sid
 
 - [`docs/harbor/architecture.md`](docs/harbor/architecture.md) — what it is, the topology, and the leaderboard-integrity model.
 - [`docs/harbor/tutorial.md`](docs/harbor/tutorial.md) — build and run a task end to end.
-- [`examples/gsm8k-agent`](examples/gsm8k-agent) (Mode A) and [`examples/gaia-optimization`](examples/gaia-optimization) (Mode B).
+- [`examples/gaia-optimization`](examples/gaia-optimization) (Mode B), the complete runnable example (ships a `build.yaml`). [`examples/gsm8k-agent`](examples/gsm8k-agent) (Mode A) ships the agent + vero task but not yet a `build.yaml`; pair it with the Mode A `build.yaml` snippet in [`docs/harbor/tutorial.md`](docs/harbor/tutorial.md).
 
 ## Examples
 
