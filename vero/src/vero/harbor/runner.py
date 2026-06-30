@@ -50,8 +50,10 @@ class HarborRunner:
             return
         jobs_dir = Path(result_dir) / "jobs"
 
-        # Resume: only run tasks without an already-persisted SampleResult.
-        pending = [(sid, t) for sid, t in pairs if self._existing(params, sid) is None]
+        # Resume: only run tasks not already completed successfully. A persisted
+        # *error* sample (transient harbor/verifier failure) is NOT done, so it is
+        # re-run rather than permanently skipped.
+        pending = [(sid, t) for sid, t in pairs if not self._is_done(params, sid)]
         if pending:
             await self._run_harbor(
                 str(workspace.project_path), params, [t for _, t in pending], jobs_dir
@@ -97,6 +99,8 @@ class HarborRunner:
             "--agent-import-path", c.agent_import_path,
             "-e", c.environment,
             "-n", str(params.max_concurrency),
+            "--n-attempts", str(c.n_attempts),
+            "--max-retries", str(c.max_retries),
         ]
         if c.model:
             cmd += ["-m", c.model]
@@ -136,8 +140,8 @@ class HarborRunner:
     ) -> None:
         trials = self._load_trials(jobs_dir)  # {task_name: result_dict}
         for sample_id, task_name in pairs:
-            if self._existing(params, sample_id) is not None:
-                continue  # already collated (resume)
+            if self._is_done(params, sample_id):
+                continue  # already collated successfully (resume); errors are redone
             sample_result = self._sample_result(
                 trials.get(task_name), sample_id, task_name, params
             )
@@ -155,16 +159,38 @@ class HarborRunner:
             return trials
         # Trial result.json files live at <jobs>/<timestamp>/<trial>/result.json; the
         # job-level <jobs>/<timestamp>/result.json carries no task_name, so recurse and
-        # key on task_name (skipping the job summary).
+        # key on task_name (skipping the job summary). A task may have several trials
+        # (retries / multiple attempts); rglob order is undefined, so keep the BEST
+        # trial per task deterministically rather than last-write-wins (a failing
+        # retry must never clobber a passing trial).
+        best_rank: dict[str, tuple] = {}
         for result_json in jobs_dir.rglob("result.json"):
             try:
                 data = json.loads(result_json.read_text())
             except (json.JSONDecodeError, OSError):
                 continue
             task_name = data.get("task_name")
-            if task_name:
+            if not task_name:
+                continue
+            rank = self._trial_rank(data, result_json)
+            if task_name not in best_rank or rank > best_rank[task_name]:
+                best_rank[task_name] = rank
                 trials[task_name] = data
         return trials
+
+    @staticmethod
+    def _trial_rank(data: dict, result_json: Path) -> tuple:
+        """Sort key for picking the best of several trials of one task. Higher wins:
+        prefer a clean trial with rewards, then any trial with rewards, then the most
+        recent attempt (finished_at, falling back to file mtime)."""
+        has_rewards = bool((data.get("verifier_result") or {}).get("rewards"))
+        clean = has_rewards and not data.get("exception_info")
+        finished_at = data.get("finished_at") or ""
+        try:
+            mtime = result_json.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        return (clean, has_rewards, finished_at, mtime)
 
     def _sample_result(
         self,
@@ -218,3 +244,9 @@ class HarborRunner:
             params.result_id,
             sample_id,
         )
+
+    def _is_done(self, params: EvaluationParameters, sample_id: int) -> bool:
+        """A sample is done only if a persisted result exists AND is not an error;
+        a transiently-failed sample must be re-run on resume, not skipped."""
+        existing = self._existing(params, sample_id)
+        return existing is not None and not existing.is_error()

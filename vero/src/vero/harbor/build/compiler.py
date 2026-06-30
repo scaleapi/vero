@@ -90,12 +90,25 @@ def _prepare_baseline_repo(agent_repo: Path, dest: Path) -> str:
             ["git", "-C", str(repo_root), "archive", "HEAD", str(rel)]
             if strip else ["git", "-C", str(repo_root), "archive", "HEAD"],
             stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
-        subprocess.run(
-            ["tar", "xf", "-", "--strip-components", str(strip)],
-            cwd=dest, stdin=archive.stdout, check=True,
-        )
-        archive.wait()
+        try:
+            subprocess.run(
+                ["tar", "xf", "-", "--strip-components", str(strip)],
+                cwd=dest, stdin=archive.stdout, check=True,
+            )
+        finally:
+            # Let git see SIGPIPE if tar died, then reap it (no zombie).
+            if archive.stdout is not None:
+                archive.stdout.close()
+            archive_err = (archive.communicate()[1] or b"").decode(errors="replace")
+        # A failed `git archive` can emit a truncated stream that `tar` still
+        # accepts with exit 0, baking a near-empty baseline. Fail loudly instead.
+        if archive.returncode != 0:
+            raise RuntimeError(
+                f"git archive failed (exit {archive.returncode}) for {repo_root}: "
+                f"{archive_err.strip()}"
+            )
     else:
         shutil.copytree(agent_repo, dest, dirs_exist_ok=True)
 
@@ -205,26 +218,44 @@ def compile_task(
     import tempfile
 
     vh = env_dir / "sidecar" / "vero_home"
-    tmp = Path(tempfile.mkdtemp())
-    if config.mode == "A":
-        if not config.dataset:
-            raise ValueError("Mode A requires a dataset.")
-        dataset_id = _register(config.dataset, vh, tmp)
-    else:
-        if not (config.partition and config.harbor):
-            raise ValueError("Mode B requires partition + harbor.")
-        if not (config.inner_task or config.harbor.get("task_source")):
-            raise ValueError("Mode B requires inner_task (local) or harbor.task_source (registry).")
-        from vero.harbor.dataset import build_harbor_dataset
+    # Stage the dataset in a scratch dir that is always cleaned up (datasets can be
+    # gigabytes; a leaked mkdtemp would accumulate across builds). _register copies
+    # the dataset into vh before the dir is torn down, so cleanup is safe.
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        if config.mode == "A":
+            if not config.dataset:
+                raise ValueError("Mode A requires a dataset.")
+            dataset_id = _register(config.dataset, vh, tmp)
+        else:
+            if not (config.partition and config.harbor):
+                raise ValueError("Mode B requires partition + harbor.")
+            if not (config.inner_task or config.harbor.get("task_source")):
+                raise ValueError("Mode B requires inner_task (local) or harbor.task_source (registry).")
+            from vero.harbor.dataset import build_harbor_dataset
 
-        dataset_id = _register(build_harbor_dataset(config.partition), vh, tmp)
-        if config.inner_task:  # local benchmark -> bake sidecar-only
-            shutil.copytree(Path(config.inner_task).resolve(), env_dir / "sidecar" / "inner-task")
+            dataset_id = _register(build_harbor_dataset(config.partition), vh, tmp)
+            if config.inner_task:  # local benchmark -> bake sidecar-only
+                shutil.copytree(Path(config.inner_task).resolve(), env_dir / "sidecar" / "inner-task")
 
     # 4. ServeConfig (compiler <-> serve contract)
     (env_dir / "sidecar" / "serve.json").write_text(
         json.dumps(_serve_config(config, dataset_id, base_commit), indent=2)
     )
+
+    # 4b. Fail early if a declared secret is missing from the host env, so the
+    #     operator finds out at build time rather than via a credential-less
+    #     sidecar. The compose ${VAR:?} guard is the run-time backstop.
+    import os
+
+    if not os.environ.get("VERO_SKIP_SECRET_CHECK"):
+        missing = [s for s in config.secrets if not os.environ.get(s)]
+        if missing:
+            raise ValueError(
+                "Declared secrets missing from the host environment: "
+                f"{', '.join(missing)}. Set them, or set VERO_SKIP_SECRET_CHECK=1 "
+                "to defer to the run-time compose check."
+            )
 
     # 5. render templates
     jenv = Environment(
