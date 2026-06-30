@@ -12,7 +12,9 @@ from vero.artifacts import FileSystemArtifact
 from vero.core.constants import default_minimum_score
 from vero.core.dataset import (
     SplitAccess,
+    SplitAccessLevel,
     default_split_accesses,
+    resolve_split_access,
 )
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
@@ -340,6 +342,7 @@ class Policy:
 
         # Split budget
         self._build_split_budget()
+        self._ensure_budgeted_splits_tiered()
         self._validate_budget_splits()
         self.session.budget = self.budget
 
@@ -503,8 +506,37 @@ class Policy:
                 )
         self.budget = budgets
 
+    def _ensure_budgeted_splits_tiered(self) -> None:
+        """Ensure every agent-budgeted split has an explicit access tier.
+
+        A budgeted split is one the agent may evaluate, so it must be
+        agent-evaluable with per-sample labels hidden, i.e. ``non_viewable``.
+        Any budgeted split missing from ``split_accesses`` is auto-tiered
+        ``non_viewable`` here, so a budget is never silently unusable
+        (``no_access`` by omission, which the engine rejects) nor a label leak
+        (``viewable`` by omission). Explicit author tiers are left untouched and
+        checked in :meth:`_validate_budget_splits`.
+        """
+        if not self.budget:
+            return
+        listed = {sa.split for sa in self.split_accesses}
+        for b in self.budget:
+            if b.split not in listed:
+                self.split_accesses.append(SplitAccess.non_viewable(b.split))
+                listed.add(b.split)
+                logger.info(
+                    f"Budgeted split '{b.split}' was not listed in "
+                    f"split_accesses; defaulting it to non_viewable "
+                    f"(agent-evaluable, per-sample labels hidden)."
+                )
+
     def _validate_budget_splits(self) -> None:
-        """Warn if any budget splits don't exist in the dataset."""
+        """Warn if any budget splits do not exist in the dataset, and verify
+        that every agent-budgeted split is tiered ``non_viewable``.
+
+        ``viewable`` would leak per-sample labels to the agent; ``no_access``
+        would make the budget unusable. Both are misconfigurations and raise.
+        """
         if not self.budget:
             return
         from vero.core.dataset.store import load_dataset
@@ -524,6 +556,15 @@ class Policy:
                     )
             except Exception:
                 pass
+
+            tier = resolve_split_access(b.split, self.split_accesses)
+            if tier != SplitAccessLevel.non_viewable:
+                raise ValueError(
+                    f"Agent-budgeted split '{b.split}' is tiered '{tier}', but a "
+                    f"budgeted split must be 'non_viewable' (agent-evaluable with "
+                    f"per-sample labels hidden). 'viewable' would leak labels and "
+                    f"'no_access' would make the budget unusable."
+                )
 
     def _maybe_make_db(self) -> ExperimentDatabase:
         """Create or reconstruct the experiment database.

@@ -95,3 +95,70 @@ class TestEvaluate:
         svc.evaluator.evaluate.assert_awaited_once()
         # nothing metered
         assert svc.status()[("dev", "ds1")].remaining_run_budget == 3
+
+
+class TestNoAccessGate:
+    @pytest.mark.asyncio
+    async def test_evaluate_no_access_split_rejected_before_ledger(self, monkeypatch):
+        from vero.core.dataset import SplitAccess
+
+        # Pathological-but-instructive: a no_access split that DOES have a ledger
+        # entry. Without the explicit tier gate the implicit ledger check would
+        # let it through. With the gate it must be rejected before reserve().
+        svc = _make_service(
+            budgets=[
+                SplitBudget(split="test", dataset_id="ds1", total_sample_budget=100, total_run_budget=3)
+            ],
+            monkeypatch=monkeypatch,
+        )
+        svc.split_accesses = [SplitAccess.no_access("test")]
+        with pytest.raises(InvalidSplitError):
+            await svc.evaluate(
+                EvalRequest(dataset_id="ds1", split="test", commit="c1", num_samples=10)
+            )
+        svc.evaluator.evaluate.assert_not_awaited()
+        # nothing metered: tier gate fired before the ledger
+        assert svc.status()[("test", "ds1")].remaining_run_budget == 3
+        assert svc.status()[("test", "ds1")].remaining_sample_budget == 100
+
+    @pytest.mark.asyncio
+    async def test_evaluate_unlisted_split_defaults_no_access(self, monkeypatch):
+        from vero.core.dataset import SplitAccess
+
+        svc = _make_service(
+            budgets=[
+                SplitBudget(split="test", dataset_id="ds1", total_sample_budget=100, total_run_budget=3)
+            ],
+            monkeypatch=monkeypatch,
+        )
+        # 'test' is not listed in split_accesses at all -> fail closed to no_access
+        svc.split_accesses = [SplitAccess.viewable("dev")]
+        with pytest.raises(InvalidSplitError):
+            await svc.evaluate(
+                EvalRequest(dataset_id="ds1", split="test", commit="c1", num_samples=10)
+            )
+        svc.evaluator.evaluate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_admin_bypasses_no_access_gate(self, monkeypatch):
+        from vero.core.dataset import SplitAccess
+
+        svc = _make_service(monkeypatch=monkeypatch)
+        svc.split_accesses = [SplitAccess.no_access("test")]
+        await svc.evaluate(
+            EvalRequest(dataset_id="ds1", split="test", commit="c1", num_samples=10),
+            admin=True,
+        )
+        svc.evaluator.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_non_viewable_split_still_evaluable(self, monkeypatch):
+        from vero.core.dataset import SplitAccess
+
+        svc = _make_service(monkeypatch=monkeypatch)  # 'dev' budget present
+        svc.split_accesses = [SplitAccess.non_viewable("dev")]
+        await svc.evaluate(
+            EvalRequest(dataset_id="ds1", split="dev", commit="c1", num_samples=10)
+        )
+        svc.evaluator.evaluate.assert_awaited_once()
+        assert svc.status()[("dev", "ds1")].remaining_run_budget == 2

@@ -72,6 +72,21 @@ def get_non_viewable_splits(split_accesses: list[SplitAccess]) -> list[str]:
     ]
 
 
+def resolve_split_access(
+    split: str, split_accesses: list[SplitAccess]
+) -> SplitAccessLevel:
+    """Resolve the access tier for a split. Fail closed: an unlisted split is
+    treated as ``no_access`` (not agent-evaluable), never as viewable.
+
+    This is the core-side source of truth for split visibility, deliberately
+    free of any ``vero.harbor`` import so the evaluation engine can gate on it.
+    """
+    for sa in split_accesses:
+        if sa.split == split:
+            return sa.access
+    return SplitAccessLevel.no_access
+
+
 class DatasetInfo(BaseModel):
     """An identifier and summary of a dataset.
 
