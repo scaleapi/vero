@@ -7,6 +7,7 @@ from vero.core.dataset.base import (
     SplitAccessLevel,
     default_split_accesses,
     get_non_viewable_splits,
+    resolve_split_access,
 )
 from vero.core.dataset.store import (
     dataset_exists,
@@ -27,5 +28,6 @@ __all__ = [
     "hash_dataset_dict",
     "list_datasets",
     "load_dataset",
+    "resolve_split_access",
     "save_dataset",
 ]
