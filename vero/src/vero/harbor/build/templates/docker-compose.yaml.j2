@@ -24,7 +24,9 @@ services:
     environment:
       VERO_HOME_DIR: "/opt/vero_home"
 {% for secret in secrets %}
-      {{ secret }}: "${{ '{' }}{{ secret }}{{ '}' }}"
+      {# Fail-fast: docker compose aborts if this host var is unset/empty, rather
+         than silently baking an empty credential into the sidecar. #}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set in the host environment for the eval sidecar{{ '}' }}"
 {% endfor %}
     volumes:
       - agent_repo:/work/agent:ro
