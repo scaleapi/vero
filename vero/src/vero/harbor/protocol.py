@@ -9,11 +9,14 @@ delivered as files on the agent-readable volume, gated by split tier.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, field
 
 from vero.core.budget import SplitBudget
 from vero.core.dataset.base import SplitAccess, SplitAccessLevel
 from vero.core.db.database import Experiment
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,11 +57,22 @@ class StatusSummary:
 
 
 def tier_for_split(split: str, split_accesses: list[SplitAccess]) -> SplitAccessLevel:
-    """Resolve a split's visibility tier (default: viewable when unlisted)."""
+    """Resolve a split's visibility tier.
+
+    Fails CLOSED: an unlisted split is treated as ``no_access`` (not
+    agent-evaluable, nothing written to the agent volume). A split with no
+    declared access is a misconfiguration, not an invitation to expose labels,
+    so we log a warning and deny rather than default to the most permissive tier.
+    """
     for sa in split_accesses:
         if sa.split == split:
             return sa.access
-    return SplitAccessLevel.viewable
+    logger.warning(
+        "Split %r has no declared access level; failing closed to no_access. "
+        "Declare it explicitly in split_accesses if the agent should see it.",
+        split,
+    )
+    return SplitAccessLevel.no_access
 
 
 def summarize_experiment(

@@ -66,47 +66,70 @@ class TestMultiTarget:
 
 class TestAutoBestSelection:
     @pytest.mark.asyncio
-    async def test_finalize_auto_best_picks_top_validation_score(self, tmp_path):
-        engine = _engine([0.95])
+    async def test_auto_best_reranks_by_admin_score(self, tmp_path):
+        # 'hi' has the best RECORDED score (agent-influenced) but the admin re-score
+        # rates 'lo' higher; selection must follow the admin score.
+        engine = MagicMock()
         engine.db.get_experiments_df.return_value = pd.DataFrame(
             {
                 "dataset_subset_split": ["validation", "validation", "train"],
+                "dataset_subset_dataset_id": ["ds1", "ds1", "ds1"],
                 "candidate_commit": ["lo", "hi", "ignored"],
                 "mean_score": [0.5, 0.9, 1.0],
                 "candidate_created_at": [1, 2, 3],
             }
         )
+        admin_scores = {"hi": 0.1, "lo": 0.95}
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(
+                result=MagicMock(score=MagicMock(return_value=admin_scores.get(commit, 0.99)))
+            )
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
         v = Verifier(
             engine=engine,
             admin_volume=tmp_path,
             reward_mode="auto_best",
             selection_split="validation",
-            targets=[VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward")],
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
         )
         rewards = await v.finalize()
-        assert rewards == {"reward": 0.95}
-        # selected the highest validation score ("hi"), not the train row
-        assert engine.evaluate_admin.await_args.kwargs["commit"] == "hi"
+        # the final (target) eval is on the WINNER 'lo', chosen by admin re-score
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "lo"
+        assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
+        # reward is the winner 'lo' scored on the target split -> its admin score
+        assert rewards["reward"] == 0.95
 
     @pytest.mark.asyncio
-    async def test_finalize_auto_best_excludes_baseline(self, tmp_path):
-        engine = _engine([0.7])
+    async def test_auto_best_excludes_baseline_after_rescore(self, tmp_path):
+        engine = MagicMock()
         engine.db.get_experiments_df.return_value = pd.DataFrame(
             {
                 "dataset_subset_split": ["validation", "validation"],
+                "dataset_subset_dataset_id": ["ds1", "ds1"],
                 "candidate_commit": ["base", "agent"],
                 "mean_score": [0.99, 0.6],
                 "candidate_created_at": [1, 2],
             }
         )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.7)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
         v = Verifier(
             engine=engine,
             admin_volume=tmp_path,
             reward_mode="auto_best",
             selection_split="validation",
             base_commit="base",
-            targets=[VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward")],
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
         )
         await v.finalize()
-        # baseline excluded even though it scored higher
+        # baseline 'base' was never re-scored; 'agent' is selected + target-scored
+        rescored_commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert "base" not in rescored_commits
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"

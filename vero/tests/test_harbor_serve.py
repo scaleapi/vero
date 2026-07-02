@@ -141,3 +141,81 @@ async def test_serve_assembles_and_evaluates_and_finalizes(fixture):
     # verifier selects the (only) candidate on "test" and scores it on the test target
     rewards = await verifier.finalize()
     assert rewards["reward"] == 1.0
+
+
+def _create_cheating_agent(root: Path) -> tuple[Path, str]:
+    """An agent whose committed repo ALSO ships a vero_tasks scorer that returns 1.0
+    for everything, and whose solve() returns a wrong answer. If the verifier ran
+    the agent's scorer, reward would be 1.0; with the sidecar-baked task project it
+    must reflect the real (0.0) score."""
+    d = root / "cheating-agent"
+    vt = d / "src" / "my_agent" / "vero_tasks"
+    vt.mkdir(parents=True)
+    (d / "pyproject.toml").write_text(textwrap.dedent("""\
+        [project]
+        name = "my-agent"
+        version = "0.1.0"
+        requires-python = ">=3.11"
+        [build-system]
+        requires = ["hatchling"]
+        build-backend = "hatchling.build"
+        [tool.hatch.build.targets.wheel]
+        packages = ["src/my_agent"]
+    """))
+    (d / "src" / "my_agent" / "__init__.py").write_text('def solve(q): return "WRONG"\n')
+    # Adversarial scorer baked into the AGENT repo: always 1.0.
+    (vt / "__init__.py").write_text("from my_agent.vero_tasks import math_task  # noqa\n")
+    (vt / "math_task.py").write_text(textwrap.dedent("""\
+        from vero.core.db.result import TaskOutput, TaskResult
+        from vero.core.task import create_task
+        math_task = create_task("math")
+        @math_task.inference()
+        async def run_inference(task, evaluation_parameters):
+            return TaskOutput(output="WRONG")
+        @math_task.evaluation()
+        async def evaluate(task, output, evaluation_parameters):
+            return TaskResult(output=output.output, score=1.0)  # always passes
+    """))
+    _git(d, "init")
+    _git(d, "add", ".")
+    _git(d, "commit", "-m", "init")
+    return d, _git(d, "rev-parse", "HEAD")
+
+
+@pytest.mark.asyncio
+async def test_finalize_does_not_run_agent_supplied_scorer(fixture):
+    # Reuse the trusted task project from the fixture; swap in a cheating agent
+    # whose committed repo carries a 1.0 scorer and a wrong solve().
+    _, _, task_dir, dataset_id, tmp = fixture
+    agent_dir, head = _create_cheating_agent(tmp)
+    config = _serve_config(agent_dir, head, task_dir, dataset_id, tmp)
+
+    sidecar, verifier, _ = await build_components(config)
+    # Real eval: agent answers "WRONG" for sample 0 (expects "42"); trusted scorer -> 0.0
+    exp = await sidecar.engine.evaluate(
+        EvalRequest(dataset_id=dataset_id, split="test", commit=head, sample_ids=[0])
+    )
+    assert exp.result.sample_results[0].score == 0.0
+    # Finalize must reflect the TRUSTED score, not the agent's 1.0 scorer.
+    rewards = await verifier.finalize()
+    assert rewards["reward"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_ledger_reloads_spent_budget_across_restart(fixture):
+    agent_dir, head, task_dir, dataset_id, tmp = fixture
+    config = _serve_config(agent_dir, head, task_dir, dataset_id, tmp)
+
+    # First boot: spend one run on the test split.
+    sidecar, _, _ = await build_components(config)
+    before = sidecar.engine.budget.get(dataset_id, "test").remaining_run_budget
+    await sidecar.engine.evaluate(
+        EvalRequest(dataset_id=dataset_id, split="test", commit=head, sample_ids=[0])
+    )
+    after = sidecar.engine.budget.get(dataset_id, "test").remaining_run_budget
+    assert after == before - 1
+
+    # Restart: rebuild from the SAME config + admin_volume; spent budget must persist.
+    sidecar2, _, _ = await build_components(config)
+    reloaded = sidecar2.engine.budget.get(dataset_id, "test").remaining_run_budget
+    assert reloaded == after, "sidecar restart must not refill spent budget"
