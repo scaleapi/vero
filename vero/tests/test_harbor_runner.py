@@ -126,3 +126,89 @@ class TestCollate:
 
         # only the pending task name was passed to harbor
         assert runner._run_harbor.await_args.args[2] == ["t1"]
+
+
+class TestReviewFixes:
+    def test_emits_attempts_and_retries(self):
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1",
+                agent_import_path="pkg.mod:Agent",
+                model="anthropic/x",
+                environment="modal",
+                n_attempts=3,
+                max_retries=5,
+            )
+        )
+        cmd = runner._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert "--n-attempts" in cmd and cmd[cmd.index("--n-attempts") + 1] == "3"
+        assert "--max-retries" in cmd and cmd[cmd.index("--max-retries") + 1] == "5"
+
+    def test_passing_trial_wins_over_later_failing_retry(self, tmp_path):
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        run = jobs / "2026-01-01__00-00-00"
+        # passing trial, earlier finished_at
+        good = run / "trial0"
+        good.mkdir(parents=True)
+        (good / "result.json").write_text(json.dumps({
+            "task_name": "t0", "trial_name": "trial0", "finished_at": "2026-01-01T00:01:00",
+            "verifier_result": {"rewards": {"pass": 1.0}},
+        }))
+        # failing retry, later finished_at + exception_info; written second (newer mtime)
+        bad = run / "trial1"
+        bad.mkdir(parents=True)
+        (bad / "result.json").write_text(json.dumps({
+            "task_name": "t0", "trial_name": "trial1", "finished_at": "2026-01-01T00:09:00",
+            "exception_info": {"exception_type": "RuntimeError", "exception_message": "boom",
+                               "exception_traceback": ""},
+            "verifier_result": None,
+        }))
+        trials = runner._load_trials(jobs)
+        assert trials["t0"]["trial_name"] == "trial0"
+        assert (trials["t0"]["verifier_result"] or {}).get("rewards") == {"pass": 1.0}
+
+    def test_latest_attempt_wins_when_both_clean(self, tmp_path):
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        run = jobs / "2026-01-01__00-00-00"
+        early = run / "a"
+        early.mkdir(parents=True)
+        (early / "result.json").write_text(json.dumps({
+            "task_name": "t0", "trial_name": "early", "finished_at": "2026-01-01T00:01:00",
+            "verifier_result": {"rewards": {"pass": 0.0}},
+        }))
+        late = run / "b"
+        late.mkdir(parents=True)
+        (late / "result.json").write_text(json.dumps({
+            "task_name": "t0", "trial_name": "late", "finished_at": "2026-01-01T00:05:00",
+            "verifier_result": {"rewards": {"pass": 1.0}},
+        }))
+        trials = runner._load_trials(jobs)
+        assert trials["t0"]["trial_name"] == "late"
+
+    @pytest.mark.asyncio
+    async def test_resume_reruns_persisted_error_sample(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _runner()
+        params = _params()
+        result_dir = tmp_path / "result"
+        # sample 0 previously errored (transient failure)
+        save_sample_result(
+            get_vero_home_dir() / "sessions", "s", params.result_id, sample_id=0,
+            result=SampleResult(
+                dataset_sample=DatasetSample(sample_id=0, split="test", dataset_id="ds"),
+                error="transient harbor failure", commit="c1", result_id=params.result_id,
+            ),
+        )
+        # a good trial for t0 now exists
+        _write_trial(result_dir / "jobs", "trial0", "t0", {"pass": 1.0})
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0")])
+        runner._run_harbor = AsyncMock()
+        ws = MagicMock(project_path="/wt")
+        await runner.produce_sample_results(workspace=ws, params=params, result_dir=result_dir)
+        # error sample was treated as pending (re-run) and re-collated to a score
+        assert runner._run_harbor.await_args.args[2] == ["t0"]
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].error is None
+        assert results[0].score == 1.0

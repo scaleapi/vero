@@ -56,7 +56,8 @@ def _dataset(root: Path) -> Path:
 
 
 @pytest.fixture
-def built(tmp_path):
+def built(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
     config = BuildConfig(
         name="vero/gsm8k-opt",
         description="optimize gsm8k",
@@ -109,7 +110,9 @@ def test_rendered_files_parse(built):
     assert "eval-sidecar" in compose["services"]
     assert compose["services"]["main"]["depends_on"]["eval-sidecar"]["condition"] == "service_healthy"
     # secret reaches the sidecar only, via host-resolved compose interpolation
-    assert compose["services"]["eval-sidecar"]["environment"]["OPENAI_API_KEY"] == "${OPENAI_API_KEY}"
+    # with a fail-fast guard (${VAR:?msg}) so an unset host var aborts the run.
+    sidecar_secret = compose["services"]["eval-sidecar"]["environment"]["OPENAI_API_KEY"]
+    assert sidecar_secret.startswith("${OPENAI_API_KEY:?")
     assert "OPENAI_API_KEY" not in compose["services"]["main"].get("environment", {})
 
 
@@ -129,3 +132,38 @@ def test_baseline_sha_shared(built):
     assert head("environment/agent-baseline") == head("environment/agent-seed")
     cfg = json.loads((built / "environment/sidecar/serve.json").read_text())
     assert cfg["base_commit"] == head("environment/agent-baseline")
+
+
+def test_baseline_archive_failure_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    # An empty git repo with no commits: `git archive HEAD` exits nonzero.
+    bad = tmp_path / "emptyrepo"
+    (bad / "src").mkdir(parents=True)
+    (bad / "pyproject.toml").write_text("[project]\nname='x'\nversion='0'\n")
+    subprocess.run(["git", "init", "-q"], cwd=bad, check=True)
+    config = BuildConfig(
+        name="vero/x", agent_repo=str(bad), mode="A", task="gsm8k",
+        dataset=str(_dataset(tmp_path)),
+        splits=[{"split": "validation", "access": "non_viewable"}],
+    )
+    with pytest.raises(RuntimeError, match="git archive failed"):
+        compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+
+
+def test_missing_secret_fails_build(tmp_path, monkeypatch):
+    monkeypatch.delenv("VERO_SKIP_SECRET_CHECK", raising=False)
+    monkeypatch.delenv("DEFINITELY_MISSING_SECRET", raising=False)
+    config = BuildConfig(
+        name="vero/x", agent_repo=str(_agent_repo(tmp_path)), mode="A", task="gsm8k",
+        dataset=str(_dataset(tmp_path)),
+        splits=[{"split": "validation", "access": "non_viewable"}],
+        secrets=["DEFINITELY_MISSING_SECRET"],
+    )
+    with pytest.raises(ValueError, match="missing from the host environment"):
+        compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+
+
+def test_seed_documents_advisory_read_only(built):
+    seed = (built / "environment/main/seed.sh").read_text()
+    assert "ADVISORY ONLY" in seed
+    assert "sidecar-side" in seed

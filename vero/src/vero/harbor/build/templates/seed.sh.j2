@@ -10,8 +10,15 @@ fi
 # Whole repo is the optimizer's to edit...
 chown -R agent:agent /work/agent
 git config --system --add safe.directory /work/agent
+# NOTE: read_only_paths is ADVISORY ONLY. The chmod/chown below locks paths in
+# the live working tree (/work/agent), but the verifier checks out git blobs from
+# the agent's commit, not this working tree, so an optimizer can still stage edits
+# to a "locked" scorer path. Authoritative scorer-provenance is enforced
+# sidecar-side: in Mode A the verifier scores with the sidecar-baked task project
+# (task_project), never the scorer in the agent's commit. Treat this purely as a
+# guardrail / footgun-reducer, not security.
 {% for p in read_only_paths %}
-# ...except locked paths (e.g. the scorer): root-owned + unwritable.
+# ...except locked paths (e.g. the scorer): root-owned + unwritable (advisory).
 if [ -e "/work/agent/{{ p }}" ]; then
   chown -R root:root "/work/agent/{{ p }}"
   chmod -R a-w "/work/agent/{{ p }}"
