@@ -167,3 +167,12 @@ def test_seed_documents_advisory_read_only(built):
     seed = (built / "environment/main/seed.sh").read_text()
     assert "ADVISORY ONLY" in seed
     assert "sidecar-side" in seed
+
+
+def test_instruction_warns_baseline_not_selectable(built):
+    # auto_best: the agent must be told baseline evals do not create candidates
+    # (found live: an optimizer that spent its whole budget measuring the
+    # baseline died with "no candidate experiments" at finalize).
+    text = (built / "instruction.md").read_text()
+    assert "other than the seeded" in text
+    assert "spends budget without" in text

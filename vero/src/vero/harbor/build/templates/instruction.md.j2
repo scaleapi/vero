@@ -18,7 +18,10 @@ progress on the splits you *are* allowed to evaluate, within a fixed budget.
 4. Check budget / which splits are evaluable anytime: `vero harbor status`.
 {% if submit_enabled %}5. When done, nominate your best commit: `vero harbor submit`.{% else %}
 The best commit you evaluate on `{{ selection_split }}` is selected automatically and
-scored on the hidden test split at the end.{% endif %}
+scored on the hidden test split at the end. Only commits *other than the seeded
+baseline* are selectable: evaluating the unmodified baseline spends budget without
+creating a candidate, so make sure at least one eval is of a commit that contains
+your changes.{% endif %}
 
 ## Rules
 
