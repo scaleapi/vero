@@ -67,8 +67,27 @@ class Verifier:
         self.rescore_top_k = rescore_top_k
 
     async def finalize(self) -> dict[str, float]:
-        """Select the commit and score it on every target -> {reward_key: score}."""
-        sha = await self._select_commit()
+        """Select the commit and score it on every target -> {reward_key: score}.
+
+        A run in which the optimizer produced no scorable candidate (never
+        submitted in ``submit`` mode; no non-baseline experiments on the
+        selection split in ``auto_best`` mode) is a legitimate *outcome* of an
+        optimization run, not an infrastructure failure: every target is
+        floored at ``default_minimum_score`` so the outer harness records a
+        reward of 0.0 instead of a missing-reward exception. Infrastructure
+        problems (e.g. a missing experiment database) still raise.
+        """
+        try:
+            sha = await self._select_commit()
+        except NoCandidateError as exc:
+            logger.warning(
+                "No candidate commit to finalize (%s); flooring all %d target(s) "
+                "at %s.",
+                exc,
+                len(self.targets),
+                default_minimum_score,
+            )
+            return {t.reward_key: float(default_minimum_score) for t in self.targets}
         logger.info(f"Verifier selected commit {sha} (mode={self.reward_mode})")
         rewards: dict[str, float] = {}
         for target in self.targets:
@@ -112,7 +131,9 @@ class Verifier:
         its recorded score cannot win unless the admin scorer agrees.
         """
         if self.engine.db is None:
-            raise NoCandidateError("auto_best mode but no experiment database.")
+            # Misconfiguration, not an agent outcome: surface as a hard error so
+            # a broken sidecar doesn't silently zero every trial.
+            raise RuntimeError("auto_best mode but no experiment database.")
         df = self.engine.db.get_experiments_df(fill_score=default_minimum_score)
         if df.empty or "dataset_subset_split" not in df.columns:
             raise NoCandidateError("auto_best mode but no experiments recorded.")
