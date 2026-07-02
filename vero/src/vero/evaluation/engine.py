@@ -15,7 +15,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from vero.core.budget import BudgetLedger, SplitBudget
+from vero.core.dataset import (
+    SplitAccess,
+    SplitAccessLevel,
+    resolve_split_access,
+)
 from vero.core.evaluation import BaseEvaluationParameters
+from vero.exceptions import InvalidSplitError
 
 if TYPE_CHECKING:
     from vero.core.db.database import Experiment, ExperimentDatabase
@@ -52,6 +58,7 @@ class EvaluationEngine:
         run_constraints: BaseEvaluationParameters | None = None,
         session_id: str | None = None,
         vero_home: Path | None = None,
+        split_accesses: list[SplitAccess] | None = None,
     ):
         self.evaluator = evaluator
         self.budget = budget
@@ -60,6 +67,7 @@ class EvaluationEngine:
         self.run_constraints = run_constraints or BaseEvaluationParameters()
         self.session_id = session_id
         self.vero_home = vero_home
+        self.split_accesses = split_accesses
 
     @classmethod
     def from_session(cls, session) -> EvaluationEngine:
@@ -74,6 +82,7 @@ class EvaluationEngine:
             run_constraints=session.evaluation_parameters,
             session_id=session.session_id,
             vero_home=session.vero_home,
+            split_accesses=session.split_accesses,
         )
 
     # ------------------------------------------------------------------
@@ -140,10 +149,19 @@ class EvaluationEngine:
     async def evaluate(self, req: EvalRequest, *, admin: bool = False) -> Experiment:
         """Meter (unless admin) and run one evaluation; return the full Experiment.
 
-        ``no_access`` gating is implicit: those splits are absent from the budget
-        ledger, so ``reserve`` raises ``InvalidSplitError`` for the agent; admin
-        bypasses the ledger and may evaluate anything.
+        ``no_access`` gating is EXPLICIT and fail-closed: when ``split_accesses``
+        is configured, the split's tier is resolved (an unlisted split defaults
+        to ``no_access``) and a ``no_access`` split is hard-rejected for non-admin
+        callers *before* the budget ledger is consulted. Admin bypasses both the
+        tier gate and the ledger and may evaluate anything.
         """
+        if not admin and self.split_accesses is not None:
+            tier = resolve_split_access(req.split, self.split_accesses)
+            if tier == SplitAccessLevel.no_access:
+                raise InvalidSplitError(
+                    f"Split '{req.split}' of dataset '{req.dataset_id}' is no_access "
+                    f"and cannot be evaluated by the agent."
+                )
         sample_ids, n = self.resolve_samples(req)
         if not admin:
             await self.budget.reserve(req.dataset_id, req.split, n)

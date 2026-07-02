@@ -142,11 +142,16 @@ class BudgetLedger:
                 f"but only {budget.max_samples_per_run} are allowed per run."
             )
 
-    def record(self, dataset_id: str, split: str, num_samples: int) -> SplitBudget:
-        """Decrement the budget for a completed (or attempted) run and flush."""
+    def _decrement(self, dataset_id: str, split: str, num_samples: int) -> SplitBudget:
+        """In-memory decrement only (no flush). Caller is responsible for durability."""
         budget = self.get(dataset_id, split)
         budget.decrement_sample_budget(num_samples)
         budget.decrement_run_budget()
+        return budget
+
+    def record(self, dataset_id: str, split: str, num_samples: int) -> SplitBudget:
+        """Decrement the budget for a completed (or attempted) run and flush."""
+        budget = self._decrement(dataset_id, split, num_samples)
         self._flush()
         return budget
 
@@ -160,7 +165,16 @@ class BudgetLedger:
         """
         async with self._lock:
             self.check(dataset_id, split, num_samples)
-            return self.record(dataset_id, split, num_samples)
+            budget = self._decrement(dataset_id, split, num_samples)
+            # Flush off the event loop (to_thread) but still under the lock: the
+            # to_thread call keeps the synchronous write from blocking the loop
+            # (the actual bug), while holding the lock keeps concurrent flushes
+            # from racing on the shared temp file and preserves decrement/flush
+            # ordering so a crash never persists more remaining budget than was
+            # committed.
+            if self.persist_path is not None:
+                await asyncio.to_thread(self._flush)
+        return budget
 
     def status(self) -> dict[tuple[str, str], SplitBudget]:
         """Return all budgets keyed by (split, dataset_id)."""
