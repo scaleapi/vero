@@ -34,15 +34,23 @@ class TestSubmitSelection:
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
 
     @pytest.mark.asyncio
-    async def test_finalize_submit_no_submission_raises(self, tmp_path):
+    async def test_finalize_submit_no_submission_floors_rewards(self, tmp_path):
+        # "The agent never submitted" is an outcome, not an infrastructure
+        # failure: finalize floors every target instead of raising, so the
+        # outer harness records reward 0.0 rather than a missing-reward error.
+        engine = _engine([])
         v = Verifier(
-            engine=_engine([]),
+            engine=engine,
             admin_volume=tmp_path,
             reward_mode="submit",
-            targets=[VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward")],
+            targets=[
+                VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward"),
+                VerificationTarget(task="t2", dataset_id="ds2", split="test", reward_key="held_out"),
+            ],
         )
-        with pytest.raises(NoCandidateError):
-            await v.finalize()
+        rewards = await v.finalize()
+        assert rewards == {"reward": 0.0, "held_out": 0.0}
+        engine.evaluate_admin.assert_not_awaited()
 
 
 class TestMultiTarget:
@@ -132,4 +140,102 @@ class TestAutoBestSelection:
         # baseline 'base' was never re-scored; 'agent' is selected + target-scored
         rescored_commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
         assert "base" not in rescored_commits
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
+
+
+class TestNoCandidateFallback:
+    """finalize() floors rewards when the optimizer produced no candidate.
+
+    Found live: with a small budget, an optimizer that spends every eval on
+    the seeded baseline leaves an empty candidate pool (the baseline is
+    excluded from auto_best selection), and finalize used to 409 -> the outer
+    Harbor trial died with RewardFileNotFoundError instead of scoring 0.0.
+    """
+
+    @pytest.mark.asyncio
+    async def test_auto_best_baseline_only_floors_rewards(self, tmp_path):
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["train", "train"],
+                "dataset_subset_dataset_id": ["ds1", "ds1"],
+                "candidate_commit": ["base", "base"],
+                "mean_score": [0.0, 0.2],
+                "candidate_created_at": [1, 2],
+            }
+        )
+        engine.evaluate_admin = AsyncMock()
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.0}
+        # no candidate -> nothing re-scored, no target eval spent
+        engine.evaluate_admin.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_best_no_experiments_floors_rewards(self, tmp_path):
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame()
+        engine.evaluate_admin = AsyncMock()
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.0}
+        engine.evaluate_admin.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_auto_best_missing_db_still_raises(self, tmp_path):
+        # A missing experiment DB is sidecar misconfiguration, not an agent
+        # outcome: it must surface as an error, not silently zero the trial.
+        engine = MagicMock()
+        engine.db = None
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
+        )
+        with pytest.raises(RuntimeError, match="no experiment database"):
+            await v.finalize()
+
+    @pytest.mark.asyncio
+    async def test_candidates_present_keeps_normal_selection(self, tmp_path):
+        # Regression guard: the fallback must not swallow the normal path.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["train", "train"],
+                "dataset_subset_dataset_id": ["ds1", "ds1"],
+                "candidate_commit": ["base", "agent"],
+                "mean_score": [0.9, 0.1],
+                "candidate_created_at": [1, 2],
+            }
+        )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.5}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
