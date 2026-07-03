@@ -261,23 +261,34 @@ class HarborRunner:
             return SampleResult(
                 error=f"No Harbor trial result for task '{task_name}'.", **common
             )
-        # Mean aggregation across attempts: average the reward over every clean
-        # scored attempt (a verified 0.0 is a valid measurement; an exception is
-        # not). Falls through to the single best trial when nothing scored clean.
+        # Mean aggregation across attempts: average the reward over every SCORED
+        # attempt, dirty or clean. Harbor can record an exception (agent timeout,
+        # non-zero agent exit) and still run the verifier, so such an attempt
+        # carries a real measured 0.0; dropping it would estimate
+        # P(pass | attempt finished cleanly), which is non-monotone (one pass plus
+        # two timeouts would score 1.0) and systematically forgives candidates
+        # that make the agent slower. Only attempts with no rewards at all
+        # (failed before the verifier scored) are excluded. Falls through to the
+        # single best trial when nothing scored.
         if attempts:
-            scored = [
-                self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
-                for t in attempts
-                if (t.get("verifier_result") or {}).get("rewards")
-                and not t.get("exception_info")
+            scored_trials = [
+                t for t in attempts if (t.get("verifier_result") or {}).get("rewards")
             ]
-            if scored:
+            if scored_trials:
+                scored = [
+                    self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
+                    for t in scored_trials
+                ]
+                n_clean = sum(
+                    1 for t in scored_trials if not t.get("exception_info")
+                )
                 return SampleResult(
                     score=sum(scored) / len(scored),
                     metrics={
                         "reward_mean": sum(scored) / len(scored),
                         "n_attempts": float(len(attempts)),
                         "n_scored": float(len(scored)),
+                        "n_clean": float(n_clean),
                     },
                     output={
                         "task_name": task_name,

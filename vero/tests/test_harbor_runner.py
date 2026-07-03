@@ -271,9 +271,12 @@ class TestCollateMismatchGuard:
 
 
 class TestMeanAttemptAggregation:
-    """aggregate_attempts='mean': average the reward across clean scored
-    attempts (de-noising; estimates pass probability). Default 'best' keeps
-    the existing latest-clean behavior, which inflates toward pass@k.
+    """aggregate_attempts='mean': average the reward across every SCORED
+    attempt, dirty or clean (de-noising; estimates per-attempt pass
+    probability). Harbor scores timed-out attempts 0.0 while also recording
+    the exception; those must count, or the mean forgives slow candidates.
+    Default 'best' keeps the existing latest-clean behavior, which inflates
+    toward pass@k.
     """
 
     def _write(self, run, trial, task, rewards=None, exc=False):
@@ -300,7 +303,9 @@ class TestMeanAttemptAggregation:
         assert r.score == 0.5
         assert r.metrics["n_scored"] == 2.0
 
-    def test_mean_excludes_exception_attempts(self, tmp_path):
+    def test_mean_excludes_attempts_without_rewards(self, tmp_path):
+        # An attempt that died before the verifier scored it carries no
+        # measurement; it is excluded (but still counted in n_attempts).
         runner = HarborRunner(HarborConfig(
             task_source="org/ds", agent_import_path="p:m",
             n_attempts=2, aggregate_attempts="mean",
@@ -312,6 +317,41 @@ class TestMeanAttemptAggregation:
         r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
         assert r.score == 1.0
         assert r.metrics["n_scored"] == 1.0
+        assert r.metrics["n_attempts"] == 2.0
+
+    def test_mean_counts_scored_exception_attempts(self, tmp_path):
+        # The live-GAIA shape: harbor records AgentTimeoutError but still runs
+        # the verifier, so the attempt has BOTH exception_info and a scored 0.0.
+        # [1.0 clean, 0.0 timeout, 0.0 timeout] must score 1/3, not 1.0.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0b", "t0", rewards={"reward": 0.0}, exc=True)
+        self._write(run, "t0c", "t0", rewards={"reward": 0.0}, exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == pytest.approx(1 / 3)
+        assert r.metrics["n_scored"] == 3.0
+        assert r.metrics["n_clean"] == 1.0
+
+    def test_mean_over_all_dirty_attempts(self, tmp_path):
+        # Every attempt timed out but was scored (the all-timeouts live shape):
+        # the mean path must still apply, not the single-best-trial fallback.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0}, exc=True)
+        self._write(run, "t0b", "t0", rewards={"reward": 0.0}, exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 0.5
+        assert r.metrics["n_clean"] == 0.0
+        assert r.output["aggregate"] == "mean"
 
     def test_default_best_unchanged(self, tmp_path):
         # No attempts passed (default 'best' config): single-trial path intact.
