@@ -41,7 +41,7 @@ def _experiment(split: str, commit: str = "abcdef123456") -> Experiment:
     )
 
 
-def _sidecar(tmp_path, *, split, submit_enabled=False):
+def _sidecar(tmp_path, *, split, submit_enabled=False, accesses=None):
     engine = MagicMock()
     engine.evaluate = AsyncMock(return_value=_experiment(split))
     engine.budget = BudgetLedger(
@@ -49,7 +49,8 @@ def _sidecar(tmp_path, *, split, submit_enabled=False):
     )
     sidecar = EvaluationSidecar(
         engine=engine,
-        split_accesses=[SplitAccess.non_viewable("validation"), SplitAccess.no_access("test")],
+        split_accesses=accesses
+        or [SplitAccess.non_viewable("validation"), SplitAccess.no_access("test")],
         agent_repo_path=tmp_path / "agent_repo",
         agent_volume=tmp_path / "agent_vol",
         admin_volume=tmp_path / "admin_vol",
@@ -63,7 +64,11 @@ def _sidecar(tmp_path, *, split, submit_enabled=False):
 class TestRouting:
     @pytest.mark.asyncio
     async def test_visible_split_writes_full_per_sample(self, tmp_path):
-        sidecar = _sidecar(tmp_path, split="train")  # train defaults to viewable
+        # Unlisted splits are fail-closed (no_access) since the tier flip, so
+        # viewable must be declared explicitly.
+        sidecar = _sidecar(
+            tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
+        )
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
 
         dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"

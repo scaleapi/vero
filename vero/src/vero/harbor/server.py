@@ -110,20 +110,38 @@ class EvaluationSidecar:
         waiting for finalize. Admin-only: recorded scores on non_viewable
         splits must not reach the agent.
         """
+        import pandas as pd
+
         if self.engine.db is None:
             return []
-        df = self.engine.db.get_experiments_df()
+        # fill_score=None: errored samples must surface as null, not as the
+        # minimum-score floor: a synthetic 0.0 is indistinguishable from a real
+        # measured failure when watching the trajectory. error_rate carries the
+        # failure signal explicitly.
+        df = self.engine.db.get_experiments_df(fill_score=None)
         if df.empty:
             return []
+
+        def _clean(v):
+            return None if v is None or pd.isna(v) else float(v)
+
         rows = []
         for _, r in df.iterrows():
+            created = r.get("candidate_created_at")
             rows.append(
                 {
                     "commit": r.get("candidate_commit"),
                     "dataset_id": r.get("dataset_subset_dataset_id"),
                     "split": r.get("dataset_subset_split"),
-                    "mean_score": r.get("mean_score"),
-                    "created_at": str(r.get("candidate_created_at")),
+                    "mean_score": _clean(r.get("mean_score")),
+                    "error_rate": _clean(r.get("error_rate")),
+                    "created_at": (
+                        created.isoformat()
+                        if created is not None
+                        and str(created) not in ("NaT", "None")
+                        and hasattr(created, "isoformat")
+                        else None
+                    ),
                 }
             )
         return rows
