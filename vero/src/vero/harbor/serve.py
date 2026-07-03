@@ -136,6 +136,23 @@ def _load_or_build_ledger(
     )
 
 
+def _warn_mode_b_sample_timeout(config: ServeConfig) -> None:
+    """sample_timeout only governs Mode A (per-sample vero scoring). In Mode B
+    the nested `harbor run` applies each task's OWN harbor-configured timeouts;
+    the only vero-side cap is `timeout` on the whole nested run. An author who
+    set sample_timeout expecting a per-task cap would silently get none: say so.
+    """
+    if config.harbor is not None and "sample_timeout" in config.model_fields_set:
+        logger.warning(
+            "sample_timeout=%s is not enforced in Mode B: nested `harbor run` "
+            "tasks use their harbor-configured timeouts (tune via "
+            "harbor.extra_args, e.g. --agent-timeout-multiplier); only "
+            "`timeout` (%ss) caps the whole nested run.",
+            config.sample_timeout,
+            config.timeout,
+        )
+
+
 async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Verifier, str]:
     """Assemble the sidecar + verifier (sharing one engine) and the admin token."""
     vero_home = get_vero_home_dir()
@@ -153,6 +170,8 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
             "sidecar-baked task project, not the agent's committed repo. Refusing "
             "to start: with task_project unset the agent controls its own scoring."
         )
+
+    _warn_mode_b_sample_timeout(config)
 
     workspace = await GitWorkspace.create(config.repo_path)
 
