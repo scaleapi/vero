@@ -51,6 +51,10 @@ class StatusSummary:
     submit_enabled: bool
     # per (split, dataset_id): tier + whether the agent may evaluate it + remaining budget
     splits: list[dict] = field(default_factory=list)
+    # the seeded baseline sha and whether its one budget-free reference eval
+    # is still available (None/False when the task has no recorded baseline)
+    base_commit: str | None = None
+    free_baseline_available: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,6 +102,8 @@ def build_status(
     submit_enabled: bool,
     budget: dict[tuple[str, str], SplitBudget],
     split_accesses: list[SplitAccess],
+    base_commit: str | None = None,
+    free_baseline_available: bool = False,
 ) -> StatusSummary:
     """Build the agent-facing status from the budget ledger + split tiers.
 
@@ -117,4 +123,9 @@ def build_status(
                 "remaining_run_budget": b.remaining_run_budget,
             }
         )
-    return StatusSummary(submit_enabled=submit_enabled, splits=splits)
+    return StatusSummary(
+        submit_enabled=submit_enabled,
+        splits=splits,
+        base_commit=base_commit,
+        free_baseline_available=free_baseline_available,
+    )

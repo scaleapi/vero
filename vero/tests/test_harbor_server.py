@@ -41,7 +41,7 @@ def _experiment(split: str, commit: str = "abcdef123456") -> Experiment:
     )
 
 
-def _sidecar(tmp_path, *, split, submit_enabled=False):
+def _sidecar(tmp_path, *, split, submit_enabled=False, base_commit=None):
     engine = MagicMock()
     engine.evaluate = AsyncMock(return_value=_experiment(split))
     engine.budget = BudgetLedger(
@@ -54,6 +54,7 @@ def _sidecar(tmp_path, *, split, submit_enabled=False):
         agent_volume=tmp_path / "agent_vol",
         admin_volume=tmp_path / "admin_vol",
         submit_enabled=submit_enabled,
+        base_commit=base_commit,
     )
     # Stub the git transfer (integration-tested separately); pin the sha.
     sidecar._transfer_commit = AsyncMock(return_value="abcdef123456")
@@ -122,3 +123,52 @@ class TestStatus:
         assert status.submit_enabled is True
         assert status.splits[0]["split"] == "train"
         assert status.splits[0]["remaining_run_budget"] == 5
+
+
+class TestFreeBaselineEval:
+    """The agent's first eval of the seeded baseline is budget-free: it is the
+    reference every candidate is compared to and can never win selection, so
+    metering it forced a choice between optimizing blind and wasting budget
+    (observed live: exp5's optimizer skipped the reference, could not tell a
+    no-op edit from an improvement, and quit with budget unspent)."""
+
+    @pytest.mark.asyncio
+    async def test_first_baseline_eval_is_unmetered(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        # engine.evaluate was called with admin=True (bypasses the ledger)
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is True
+        # but results were routed with the agent tier (summary written)
+        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456"
+        assert (dest / "summary.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_second_baseline_eval_is_metered(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+
+    @pytest.mark.asyncio
+    async def test_non_baseline_commit_always_metered(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="other000000")
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+
+    @pytest.mark.asyncio
+    async def test_no_base_commit_never_free(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation")  # base_commit=None
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+
+    def test_status_surfaces_free_baseline(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="train", base_commit="abcdef123456")
+        s = sidecar.status()
+        assert s.base_commit == "abcdef123456"
+        assert s.free_baseline_available is True
+
+    @pytest.mark.asyncio
+    async def test_status_flips_after_use(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.status().free_baseline_available is False
