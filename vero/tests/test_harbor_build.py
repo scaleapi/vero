@@ -167,3 +167,14 @@ def test_seed_documents_advisory_read_only(built):
     seed = (built / "environment/main/seed.sh").read_text()
     assert "ADVISORY ONLY" in seed
     assert "sidecar-side" in seed
+
+
+def test_main_dockerfile_prebakes_claude_code(built):
+    # The main image pre-installs claude-code for the agent user so harbor's
+    # per-trial re-run of the bootstrap is fast (~250s vs ~625s measured) and
+    # fits the default agent-setup budget. `|| true` keeps offline compiles
+    # working.
+    text = (built / "environment" / "Dockerfile").read_text()
+    assert "bootstrap.sh" in text
+    assert 'su - agent -c' in text
+    assert "|| true" in text
