@@ -221,6 +221,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         agent_volume=Path(config.agent_volume),
         admin_volume=Path(config.admin_volume),
         submit_enabled=config.submit_enabled,
+        base_commit=config.base_commit,
     )
     verifier = Verifier(
         engine=engine,
