@@ -23,7 +23,7 @@ from vero.core.sessions import (
     save_sample_result,
 )
 from vero.harbor.config import HarborConfig
-from vero.utils import run_subprocess_with_tee
+from vero.utils import SubprocessTimeoutError, run_subprocess_with_tee
 
 if TYPE_CHECKING:
     from vero.core.evaluation import EvaluationParameters
@@ -118,9 +118,21 @@ class HarborRunner:
     ) -> None:
         cmd = self._build_command(project_path, params, task_names, jobs_dir)
         logger.info(f"Mode B: {' '.join(cmd)}")
-        result = await run_subprocess_with_tee(
-            cmd, timeout=params.timeout, cwd=project_path
-        )
+        try:
+            result = await run_subprocess_with_tee(
+                cmd, timeout=params.timeout, cwd=project_path
+            )
+        except SubprocessTimeoutError as e:
+            # A timed-out nested run is not fatal either: the eval's budget is
+            # already spent and completed trials are on disk, so salvage them.
+            # Propagating instead would return the agent a bare 500 with zero
+            # information for a fully-debited eval.
+            logger.warning(
+                f"`harbor run` timed out after {params.timeout}s; collating "
+                f"the trials that completed before the cutoff. stderr tail: "
+                f"{(e.result.stderr or '')[-500:]}"
+            )
+            return
         # Non-zero is not fatal: partial trials may still exist; collation fills gaps.
         if result.returncode != 0:
             logger.warning(
@@ -261,23 +273,43 @@ class HarborRunner:
             return SampleResult(
                 error=f"No Harbor trial result for task '{task_name}'.", **common
             )
-        # Mean aggregation across attempts: average the reward over every clean
-        # scored attempt (a verified 0.0 is a valid measurement; an exception is
-        # not). Falls through to the single best trial when nothing scored clean.
+        # Mean aggregation across attempts: average the reward over every SCORED
+        # attempt, dirty or clean. Harbor can record an exception (agent timeout,
+        # non-zero agent exit) and still run the verifier, so such an attempt
+        # carries a real measured 0.0; dropping it would estimate
+        # P(pass | attempt finished cleanly), which is non-monotone (one pass plus
+        # two timeouts would score 1.0) and systematically forgives candidates
+        # that make the agent slower. Only attempts with no rewards at all
+        # (failed before the verifier scored) are excluded. Falls through to the
+        # single best trial when nothing scored.
         if attempts:
-            scored = [
-                self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
-                for t in attempts
-                if (t.get("verifier_result") or {}).get("rewards")
-                and not t.get("exception_info")
+            scored_trials = [
+                t for t in attempts if (t.get("verifier_result") or {}).get("rewards")
             ]
-            if scored:
+            if scored_trials:
+                scored = [
+                    self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
+                    for t in scored_trials
+                ]
+                n_clean = sum(
+                    1 for t in scored_trials if not t.get("exception_info")
+                )
+                if len(scored) < self.config.n_attempts:
+                    # Fewer measurements than configured (attempts died before
+                    # scoring, or the nested run was cut off): the mean is
+                    # noisier than the config promises. Never let k shrink
+                    # silently; n_scored in the metrics records the actual k.
+                    logger.warning(
+                        f"Task '{task_name}': mean over {len(scored)} scored "
+                        f"attempt(s) of {self.config.n_attempts} configured."
+                    )
                 return SampleResult(
                     score=sum(scored) / len(scored),
                     metrics={
                         "reward_mean": sum(scored) / len(scored),
                         "n_attempts": float(len(attempts)),
                         "n_scored": float(len(scored)),
+                        "n_clean": float(n_clean),
                     },
                     output={
                         "task_name": task_name,

@@ -18,6 +18,8 @@ from vero.core.sessions import (
 )
 from vero.harbor.config import HarborConfig
 from vero.harbor.runner import HarborRunner
+from vero.utils import SubprocessTimeoutError
+from vero.utils.asyncio import SubprocessResult
 
 
 def _runner(reward_key=None, task_source="org/ds@1"):
@@ -270,9 +272,12 @@ class TestCollateMismatchGuard:
 
 
 class TestMeanAttemptAggregation:
-    """aggregate_attempts='mean': average the reward across clean scored
-    attempts (de-noising; estimates pass probability). Default 'best' keeps
-    the existing latest-clean behavior, which inflates toward pass@k.
+    """aggregate_attempts='mean': average the reward across every SCORED
+    attempt, dirty or clean (de-noising; estimates per-attempt pass
+    probability). Harbor scores timed-out attempts 0.0 while also recording
+    the exception; those must count, or the mean forgives slow candidates.
+    Default 'best' keeps the existing latest-clean behavior, which inflates
+    toward pass@k.
     """
 
     def _write(self, run, trial, task, rewards=None, exc=False):
@@ -299,7 +304,9 @@ class TestMeanAttemptAggregation:
         assert r.score == 0.5
         assert r.metrics["n_scored"] == 2.0
 
-    def test_mean_excludes_exception_attempts(self, tmp_path):
+    def test_mean_excludes_attempts_without_rewards(self, tmp_path):
+        # An attempt that died before the verifier scored it carries no
+        # measurement; it is excluded (but still counted in n_attempts).
         runner = HarborRunner(HarborConfig(
             task_source="org/ds", agent_import_path="p:m",
             n_attempts=2, aggregate_attempts="mean",
@@ -311,6 +318,41 @@ class TestMeanAttemptAggregation:
         r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
         assert r.score == 1.0
         assert r.metrics["n_scored"] == 1.0
+        assert r.metrics["n_attempts"] == 2.0
+
+    def test_mean_counts_scored_exception_attempts(self, tmp_path):
+        # The live-GAIA shape: harbor records AgentTimeoutError but still runs
+        # the verifier, so the attempt has BOTH exception_info and a scored 0.0.
+        # [1.0 clean, 0.0 timeout, 0.0 timeout] must score 1/3, not 1.0.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0b", "t0", rewards={"reward": 0.0}, exc=True)
+        self._write(run, "t0c", "t0", rewards={"reward": 0.0}, exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == pytest.approx(1 / 3)
+        assert r.metrics["n_scored"] == 3.0
+        assert r.metrics["n_clean"] == 1.0
+
+    def test_mean_over_all_dirty_attempts(self, tmp_path):
+        # Every attempt timed out but was scored (the all-timeouts live shape):
+        # the mean path must still apply, not the single-best-trial fallback.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0}, exc=True)
+        self._write(run, "t0b", "t0", rewards={"reward": 0.0}, exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 0.5
+        assert r.metrics["n_clean"] == 0.0
+        assert r.output["aggregate"] == "mean"
 
     def test_default_best_unchanged(self, tmp_path):
         # No attempts passed (default 'best' config): single-trial path intact.
@@ -321,3 +363,93 @@ class TestMeanAttemptAggregation:
             0, "t0", _params(),
         )
         assert r.score == 1.0
+
+
+class TestAggregateAttemptsValidation:
+    """A mistyped aggregate_attempts value must fail loudly at construction:
+    only the exact string 'mean' activates de-noising, so 'Mean'/'avg' would
+    otherwise silently run inflated best-of-k."""
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="aggregate_attempts"):
+            HarborConfig(
+                task_source="org/ds", agent_import_path="p:m",
+                aggregate_attempts="Mean",
+            )
+
+    def test_valid_values_accepted(self):
+        for value in ("best", "mean"):
+            cfg = HarborConfig(
+                task_source="org/ds", agent_import_path="p:m",
+                aggregate_attempts=value,
+            )
+            assert cfg.aggregate_attempts == value
+
+
+class TestTimeoutSalvage:
+    """A nested `harbor run` cut off by the vero-side timeout must salvage the
+    trials that completed instead of erroring the whole (already-debited)
+    eval with nothing."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_collates_partials(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _runner()
+        params = _params()
+        result_dir = tmp_path / "result"
+        # t0 finished before the cutoff; t1 did not.
+        _write_trial(result_dir / "jobs", "trial0", "t0", {"pass": 1.0})
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+
+        async def _timeout(*args, **kwargs):
+            raise SubprocessTimeoutError(SubprocessResult(
+                args=["harbor", "run"], returncode=None, stdout="", stderr="",
+                timed_out=True,
+            ))
+
+        monkeypatch.setattr("vero.harbor.runner.run_subprocess_with_tee", _timeout)
+
+        ws = MagicMock(project_path="/wt")
+        await runner.produce_sample_results(workspace=ws, params=params, result_dir=result_dir)
+
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 1.0
+        assert results[1].error is not None  # cut-off task -> error sample
+
+    @pytest.mark.asyncio
+    async def test_timeout_with_zero_trials_still_raises(self, tmp_path, monkeypatch):
+        # Nothing completed before the cutoff: the collate guard must still
+        # fail loudly rather than record an all-zero/all-error experiment.
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _runner()
+        params = _params()
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+
+        async def _timeout(*args, **kwargs):
+            raise SubprocessTimeoutError(SubprocessResult(
+                args=["harbor", "run"], returncode=None, stdout="", stderr="",
+                timed_out=True,
+            ))
+
+        monkeypatch.setattr("vero.harbor.runner.run_subprocess_with_tee", _timeout)
+        ws = MagicMock(project_path="/wt")
+        with pytest.raises(RuntimeError, match="no trial results"):
+            await runner.produce_sample_results(
+                workspace=ws, params=params, result_dir=tmp_path / "result"
+            )
+
+    def test_partial_k_mean_warns(self, tmp_path, caplog):
+        # 2 of 3 configured attempts scored: the mean must not shrink k silently.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        w = TestMeanAttemptAggregation()
+        w._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        w._write(run, "t0b", "t0", rewards={"reward": 0.0})
+        groups = runner._trial_groups(jobs)
+        with caplog.at_level("WARNING", logger="vero.harbor.runner"):
+            r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.metrics["n_scored"] == 2.0
+        assert any("2 scored attempt(s) of 3 configured" in m for m in caplog.messages)

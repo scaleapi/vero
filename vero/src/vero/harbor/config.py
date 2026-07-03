@@ -23,11 +23,23 @@ class HarborConfig:
     reward_key: str | None = None  # primary reward; default pass -> reward -> mean
     # How to score a task when n_attempts > 1 produced several trials:
     #   "best": the existing behavior (clean trials preferred, then latest).
-    #   "mean": average the reward across all clean scored attempts. This is the
-    #           de-noising mode: noise shrinks ~1/sqrt(k), and the score estimates
-    #           pass probability instead of pass@k (which "best" inflates toward).
+    #   "mean": average the reward across all scored attempts, dirty or clean
+    #           (a timed-out attempt the verifier scored 0.0 still counts; only
+    #           attempts with no rewards at all are excluded). This is the
+    #           de-noising mode: noise shrinks ~1/sqrt(k), and the score
+    #           estimates pass probability instead of pass@k (which "best"
+    #           inflates toward).
     aggregate_attempts: str = "best"
     extra_args: list[str] = field(default_factory=list)  # passthrough harbor run flags
+
+    def __post_init__(self) -> None:
+        # Only the exact string "mean" activates de-noising; without this check a
+        # typo ("Mean", "avg") would silently run best-of-k with inflated scores.
+        if self.aggregate_attempts not in ("best", "mean"):
+            raise ValueError(
+                f"aggregate_attempts must be 'best' or 'mean', got "
+                f"{self.aggregate_attempts!r}"
+            )
 
     @property
     def is_registry(self) -> bool:
