@@ -233,7 +233,9 @@ def test_mode_b_sample_timeout_warns(caplog):
     )
     with caplog.at_level("WARNING"):
         _warn_mode_b_sample_timeout(ServeConfig(**base, sample_timeout=1200))
-    assert any("not enforced in Mode B" in r.message for r in caplog.records)
+    # caplog.messages (getMessage()) rather than r.message: pytest's capture
+    # handler does not run Formatter.format(), so .message may be unset.
+    assert any("not enforced in Mode B" in m for m in caplog.messages)
 
     caplog.clear()
     with caplog.at_level("WARNING"):

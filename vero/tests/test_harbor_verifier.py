@@ -301,3 +301,22 @@ class TestBaselineAtFinalize:
         )
         rewards = await v.finalize()
         assert rewards == {"accuracy": 0.7}  # trial reward survives baseline failure
+
+    @pytest.mark.asyncio
+    async def test_missing_base_commit_warns(self, tmp_path, caplog):
+        # score_baseline=True with no base_commit must not be a silent no-op.
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = _engine([0.9])
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit=None,
+            score_baseline=True,
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        with caplog.at_level("WARNING", logger="vero.harbor.verifier"):
+            rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.9}
+        assert not (tmp_path / "baseline.json").exists()
+        assert any("base_commit is not set" in m for m in caplog.messages)
