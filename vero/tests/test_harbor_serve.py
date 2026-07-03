@@ -219,3 +219,26 @@ async def test_ledger_reloads_spent_budget_across_restart(fixture):
     sidecar2, _, _ = await build_components(config)
     reloaded = sidecar2.engine.budget.get(dataset_id, "test").remaining_run_budget
     assert reloaded == after, "sidecar restart must not refill spent budget"
+
+
+def test_mode_b_sample_timeout_warns(caplog):
+    # Setting sample_timeout in Mode B is a no-op (nested harbor tasks use their
+    # own timeouts); the author must be told rather than silently ignored.
+    from vero.harbor.serve import ServeConfig, _warn_mode_b_sample_timeout
+
+    base = dict(
+        repo_path="/r", agent_repo_path="/a", session_id="s", dataset_id="ds",
+        split_accesses=[], budgets=[], agent_volume="/v", admin_volume="/adm",
+        admin_token_path="/t", harbor={"task_source": "org/x", "agent_import_path": "p:C"},
+    )
+    with caplog.at_level("WARNING"):
+        _warn_mode_b_sample_timeout(ServeConfig(**base, sample_timeout=1200))
+    assert any("not enforced in Mode B" in r.message for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        _warn_mode_b_sample_timeout(ServeConfig(**base))  # not explicitly set
+        _warn_mode_b_sample_timeout(
+            ServeConfig(**{**base, "harbor": None, "task_project": "/tp"}, sample_timeout=900)
+        )  # Mode A: sample_timeout is real
+    assert not caplog.records
