@@ -58,7 +58,7 @@ class HarborRunner:
             await self._run_harbor(
                 str(workspace.project_path), params, [t for _, t in pending], jobs_dir
             )
-        self._collate(jobs_dir, pairs, params)
+        self._collate(jobs_dir, pairs, params, ran=[t for _, t in pending])
 
     # ------------------------------------------------------------------
     # Task selection (host-side; just task names)
@@ -137,8 +137,31 @@ class HarborRunner:
         jobs_dir: Path,
         pairs: list[tuple[int, str]],
         params: EvaluationParameters,
+        ran: list[str] | None = None,
     ) -> None:
         trials = self._load_trials(jobs_dir)  # {task_name: result_dict}
+        # Guard against silently scoring everything 0. If we just ran tasks and
+        # got either no trial results at all, or trial results whose task_names
+        # match NONE of the requested ones (a task-name keying mismatch: the
+        # dataset must store harbor's canonical '<org>/<name>' form), this is an
+        # infrastructure failure, not an agent failure. Recording it as all-zero
+        # samples would be indistinguishable from "the agent failed every task".
+        if ran:
+            if not trials:
+                raise RuntimeError(
+                    f"Nested `harbor run` produced no trial results for "
+                    f"{len(ran)} task(s) (see harbor output above); refusing to "
+                    f"score all samples 0."
+                )
+            if not any(t in trials for t in ran):
+                raise RuntimeError(
+                    f"Nested `harbor run` produced {len(trials)} trial "
+                    f"result(s), but none match the requested task names "
+                    f"(requested e.g. {ran[0]!r}; recorded e.g. "
+                    f"{next(iter(trials))!r}). Task names must use harbor's "
+                    f"canonical '<org>/<name>' form; refusing to score all "
+                    f"samples 0."
+                )
         for sample_id, task_name in pairs:
             if self._is_done(params, sample_id):
                 continue  # already collated successfully (resume); errors are redone
