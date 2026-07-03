@@ -167,3 +167,38 @@ def test_seed_documents_advisory_read_only(built):
     seed = (built / "environment/main/seed.sh").read_text()
     assert "ADVISORY ONLY" in seed
     assert "sidecar-side" in seed
+
+
+class TestPartitionNameValidation:
+    """Build-time guard: partition names must exist in the registry task_source
+    in harbor's canonical '<org>/<name>' form. Found live: bare TB2 names
+    compiled fine, then zeroed an entire trial at eval time."""
+
+    def test_unknown_name_fails_build(self, monkeypatch):
+        from vero.harbor.build import compiler
+        monkeypatch.delenv("VERO_SKIP_TASK_NAME_CHECK", raising=False)
+        monkeypatch.setattr(
+            compiler, "_resolve_task_source_names",
+            lambda ts: {"org/task-a", "org/task-b"},
+        )
+        with pytest.raises(ValueError, match="canonical"):
+            compiler._validate_partition_names({"train": ["task-a"]}, "org/bench")
+
+    def test_canonical_names_pass(self, monkeypatch):
+        from vero.harbor.build import compiler
+        monkeypatch.delenv("VERO_SKIP_TASK_NAME_CHECK", raising=False)
+        monkeypatch.setattr(
+            compiler, "_resolve_task_source_names",
+            lambda ts: {"org/task-a", "org/task-b"},
+        )
+        compiler._validate_partition_names(
+            {"train": ["org/task-a"], "validation": ["org/task-b"]}, "org/bench"
+        )  # no raise
+
+    def test_offline_enumeration_warns_and_continues(self, monkeypatch, caplog):
+        from vero.harbor.build import compiler
+        monkeypatch.delenv("VERO_SKIP_TASK_NAME_CHECK", raising=False)
+        monkeypatch.setattr(compiler, "_resolve_task_source_names", lambda ts: None)
+        with caplog.at_level("WARNING"):
+            compiler._validate_partition_names({"train": ["anything"]}, "org/bench")
+        assert any("skipping the check" in r.message for r in caplog.records)
