@@ -101,6 +101,33 @@ class EvaluationSidecar:
             split_accesses=self.split_accesses,
         )
 
+    def list_experiments(self) -> list[dict]:
+        """All recorded experiments, unredacted (admin observability).
+
+        One row per experiment: commit, dataset/split, recorded score, and
+        creation time. Lets an operator (or the outer harness) watch an
+        optimization run mid-flight without exec-ing into the container or
+        waiting for finalize. Admin-only: recorded scores on non_viewable
+        splits must not reach the agent.
+        """
+        if self.engine.db is None:
+            return []
+        df = self.engine.db.get_experiments_df()
+        if df.empty:
+            return []
+        rows = []
+        for _, r in df.iterrows():
+            rows.append(
+                {
+                    "commit": r.get("candidate_commit"),
+                    "dataset_id": r.get("dataset_subset_dataset_id"),
+                    "split": r.get("dataset_subset_split"),
+                    "mean_score": r.get("mean_score"),
+                    "created_at": str(r.get("candidate_created_at")),
+                }
+            )
+        return rows
+
     # ------------------------------------------------------------------
     # Trust-boundary mechanics
     # ------------------------------------------------------------------

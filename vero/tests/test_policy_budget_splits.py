@@ -44,13 +44,18 @@ def test_ensure_then_validate_passes_for_train_budget_default():
     p._validate_budget_splits()  # no raise
 
 
-def test_validate_rejects_explicit_viewable_budgeted_split():
+def test_validate_allows_explicit_viewable_budgeted_split(caplog):
+    # A budget meters *compute* (each eval can be a paid benchmark run), which
+    # is orthogonal to result visibility: viewable + budget is legitimate
+    # (e.g. a classic ML train split with per-task feedback). It warns loudly
+    # instead of raising.
     p = _policy(
         [SplitAccess.viewable("dev")],
         [SplitBudget(split="dev", dataset_id="ds1", total_sample_budget=10)],
     )
-    with pytest.raises(ValueError, match="non_viewable"):
-        p._validate_budget_splits()
+    with caplog.at_level("WARNING"):
+        p._validate_budget_splits()  # no raise
+    assert any("viewable" in r.message for r in caplog.records)
 
 
 def test_validate_rejects_explicit_no_access_budgeted_split():
@@ -58,7 +63,7 @@ def test_validate_rejects_explicit_no_access_budgeted_split():
         [SplitAccess.no_access("dev")],
         [SplitBudget(split="dev", dataset_id="ds1", total_sample_budget=10)],
     )
-    with pytest.raises(ValueError, match="non_viewable"):
+    with pytest.raises(ValueError, match="no_access"):
         p._validate_budget_splits()
 
 
