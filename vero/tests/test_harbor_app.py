@@ -153,3 +153,25 @@ class TestTokenFilePermissions:
                 read_admin_token(p)
         finally:
             os.seteuid(0)
+
+
+class TestExperimentsEndpoint:
+    def test_experiments_requires_token_and_lists_rows(self):
+        sidecar = MagicMock()
+        sidecar.list_experiments.return_value = [
+            {"commit": "abc123", "dataset_id": "ds", "split": "train",
+             "mean_score": 0.5, "created_at": "2026-07-03"},
+        ]
+        client = _client(sidecar=sidecar)
+
+        assert client.get("/experiments").status_code == 403  # no token
+        assert (
+            client.get("/experiments", headers={"Authorization": "Bearer wrong"}).status_code
+            == 403
+        )
+        sidecar.list_experiments.assert_not_called()
+
+        r = client.get("/experiments", headers={"Authorization": f"Bearer {TOKEN}"})
+        assert r.status_code == 200
+        rows = r.json()["experiments"]
+        assert rows and rows[0]["commit"] == "abc123" and rows[0]["mean_score"] == 0.5

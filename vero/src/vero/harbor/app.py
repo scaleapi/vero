@@ -81,11 +81,18 @@ def create_app(
     async def status():
         return sidecar.status().to_dict()
 
-    # --- admin endpoint (bearer-token gated) ---
+    # --- admin endpoints (bearer-token gated) ---
     @app.post("/finalize")
     async def finalize(authorization: str | None = Header(default=None)):
         if not check_admin(authorization, admin_token):
             raise HTTPException(status_code=403, detail="admin token required")
         return await verifier.finalize()
+
+    @app.get("/experiments")
+    async def experiments(authorization: str | None = Header(default=None)):
+        """Mid-run observability: every recorded experiment, unredacted."""
+        if not check_admin(authorization, admin_token):
+            raise HTTPException(status_code=403, detail="admin token required")
+        return {"experiments": sidecar.list_experiments()}
 
     return app
