@@ -151,7 +151,19 @@ def _resolve_task_source_names(task_source: str) -> set[str] | None:
         from harbor.models.job.config import DatasetConfig
 
         name = task_source.split("@")[0]
-        cfgs = asyncio.run(DatasetConfig(name=name).get_task_configs())
+        coro = DatasetConfig(name=name).get_task_configs()
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            cfgs = asyncio.run(coro)  # no loop running: the normal sync path
+        else:
+            # A loop is already running (async caller, pytest-asyncio, notebook):
+            # asyncio.run would raise and the bare except below would silently
+            # skip validation. Run the enumeration on its own loop in a worker.
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                cfgs = pool.submit(asyncio.run, coro).result()
         return {c.name for c in cfgs}
     except Exception as e:
         logger.debug(f"task_source enumeration failed: {type(e).__name__}: {e}")
@@ -174,10 +186,14 @@ def _validate_partition_names(
     if os.environ.get("VERO_SKIP_TASK_NAME_CHECK"):
         return
     names = _resolve_task_source_names(task_source)
-    if names is None:
+    if not names:
+        # None (enumeration failed: offline, harbor missing) or an empty source;
+        # either way there is nothing meaningful to check against, and raising
+        # "unknown names, e.g. []" would only confuse.
         logger.warning(
-            f"Could not enumerate task_source '{task_source}' to validate "
-            f"partition task names (offline?); skipping the check."
+            f"Could not enumerate task names for task_source '{task_source}' "
+            f"(offline, harbor not importable, or empty source); skipping the "
+            f"check."
         )
         return
     unknown = sorted({t for tasks in partition.values() for t in tasks} - names)

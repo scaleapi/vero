@@ -201,4 +201,22 @@ class TestPartitionNameValidation:
         monkeypatch.setattr(compiler, "_resolve_task_source_names", lambda ts: None)
         with caplog.at_level("WARNING"):
             compiler._validate_partition_names({"train": ["anything"]}, "org/bench")
-        assert any("skipping the check" in r.message for r in caplog.records)
+        assert any("skipping the check" in m for m in caplog.messages)
+
+    def test_empty_source_warns_instead_of_useless_error(self, monkeypatch, caplog):
+        # An empty enumeration must not raise "unknown names, e.g. []".
+        from vero.harbor.build import compiler
+        monkeypatch.delenv("VERO_SKIP_TASK_NAME_CHECK", raising=False)
+        monkeypatch.setattr(compiler, "_resolve_task_source_names", lambda ts: set())
+        with caplog.at_level("WARNING"):
+            compiler._validate_partition_names({"train": ["anything"]}, "org/bench")
+        assert any("skipping the check" in m for m in caplog.messages)
+
+    def test_skip_env_var_bypasses_check(self, monkeypatch):
+        from vero.harbor.build import compiler
+        monkeypatch.setenv("VERO_SKIP_TASK_NAME_CHECK", "1")
+        monkeypatch.setattr(
+            compiler, "_resolve_task_source_names",
+            lambda ts: {"org/task-a"},
+        )
+        compiler._validate_partition_names({"train": ["bare-name"]}, "org/bench")  # no raise
