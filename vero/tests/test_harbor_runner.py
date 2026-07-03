@@ -361,3 +361,24 @@ class TestMeanAttemptAggregation:
             0, "t0", _params(),
         )
         assert r.score == 1.0
+
+
+class TestAggregateAttemptsValidation:
+    """A mistyped aggregate_attempts value must fail loudly at construction:
+    only the exact string 'mean' activates de-noising, so 'Mean'/'avg' would
+    otherwise silently run inflated best-of-k."""
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="aggregate_attempts"):
+            HarborConfig(
+                task_source="org/ds", agent_import_path="p:m",
+                aggregate_attempts="Mean",
+            )
+
+    def test_valid_values_accepted(self):
+        for value in ("best", "mean"):
+            cfg = HarborConfig(
+                task_source="org/ds", agent_import_path="p:m",
+                aggregate_attempts=value,
+            )
+            assert cfg.aggregate_attempts == value
