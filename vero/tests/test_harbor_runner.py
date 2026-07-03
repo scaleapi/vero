@@ -245,6 +245,7 @@ class TestCollateMismatchGuard:
     def test_partial_match_still_collates(self, tmp_path, monkeypatch):
         # One of two tasks matched: not a keying mismatch; the missing task is
         # recorded as an error sample (existing behavior).
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))  # _is_done must not read the real home
         runner = _runner()
         jobs = tmp_path / "jobs"
         run = jobs / "2026-01-01__00-00-00"
