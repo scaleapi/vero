@@ -142,6 +142,55 @@ def _register(dataset, vero_home: Path, tmp: Path) -> str:
     return resolve_and_save_dataset(dataset, sessions, datasets, SESSION_ID)
 
 
+def _resolve_task_source_names(task_source: str) -> set[str] | None:
+    """Enumerate the registry task_source's canonical task names, or None if
+    that is not possible right now (harbor not importable, offline, ...)."""
+    try:
+        import asyncio
+
+        from harbor.models.job.config import DatasetConfig
+
+        name = task_source.split("@")[0]
+        cfgs = asyncio.run(DatasetConfig(name=name).get_task_configs())
+        return {c.name for c in cfgs}
+    except Exception as e:
+        logger.debug(f"task_source enumeration failed: {type(e).__name__}: {e}")
+        return None
+
+
+def _validate_partition_names(
+    partition: dict[str, list[str]], task_source: str
+) -> None:
+    """Fail the build when partition task names do not exist in the task_source.
+
+    Harbor records trial results under canonical '<org>/<name>' task names; a
+    bare or misspelled name in the partition compiles fine but surfaces only at
+    eval time as an all-zero experiment (every nested trial unmatched). Catch it
+    here, where it costs nothing. Best-effort: when the source cannot be
+    enumerated (offline compile), warn and continue.
+    """
+    import os
+
+    if os.environ.get("VERO_SKIP_TASK_NAME_CHECK"):
+        return
+    names = _resolve_task_source_names(task_source)
+    if names is None:
+        logger.warning(
+            f"Could not enumerate task_source '{task_source}' to validate "
+            f"partition task names (offline?); skipping the check."
+        )
+        return
+    unknown = sorted({t for tasks in partition.values() for t in tasks} - names)
+    if unknown:
+        sample = sorted(names)[:3]
+        raise ValueError(
+            f"partition contains task name(s) not found in task_source "
+            f"'{task_source}': {unknown[:5]}. Task names must use harbor's "
+            f"canonical '<org>/<name>' form, e.g. {sample}. "
+            f"(Set VERO_SKIP_TASK_NAME_CHECK=1 to bypass.)"
+        )
+
+
 def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str) -> dict:
     harbor = None
     if config.harbor is not None:
@@ -234,6 +283,10 @@ def compile_task(
                 raise ValueError("Mode B requires inner_task (local) or harbor.task_source (registry).")
             from vero.harbor.dataset import build_harbor_dataset
 
+            if config.harbor.get("task_source") and not config.inner_task:
+                _validate_partition_names(
+                    config.partition, config.harbor["task_source"]
+                )
             dataset_id = _register(build_harbor_dataset(config.partition), vh, tmp)
             if config.inner_task:  # local benchmark -> bake sidecar-only
                 shutil.copytree(Path(config.inner_task).resolve(), env_dir / "sidecar" / "inner-task")
