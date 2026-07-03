@@ -532,10 +532,13 @@ class Policy:
 
     def _validate_budget_splits(self) -> None:
         """Warn if any budget splits do not exist in the dataset, and verify
-        that every agent-budgeted split is tiered ``non_viewable``.
+        that every agent-budgeted split is agent-evaluable.
 
-        ``viewable`` would leak per-sample labels to the agent; ``no_access``
-        would make the budget unusable. Both are misconfigurations and raise.
+        ``no_access`` would make the budget unusable and raises. ``viewable``
+        is allowed: a budget meters *compute* (each eval can be a real, paid
+        benchmark run), which is orthogonal to result visibility; it does mean
+        per-sample results reach the agent, so it is logged loudly rather than
+        rejected.
         """
         if not self.budget:
             return
@@ -558,12 +561,19 @@ class Policy:
                 pass
 
             tier = resolve_split_access(b.split, self.split_accesses)
-            if tier != SplitAccessLevel.non_viewable:
+            if tier == SplitAccessLevel.no_access:
                 raise ValueError(
-                    f"Agent-budgeted split '{b.split}' is tiered '{tier}', but a "
-                    f"budgeted split must be 'non_viewable' (agent-evaluable with "
-                    f"per-sample labels hidden). 'viewable' would leak labels and "
-                    f"'no_access' would make the budget unusable."
+                    f"Agent-budgeted split '{b.split}' is tiered 'no_access', "
+                    f"which makes the budget unusable (the engine rejects agent "
+                    f"evals of no_access splits). Tier it 'non_viewable' or "
+                    f"'viewable', or drop the budget."
+                )
+            if tier == SplitAccessLevel.viewable:
+                logger.warning(
+                    f"Agent-budgeted split '{b.split}' is tiered 'viewable': the "
+                    f"budget meters eval compute, but per-sample results are "
+                    f"fully visible to the agent. Use 'non_viewable' if labels "
+                    f"must stay hidden."
                 )
 
     def _maybe_make_db(self) -> ExperimentDatabase:
