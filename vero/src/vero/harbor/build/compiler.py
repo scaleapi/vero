@@ -8,6 +8,7 @@ with `harbor run -p <task-dir> -a <optimizer> -m <model> -e docker`.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import shutil
@@ -17,6 +18,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from vero.harbor.build.config import BuildConfig
+from vero.harbor.protocol import StatusSummary
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +280,14 @@ def compile_task(
         submit_enabled=config.submit_enabled,
         eval_num_samples=None,
         bake_inner_task=bool(config.inner_task),
+        # The free-baseline bullet may only render when the sidecar shipping in
+        # this same tree actually grants the free eval; the feature lives on a
+        # different PR chain than the compiler, and an instruction that promises
+        # it without it would send the agent to burn a metered eval on a commit
+        # auto_best cannot select. Introspecting the protocol keeps the
+        # instruction truthful under any merge order.
+        free_baseline="free_baseline_available"
+        in {f.name for f in dataclasses.fields(StatusSummary)},
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)

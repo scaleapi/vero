@@ -19,13 +19,24 @@ progress on the splits you *are* allowed to evaluate, within a fixed budget.
 {% if submit_enabled %}5. When done, nominate your best commit: `vero harbor submit`.{% else %}
 The best commit you evaluate on `{{ selection_split }}` is selected automatically and
 scored on the hidden test split at the end. Only commits *other than the seeded
-baseline* are selectable: evaluating the unmodified baseline spends budget without
-creating a candidate, so make sure at least one eval is of a commit that contains
-your changes.{% endif %}
+baseline* are selectable: baseline evals create no candidate, so make sure at least
+one eval is of a commit that contains your changes.{% endif %}
 
 ## Rules
 
 - Budget is finite and metered per split — spend it wisely.
+{% if free_baseline %}
+- Your first eval of the seeded baseline (the commit you started from) is
+  budget-free: once per task, not once per split, and it stays free after you have
+  made commits (`vero harbor eval --commit <baseline-sha> ...`). Take it on
+  `{{ selection_split }}` before your first candidate eval: it is the
+  reference score you must beat, and without it you cannot tell an improvement
+  from a regression. Repeat baseline evals are metered. `vero harbor status`
+  shows the baseline sha and whether the free eval is still available.
+{% endif %}
+- Scores are noisy. Unspent budget is wasted: if you finish with evals left, spend
+  them re-measuring your best candidate to confirm its score, or trying one more
+  variant, rather than stopping early.
 - The test split is hidden: you cannot evaluate it, and its labels never reach this
   container. Trying to read it will fail.
 - The scorer is locked. Only the eval sidecar scores.
