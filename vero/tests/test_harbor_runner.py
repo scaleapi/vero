@@ -212,3 +212,58 @@ class TestReviewFixes:
         results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
         assert results[0].error is None
         assert results[0].score == 1.0
+
+
+class TestCollateMismatchGuard:
+    """_collate must not silently score 0.0 when the nested run's trials exist
+    but match none of the requested task names (keying mismatch), or when the
+    run produced no trials at all. Found live: a partition with bare TB2 names
+    (vs harbor's canonical 'terminal-bench/<name>') zeroed a whole trial,
+    anchors included, indistinguishable from total agent failure.
+    """
+
+    def test_zero_name_matches_raises(self, tmp_path):
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        run = jobs / "2026-01-01__00-00-00"
+        t = run / "trial0"
+        t.mkdir(parents=True)
+        (t / "result.json").write_text(json.dumps({
+            "task_name": "terminal-bench/foo", "trial_name": "trial0",
+            "verifier_result": {"rewards": {"reward": 1.0}},
+        }))
+        with pytest.raises(RuntimeError, match="none match the requested"):
+            runner._collate(jobs, [(0, "foo")], _params(), ran=["foo"])
+
+    def test_no_trials_at_all_raises(self, tmp_path):
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        jobs.mkdir()
+        with pytest.raises(RuntimeError, match="no trial results"):
+            runner._collate(jobs, [(0, "foo")], _params(), ran=["foo"])
+
+    def test_partial_match_still_collates(self, tmp_path, monkeypatch):
+        # One of two tasks matched: not a keying mismatch; the missing task is
+        # recorded as an error sample (existing behavior).
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        run = jobs / "2026-01-01__00-00-00"
+        t = run / "trial0"
+        t.mkdir(parents=True)
+        (t / "result.json").write_text(json.dumps({
+            "task_name": "t0", "trial_name": "trial0",
+            "verifier_result": {"rewards": {"reward": 1.0}},
+        }))
+        saved = []
+        monkeypatch.setattr(
+            "vero.harbor.runner.save_sample_result",
+            lambda *a, **k: saved.append(k.get("sample_id")),
+        )
+        runner._collate(jobs, [(0, "t0"), (1, "missing")], _params(), ran=["t0", "missing"])
+        assert saved == [0, 1]
+
+    def test_resume_with_nothing_ran_skips_guard(self, tmp_path, monkeypatch):
+        # All samples already done (resume): no `ran` tasks, empty jobs dir is fine.
+        runner = _runner()
+        monkeypatch.setattr(HarborRunner, "_is_done", lambda self, p, s: True)
+        runner._collate(tmp_path / "jobs", [(0, "t0")], _params(), ran=[])
