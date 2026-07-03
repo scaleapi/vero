@@ -17,4 +17,13 @@ COPY agent-seed /opt/agent-seed
 COPY main/seed.sh /opt/seed.sh
 RUN chmod +x /opt/seed.sh && useradd -m -u 1001 agent
 
+# Pre-bake the claude-code CLI for the de-privileged agent user. Harbor's
+# per-trial agent setup re-runs the same bootstrap as that user; with this
+# layer it completes in ~250s instead of ~625s (measured 2026-07-03), inside
+# harbor's default 360s agent-setup budget, on networks where the full
+# download would blow it. A stale image (newer claude-code release) simply
+# re-downloads, degrading gracefully to the un-baked behavior; an offline
+# compile skips the layer without failing the build.
+RUN su - agent -c "curl -fsSL https://downloads.claude.ai/claude-code-releases/bootstrap.sh | bash -s --" || true
+
 WORKDIR /work/agent

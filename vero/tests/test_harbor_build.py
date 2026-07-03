@@ -176,3 +176,15 @@ def test_instruction_warns_baseline_not_selectable(built):
     text = (built / "instruction.md").read_text()
     assert "other than the seeded" in text
     assert "spends budget without" in text
+
+
+def test_main_dockerfile_prebakes_claude_code(built):
+    # The main image pre-installs claude-code for the agent user so harbor's
+    # per-trial re-run of the bootstrap is fast (~250s vs ~625s measured) and
+    # fits the default agent-setup budget. `|| true` keeps offline compiles
+    # working.
+    text = (built / "environment" / "Dockerfile").read_text()
+    assert "bootstrap.sh" in text
+    assert 'su - agent -c' in text
+    assert "|| true" in text
+
