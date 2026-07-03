@@ -176,3 +176,23 @@ def test_instruction_warns_baseline_not_selectable(built):
     text = (built / "instruction.md").read_text()
     assert "other than the seeded" in text
     assert "spends budget without" in text
+
+
+def test_submit_mode_instruction_has_no_baseline_warning(tmp_path, monkeypatch):
+    # The warning belongs to the auto_best branch only; pin the conditional
+    # boundary so a template refactor cannot leak it into submit-mode tasks.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfig(
+        name="vero/gsm8k-opt",
+        agent_repo=str(_agent_repo(tmp_path)),
+        mode="A",
+        task="gsm8k",
+        dataset=str(_dataset(tmp_path)),
+        splits=[{"split": "validation", "access": "non_viewable"}],
+        reward_mode="submit",
+        submit_enabled=True,
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    text = (out / "instruction.md").read_text()
+    assert "other than the seeded" not in text
+    assert "spends budget without" not in text
