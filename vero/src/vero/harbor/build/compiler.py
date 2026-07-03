@@ -178,6 +178,7 @@ def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str)
         "targets": targets,
         "base_commit": base_commit,
         "submit_enabled": config.submit_enabled,
+        "score_baseline": config.score_baseline,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,
