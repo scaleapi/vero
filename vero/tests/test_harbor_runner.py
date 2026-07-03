@@ -267,3 +267,57 @@ class TestCollateMismatchGuard:
         runner = _runner()
         monkeypatch.setattr(HarborRunner, "_is_done", lambda self, p, s: True)
         runner._collate(tmp_path / "jobs", [(0, "t0")], _params(), ran=[])
+
+
+class TestMeanAttemptAggregation:
+    """aggregate_attempts='mean': average the reward across clean scored
+    attempts (de-noising; estimates pass probability). Default 'best' keeps
+    the existing latest-clean behavior, which inflates toward pass@k.
+    """
+
+    def _write(self, run, trial, task, rewards=None, exc=False):
+        d = run / trial
+        d.mkdir(parents=True)
+        (d / "result.json").write_text(json.dumps({
+            "task_name": task, "trial_name": trial,
+            "finished_at": f"2026-01-01T00:0{len(trial) % 10}:00",
+            "verifier_result": {"rewards": rewards} if rewards else None,
+            "exception_info": {"exception_type": "X", "exception_message": "",
+                               "exception_traceback": ""} if exc else None,
+        }))
+
+    def test_mean_averages_clean_attempts(self, tmp_path):
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0b", "t0", rewards={"reward": 0.0})
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 0.5
+        assert r.metrics["n_scored"] == 2.0
+
+    def test_mean_excludes_exception_attempts(self, tmp_path):
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0bad", "t0", exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 1.0
+        assert r.metrics["n_scored"] == 1.0
+
+    def test_default_best_unchanged(self, tmp_path):
+        # No attempts passed (default 'best' config): single-trial path intact.
+        runner = _runner()
+        r = runner._sample_result(
+            {"task_name": "t0", "trial_name": "x",
+             "verifier_result": {"rewards": {"reward": 1.0}}},
+            0, "t0", _params(),
+        )
+        assert r.score == 1.0

@@ -162,11 +162,20 @@ class HarborRunner:
                     f"canonical '<org>/<name>' form; refusing to score all "
                     f"samples 0."
                 )
+        groups = (
+            self._trial_groups(jobs_dir)
+            if self.config.aggregate_attempts == "mean"
+            else {}
+        )
         for sample_id, task_name in pairs:
             if self._is_done(params, sample_id):
                 continue  # already collated successfully (resume); errors are redone
             sample_result = self._sample_result(
-                trials.get(task_name), sample_id, task_name, params
+                trials.get(task_name),
+                sample_id,
+                task_name,
+                params,
+                attempts=groups.get(task_name),
             )
             save_sample_result(
                 get_vero_home_dir() / "sessions",
@@ -201,6 +210,22 @@ class HarborRunner:
                 trials[task_name] = data
         return trials
 
+    def _trial_groups(self, jobs_dir: Path) -> dict[str, list[dict]]:
+        """ALL trial results per task (for mean aggregation across attempts)."""
+        groups: dict[str, list[dict]] = {}
+        if not jobs_dir.exists():
+            return groups
+        for result_json in jobs_dir.rglob("result.json"):
+            try:
+                data = json.loads(result_json.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            task_name = data.get("task_name")
+            if not task_name:
+                continue
+            groups.setdefault(task_name, []).append(data)
+        return groups
+
     @staticmethod
     def _trial_rank(data: dict, result_json: Path) -> tuple:
         """Sort key for picking the best of several trials of one task. Higher wins:
@@ -221,6 +246,7 @@ class HarborRunner:
         sample_id: int,
         task_name: str,
         params: EvaluationParameters,
+        attempts: list[dict] | None = None,
     ) -> SampleResult:
         common = {
             "dataset_sample": DatasetSample(
@@ -235,6 +261,31 @@ class HarborRunner:
             return SampleResult(
                 error=f"No Harbor trial result for task '{task_name}'.", **common
             )
+        # Mean aggregation across attempts: average the reward over every clean
+        # scored attempt (a verified 0.0 is a valid measurement; an exception is
+        # not). Falls through to the single best trial when nothing scored clean.
+        if attempts:
+            scored = [
+                self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
+                for t in attempts
+                if (t.get("verifier_result") or {}).get("rewards")
+                and not t.get("exception_info")
+            ]
+            if scored:
+                return SampleResult(
+                    score=sum(scored) / len(scored),
+                    metrics={
+                        "reward_mean": sum(scored) / len(scored),
+                        "n_attempts": float(len(attempts)),
+                        "n_scored": float(len(scored)),
+                    },
+                    output={
+                        "task_name": task_name,
+                        "attempt_scores": scored,
+                        "aggregate": "mean",
+                    },
+                    **common,
+                )
         rewards = (trial.get("verifier_result") or {}).get("rewards") or {}
         if not rewards:
             return SampleResult(
