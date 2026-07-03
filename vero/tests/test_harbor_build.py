@@ -228,6 +228,7 @@ def test_main_dockerfile_prebakes_claude_code(built):
     # fits the default agent-setup budget. `|| true` keeps offline compiles
     # working.
     text = (built / "environment" / "Dockerfile").read_text()
+    assert "downloads.claude.ai" in text  # pin the official host, not just the filename
     assert "bootstrap.sh" in text
     assert 'su - agent -c' in text
     assert "|| true" in text
