@@ -128,6 +128,24 @@ def test_score_baseline_true_emitted():
     assert raw["score_baseline"] is True
 
 
+def test_score_baseline_true_through_compile_task(tmp_path, monkeypatch):
+    # Full pipeline: a True value must survive compile_task into the written
+    # serve.json, not just the _serve_config helper.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfig(
+        name="vero/gsm8k-opt",
+        agent_repo=str(_agent_repo(tmp_path)),
+        mode="A",
+        task="gsm8k",
+        dataset=str(_dataset(tmp_path)),
+        splits=[{"split": "validation", "access": "non_viewable"}],
+        score_baseline=True,
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    raw = json.loads((out / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["score_baseline"] is True
+
+
 def test_rendered_files_parse(built):
     tomllib.loads((built / "task.toml").read_text())  # valid TOML
     compose = yaml.safe_load((built / "environment/docker-compose.yaml").read_text())
