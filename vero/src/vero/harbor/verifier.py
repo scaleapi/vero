@@ -118,7 +118,15 @@ class Verifier:
         harness consumes) and logged next to the candidate's rewards. Failures
         here never fail the trial.
         """
-        if not (self.score_baseline and self.base_commit):
+        if not self.score_baseline:
+            return
+        if not self.base_commit:
+            # Misconfiguration must not be a silent no-op: the operator asked
+            # for baseline scoring and would otherwise never learn it is off.
+            logger.warning(
+                "score_baseline=True but base_commit is not set; skipping "
+                "baseline scoring."
+            )
             return
         try:
             baselines: dict[str, float] = {}
