@@ -104,6 +104,30 @@ def test_serve_config_validates(built):
     assert cfg.budgets[0]["dataset_id"] == cfg.dataset_id
 
 
+def test_score_baseline_reaches_serve_json(built):
+    # Raw JSON on purpose: the key must be present in the compiler <-> serve
+    # contract even where the local ServeConfig predates the field.
+    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["score_baseline"] is False  # default off
+
+
+def test_score_baseline_true_emitted():
+    # Through the actual YAML path (not just the BuildConfig constructor), so
+    # the headline claim "reachable from build.yaml" is what is tested.
+    from vero.harbor.build.compiler import _serve_config
+
+    config = BuildConfig.model_validate(yaml.safe_load(
+        "name: o/n\n"
+        "agent_repo: .\n"
+        "splits:\n"
+        "  - {split: validation, access: non_viewable}\n"
+        "score_baseline: true\n"
+    ))
+    assert config.score_baseline is True
+    raw = _serve_config(config, "ds", "sha")
+    assert raw["score_baseline"] is True
+
+
 def test_rendered_files_parse(built):
     tomllib.loads((built / "task.toml").read_text())  # valid TOML
     compose = yaml.safe_load((built / "environment/docker-compose.yaml").read_text())
