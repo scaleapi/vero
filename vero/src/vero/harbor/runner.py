@@ -23,7 +23,7 @@ from vero.core.sessions import (
     save_sample_result,
 )
 from vero.harbor.config import HarborConfig
-from vero.utils import run_subprocess_with_tee
+from vero.utils import SubprocessTimeoutError, run_subprocess_with_tee
 
 if TYPE_CHECKING:
     from vero.core.evaluation import EvaluationParameters
@@ -118,9 +118,21 @@ class HarborRunner:
     ) -> None:
         cmd = self._build_command(project_path, params, task_names, jobs_dir)
         logger.info(f"Mode B: {' '.join(cmd)}")
-        result = await run_subprocess_with_tee(
-            cmd, timeout=params.timeout, cwd=project_path
-        )
+        try:
+            result = await run_subprocess_with_tee(
+                cmd, timeout=params.timeout, cwd=project_path
+            )
+        except SubprocessTimeoutError as e:
+            # A timed-out nested run is not fatal either: the eval's budget is
+            # already spent and completed trials are on disk, so salvage them.
+            # Propagating instead would return the agent a bare 500 with zero
+            # information for a fully-debited eval.
+            logger.warning(
+                f"`harbor run` timed out after {params.timeout}s; collating "
+                f"the trials that completed before the cutoff. stderr tail: "
+                f"{(e.result.stderr or '')[-500:]}"
+            )
+            return
         # Non-zero is not fatal: partial trials may still exist; collation fills gaps.
         if result.returncode != 0:
             logger.warning(
@@ -282,6 +294,15 @@ class HarborRunner:
                 n_clean = sum(
                     1 for t in scored_trials if not t.get("exception_info")
                 )
+                if len(scored) < self.config.n_attempts:
+                    # Fewer measurements than configured (attempts died before
+                    # scoring, or the nested run was cut off): the mean is
+                    # noisier than the config promises. Never let k shrink
+                    # silently; n_scored in the metrics records the actual k.
+                    logger.warning(
+                        f"Task '{task_name}': mean over {len(scored)} scored "
+                        f"attempt(s) of {self.config.n_attempts} configured."
+                    )
                 return SampleResult(
                     score=sum(scored) / len(scored),
                     metrics={

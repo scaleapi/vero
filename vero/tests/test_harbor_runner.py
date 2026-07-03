@@ -18,6 +18,8 @@ from vero.core.sessions import (
 )
 from vero.harbor.config import HarborConfig
 from vero.harbor.runner import HarborRunner
+from vero.utils import SubprocessTimeoutError
+from vero.utils.asyncio import SubprocessResult
 
 
 def _runner(reward_key=None, task_source="org/ds@1"):
@@ -383,3 +385,72 @@ class TestAggregateAttemptsValidation:
                 aggregate_attempts=value,
             )
             assert cfg.aggregate_attempts == value
+
+
+class TestTimeoutSalvage:
+    """A nested `harbor run` cut off by the vero-side timeout must salvage the
+    trials that completed instead of erroring the whole (already-debited)
+    eval with nothing."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_collates_partials(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _runner()
+        params = _params()
+        result_dir = tmp_path / "result"
+        # t0 finished before the cutoff; t1 did not.
+        _write_trial(result_dir / "jobs", "trial0", "t0", {"pass": 1.0})
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+
+        async def _timeout(*args, **kwargs):
+            raise SubprocessTimeoutError(SubprocessResult(
+                args=["harbor", "run"], returncode=None, stdout="", stderr="",
+                timed_out=True,
+            ))
+
+        monkeypatch.setattr("vero.harbor.runner.run_subprocess_with_tee", _timeout)
+
+        ws = MagicMock(project_path="/wt")
+        await runner.produce_sample_results(workspace=ws, params=params, result_dir=result_dir)
+
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 1.0
+        assert results[1].error is not None  # cut-off task -> error sample
+
+    @pytest.mark.asyncio
+    async def test_timeout_with_zero_trials_still_raises(self, tmp_path, monkeypatch):
+        # Nothing completed before the cutoff: the collate guard must still
+        # fail loudly rather than record an all-zero/all-error experiment.
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _runner()
+        params = _params()
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+
+        async def _timeout(*args, **kwargs):
+            raise SubprocessTimeoutError(SubprocessResult(
+                args=["harbor", "run"], returncode=None, stdout="", stderr="",
+                timed_out=True,
+            ))
+
+        monkeypatch.setattr("vero.harbor.runner.run_subprocess_with_tee", _timeout)
+        ws = MagicMock(project_path="/wt")
+        with pytest.raises(RuntimeError, match="no trial results"):
+            await runner.produce_sample_results(
+                workspace=ws, params=params, result_dir=tmp_path / "result"
+            )
+
+    def test_partial_k_mean_warns(self, tmp_path, caplog):
+        # 2 of 3 configured attempts scored: the mean must not shrink k silently.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        w = TestMeanAttemptAggregation()
+        w._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        w._write(run, "t0b", "t0", rewards={"reward": 0.0})
+        groups = runner._trial_groups(jobs)
+        with caplog.at_level("WARNING", logger="vero.harbor.runner"):
+            r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.metrics["n_scored"] == 2.0
+        assert any("2 scored attempt(s) of 3 configured" in m for m in caplog.messages)
