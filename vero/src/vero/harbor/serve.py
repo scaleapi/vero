@@ -67,6 +67,10 @@ class ServeConfig(BaseModel):
     targets: list[_TargetCfg] = Field(default_factory=list)
     base_commit: str | None = None
     submit_enabled: bool = False
+    # Also admin-score the unmodified baseline on every target at finalize and
+    # write it to <admin_volume>/baseline.json: makes regressions visible
+    # (an optimized candidate can score WORSE than the untouched baseline).
+    score_baseline: bool = False
 
     # volumes / token
     agent_volume: str
@@ -208,6 +212,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         base_commit=config.base_commit,
         selection_task=config.task,
         selection_dataset_id=config.dataset_id,
+        score_baseline=config.score_baseline,
     )
 
     token = generate_token()

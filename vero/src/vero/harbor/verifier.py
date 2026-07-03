@@ -52,6 +52,7 @@ class Verifier:
         selection_task: str | None = None,
         selection_dataset_id: str | None = None,
         rescore_top_k: int = 3,
+        score_baseline: bool = False,
     ):
         self.engine = engine
         self.admin_volume = Path(admin_volume)
@@ -65,6 +66,7 @@ class Verifier:
         self.selection_task = selection_task
         self.selection_dataset_id = selection_dataset_id
         self.rescore_top_k = rescore_top_k
+        self.score_baseline = score_baseline
 
     async def finalize(self) -> dict[str, float]:
         """Select the commit and score it on every target -> {reward_key: score}.
@@ -102,7 +104,48 @@ class Verifier:
             rewards[target.reward_key] = (
                 float(score) if score is not None else default_minimum_score
             )
+        await self._maybe_score_baseline(rewards)
         return rewards
+
+    async def _maybe_score_baseline(self, rewards: dict[str, float]) -> None:
+        """Admin-score the unmodified baseline on every target and persist it.
+
+        An optimized candidate can score WORSE than the untouched baseline
+        (observed live: a weak inner model went 0.3 -> 0.2 after optimization);
+        without this, the regression is invisible because auto_best excludes the
+        baseline from selection and nothing else ever scores it. Written to
+        <admin_volume>/baseline.json (NOT into reward.json, whose keys the outer
+        harness consumes) and logged next to the candidate's rewards. Failures
+        here never fail the trial.
+        """
+        if not (self.score_baseline and self.base_commit):
+            return
+        try:
+            baselines: dict[str, float] = {}
+            for target in self.targets:
+                exp = await self.engine.evaluate_admin(
+                    task=target.task,
+                    dataset_id=target.dataset_id,
+                    split=target.split,
+                    commit=self.base_commit,
+                    sample_ids=target.sample_ids,
+                )
+                score = exp.result.score()
+                baselines[target.reward_key] = (
+                    float(score) if score is not None else default_minimum_score
+                )
+            self.admin_volume.mkdir(parents=True, exist_ok=True)
+            (self.admin_volume / "baseline.json").write_text(
+                json.dumps(baselines, indent=2)
+            )
+            for key, value in rewards.items():
+                base = baselines.get(key)
+                tag = " (REGRESSION vs baseline)" if base is not None and value < base else ""
+                logger.info(
+                    "finalize: %s=%s baseline=%s%s", key, value, base, tag
+                )
+        except Exception:
+            logger.exception("baseline scoring failed; reward.json is unaffected")
 
     async def _select_commit(self) -> str:
         if self.reward_mode == "submit":
