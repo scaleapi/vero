@@ -239,3 +239,65 @@ class TestNoCandidateFallback:
         rewards = await v.finalize()
         assert rewards == {"accuracy": 0.5}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
+
+
+class TestBaselineAtFinalize:
+    """score_baseline=True: finalize also admin-scores the untouched baseline
+    and persists it to admin_volume/baseline.json, so regressions are visible
+    (observed live: optimization took a weak model from 0.3 to 0.2 and nothing
+    surfaced it). reward.json keys are unaffected.
+    """
+
+    @pytest.mark.asyncio
+    async def test_baseline_scored_and_persisted(self, tmp_path):
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = _engine([0.2, 0.3])  # candidate target eval, then baseline eval
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit="base",
+            score_baseline=True,
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.2}  # reward.json content unchanged
+        data = json.loads((tmp_path / "baseline.json").read_text())
+        assert data == {"accuracy": 0.3}
+        # second admin eval was the baseline commit
+        assert engine.evaluate_admin.await_args_list[-1].kwargs["commit"] == "base"
+
+    @pytest.mark.asyncio
+    async def test_default_off_no_extra_evals(self, tmp_path):
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = _engine([0.9])
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit="base",
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.9}
+        assert engine.evaluate_admin.await_count == 1
+        assert not (tmp_path / "baseline.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_baseline_failure_never_fails_trial(self, tmp_path):
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(
+            side_effect=[MagicMock(result=MagicMock(score=MagicMock(return_value=0.7))),
+                         RuntimeError("modal down")]
+        )
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit="base",
+            score_baseline=True,
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        rewards = await v.finalize()
+        assert rewards == {"accuracy": 0.7}  # trial reward survives baseline failure
