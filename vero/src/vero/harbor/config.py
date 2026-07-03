@@ -32,6 +32,15 @@ class HarborConfig:
     aggregate_attempts: str = "best"
     extra_args: list[str] = field(default_factory=list)  # passthrough harbor run flags
 
+    def __post_init__(self) -> None:
+        # Only the exact string "mean" activates de-noising; without this check a
+        # typo ("Mean", "avg") would silently run best-of-k with inflated scores.
+        if self.aggregate_attempts not in ("best", "mean"):
+            raise ValueError(
+                f"aggregate_attempts must be 'best' or 'mean', got "
+                f"{self.aggregate_attempts!r}"
+            )
+
     @property
     def is_registry(self) -> bool:
         """Local if the source resolves to an existing path; otherwise a registry ref."""
