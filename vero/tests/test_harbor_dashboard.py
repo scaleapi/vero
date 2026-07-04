@@ -46,12 +46,12 @@ class TestPhase:
 
 
 class TestVerdict:
-    def test_win_when_above_bar(self):
-        assert verdict({"accuracy": 0.6}, {"win_bar": 0.41}) == "WIN"
+    def test_passed_when_above_bar(self):
+        assert verdict({"accuracy": 0.6}, {"win_bar": 0.41}) == "PASSED"
 
-    def test_miss_when_at_or_below_bar(self):
-        assert verdict({"accuracy": 0.40}, {"win_bar": 0.41}) == "MISS"
-        assert verdict({"accuracy": 0.41}, {"win_bar": 0.41}) == "MISS"  # bar is strict
+    def test_failed_when_at_or_below_bar(self):
+        assert verdict({"accuracy": 0.40}, {"win_bar": 0.41}) == "FAILED"
+        assert verdict({"accuracy": 0.41}, {"win_bar": 0.41}) == "FAILED"  # bar is strict
 
     def test_no_bars_no_verdict(self):
         assert verdict({"accuracy": 0.6}, None) is None
@@ -113,7 +113,7 @@ class TestMergeStatus:
         e11 = next(e for e in out["experiments"] if e["key"] == "gaia-exp11-task")
         assert e11["phase"] == "done"
         assert e11["final"] == {"accuracy": 0.5}
-        assert e11["verdict"] == "WIN"  # 0.5 > 0.454
+        assert e11["verdict"] == "PASSED"  # 0.5 > 0.454
 
 
 class TestScanFinals:

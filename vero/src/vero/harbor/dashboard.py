@@ -69,13 +69,13 @@ def derive_phase(*, has_container: bool, n_rounds: int, final: dict | None) -> s
 
 
 def verdict(final: dict | None, bars: dict | None) -> str | None:
-    """WIN / MISS against the pre-registered win bar, when both are known."""
+    """PASSED / FAILED against the pre-registered win bar, when both are known."""
     if not final or not bars or "win_bar" not in bars:
         return None
     scores = [v for v in final.values() if isinstance(v, (int, float))]
     if not scores:
         return None
-    return "WIN" if scores[0] > bars["win_bar"] else "MISS"
+    return "PASSED" if scores[0] > bars["win_bar"] else "FAILED"
 
 
 def normalize_rounds(payload: dict | None) -> list[dict]:
@@ -252,8 +252,11 @@ PAGE = """<!doctype html>
   th { text-align:left; color:#8a94a1; font-weight:500; padding:2px 6px; }
   td { padding:2px 6px; border-top:1px solid #232932; font-variant-numeric:tabular-nums; }
   .final { margin-top:10px; padding:8px 10px; border-radius:8px; font-weight:600; }
-  .WIN { background:#0d3a2e; color:#4ade80; } .MISS { background:#3d2a12; color:#fbbf24; }
+  .PASSED { background:#0d3a2e; color:#4ade80; } .FAILED { background:#3d1a1a; color:#f87171; }
   .noverdict { background:#12304d; color:#60a5fa; }
+  .vchip { font-size:11px; padding:2px 8px; border-radius:999px; font-weight:600; white-space:nowrap; }
+  .v-passed { background:#0d3a2e; color:#4ade80; } .v-failed { background:#3d1a1a; color:#f87171; }
+  .v-nochange { background:#232932; color:#aeb7c2; } .v-cancelled { background:#2a2440; color:#a78bfa; }
   .hist { margin-top:28px; } .hist table { font-size:12px; }
   .note { color:#8a94a1; font-size:12px; margin-top:6px; }
   .ts { color:#5c6672; font-size:11px; margin-top:16px; }
@@ -289,14 +292,17 @@ async function refresh() {
       ${e.note ? `<div class="note">${e.note}</div>` : ""}
     </div>`;
   }).join("");
+  const vclass = r => ({passed:"v-passed", failed:"v-failed", "no change":"v-nochange",
+                        cancelled:"v-cancelled"}[String(r||"").toLowerCase()] ?? "v-nochange");
   const h = d.history || [];
   document.getElementById("hist").innerHTML = h.length ? `<h1>scorecard: finished experiments</h1>
     <div class="sub">baseline = the unmodified agent's score before optimization &middot;
     bar = the pre-registered score the optimized agent had to beat &middot;
     final = what the optimized agent actually scored on the hidden test set</div><table>
-    <tr><th>exp</th><th>question</th><th>baseline</th><th>bar</th><th>final</th><th>outcome</th><th>what happened</th></tr>` +
+    <tr><th>exp</th><th>question</th><th>baseline</th><th>bar</th><th>final</th><th>verdict</th><th>what happened</th></tr>` +
     h.map(x => `<tr><td>${x.exp}</td><td>${x.question}</td><td>${x.baseline ?? "-"}</td>
-      <td>${x.bar ?? "-"}</td><td>${x.final ?? "-"}</td><td>${x.verdict ?? "-"}</td>
+      <td>${x.bar ?? "-"}</td><td>${x.final ?? "-"}</td>
+      <td><span class="vchip ${vclass(x.result)}">${(x.result ?? "-").toUpperCase()}</span></td>
       <td>${x.summary ?? "-"}</td></tr>`).join("") + "</table>" : "";
   document.getElementById("ts").textContent = "updated " + new Date().toLocaleTimeString();
 }
