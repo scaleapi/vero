@@ -172,3 +172,31 @@ class TestFreeBaselineEval:
         sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
         assert sidecar.status().free_baseline_available is False
+
+    @pytest.mark.asyncio
+    async def test_admin_baseline_eval_does_not_consume_free_slot(self, tmp_path):
+        # An admin re-score of the base commit (finalize, score_baseline) must leave
+        # the agent's free slot intact: the guard is `not admin`, but pin it so a
+        # refactor that moves the flag outside the `if free_baseline` block regresses.
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        await sidecar.evaluate(
+            EvalRequest(dataset_id="ds1", split="validation"), admin=True
+        )
+        assert sidecar._free_baseline_used is False
+        assert sidecar.status().free_baseline_available is True
+
+    @pytest.mark.asyncio
+    async def test_failed_baseline_eval_leaves_free_slot_available(self, tmp_path):
+        # A transient engine failure must NOT burn the one free baseline: the agent
+        # should be able to retry for free. The flag is consumed only after success.
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        sidecar.engine.evaluate = AsyncMock(side_effect=RuntimeError("transient infra"))
+        with pytest.raises(RuntimeError):
+            await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar._free_baseline_used is False
+        assert sidecar.status().free_baseline_available is True
+        # The retry is still granted for free (admin=True bypasses the ledger).
+        sidecar.engine.evaluate = AsyncMock(return_value=_experiment("validation"))
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is True
+        assert sidecar._free_baseline_used is True

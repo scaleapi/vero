@@ -86,11 +86,16 @@ class EvaluationSidecar:
             and sha == self.base_commit
             and not self._free_baseline_used
         )
-        if free_baseline:
-            self._free_baseline_used = True
         exp = await self.engine.evaluate(
             replace(req, commit=sha), admin=admin or free_baseline
         )
+        # Consume the free slot only after the eval actually succeeds. Setting it
+        # before the await would burn the one free baseline on a transient engine
+        # failure (timeout, infra), forcing the agent to pay for the retry, which is
+        # the exact failure mode this feature prevents. Safe in the single-threaded
+        # asyncio loop: no await runs between the check above and this write.
+        if free_baseline:
+            self._free_baseline_used = True
         # Route with the agent's real tier even when the eval was unmetered.
         result_path = self._route_results(exp, admin=admin)
         budget_remaining = None
