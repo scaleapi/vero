@@ -28,7 +28,7 @@ class TestSubmitSelection:
             reward_mode="submit",
             targets=[VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"reward": 0.8}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "deadbeef"
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
@@ -48,7 +48,7 @@ class TestSubmitSelection:
                 VerificationTarget(task="t2", dataset_id="ds2", split="test", reward_key="held_out"),
             ],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"reward": 0.0, "held_out": 0.0}
         engine.evaluate_admin.assert_not_awaited()
 
@@ -67,7 +67,7 @@ class TestMultiTarget:
                 VerificationTarget(task="t2", dataset_id="ds2", split="test", reward_key="held_out"),
             ],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"in_domain": 0.9, "held_out": 0.4}
         assert engine.evaluate_admin.await_count == 2
 
@@ -103,7 +103,7 @@ class TestAutoBestSelection:
             selection_task="math",
             targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         # the final (target) eval is on the WINNER 'lo', chosen by admin re-score
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "lo"
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
@@ -173,7 +173,7 @@ class TestNoCandidateFallback:
             base_commit="base",
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.0}
         # no candidate -> nothing re-scored, no target eval spent
         engine.evaluate_admin.assert_not_awaited()
@@ -190,7 +190,7 @@ class TestNoCandidateFallback:
             selection_split="train",
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.0}
         engine.evaluate_admin.assert_not_awaited()
 
@@ -236,7 +236,7 @@ class TestNoCandidateFallback:
             base_commit="base",
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.5}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
 
@@ -260,8 +260,11 @@ class TestBaselineAtFinalize:
             score_baseline=True,
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
-        assert rewards == {"accuracy": 0.2}  # reward.json content unchanged
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.2}  # reward.json content unchanged
+        # the baseline outcome is surfaced in the finalize response (durable channel:
+        # echoed to the trial stdout, which survives teardown; the admin volume does not)
+        assert result["baseline"]["scores"] == {"accuracy": 0.3}
         data = json.loads((tmp_path / "baseline.json").read_text())
         assert data == {"accuracy": 0.3}
         # second admin eval was the baseline commit
@@ -278,18 +281,23 @@ class TestBaselineAtFinalize:
             base_commit="base",
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.9}
         assert engine.evaluate_admin.await_count == 1
         assert not (tmp_path / "baseline.json").exists()
 
     @pytest.mark.asyncio
-    async def test_baseline_failure_never_fails_trial(self, tmp_path):
+    async def test_baseline_failure_retries_then_reports_error_without_failing_trial(self, tmp_path):
+        # The baseline eval fails on every attempt (2 by default). The trial reward
+        # must survive, AND the failure must be surfaced in the finalize response
+        # (not silently swallowed): a live trial once lost its baseline check because
+        # the only record was a log line that died with the container at teardown.
         (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
         engine = MagicMock()
         engine.evaluate_admin = AsyncMock(
             side_effect=[MagicMock(result=MagicMock(score=MagicMock(return_value=0.7))),
-                         RuntimeError("modal down")]
+                         RuntimeError("modal down"),   # baseline attempt 1
+                         RuntimeError("modal down")]   # baseline attempt 2 (retry)
         )
         v = Verifier(
             engine=engine,
@@ -299,8 +307,37 @@ class TestBaselineAtFinalize:
             score_baseline=True,
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
-        assert rewards == {"accuracy": 0.7}  # trial reward survives baseline failure
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.7}  # trial reward survives baseline failure
+        assert result["baseline"]["error_type"] == "RuntimeError"
+        assert result["baseline"]["attempts"] == 2  # tried twice before reporting
+        # 1 target eval + 2 baseline attempts
+        assert engine.evaluate_admin.await_count == 3
+        assert not (tmp_path / "baseline.json").exists()  # nothing persisted on failure
+
+    @pytest.mark.asyncio
+    async def test_baseline_transient_failure_recovers_on_retry(self, tmp_path):
+        # A single transient blip on the baseline eval must not drop the check: the
+        # retry succeeds and the baseline score is reported normally.
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(
+            side_effect=[MagicMock(result=MagicMock(score=MagicMock(return_value=0.7))),  # target
+                         RuntimeError("transient"),                                        # baseline attempt 1
+                         MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))]   # baseline attempt 2 ok
+        )
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit="base",
+            score_baseline=True,
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.7}
+        assert result["baseline"]["scores"] == {"accuracy": 0.5}
+        assert result["baseline"]["attempts"] == 2
 
     @pytest.mark.asyncio
     async def test_missing_base_commit_warns(self, tmp_path, caplog):
@@ -316,7 +353,7 @@ class TestBaselineAtFinalize:
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
         with caplog.at_level("WARNING", logger="vero.harbor.verifier"):
-            rewards = await v.finalize()
+            rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.9}
         assert not (tmp_path / "baseline.json").exists()
         assert any("base_commit is not set" in m for m in caplog.messages)

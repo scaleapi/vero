@@ -139,7 +139,7 @@ async def test_serve_assembles_and_evaluates_and_finalizes(fixture):
     assert exp.result.sample_results[0].score == 1.0
 
     # verifier selects the (only) candidate on "test" and scores it on the test target
-    rewards = await verifier.finalize()
+    rewards = (await verifier.finalize())["rewards"]
     assert rewards["reward"] == 1.0
 
 
@@ -197,7 +197,7 @@ async def test_finalize_does_not_run_agent_supplied_scorer(fixture):
     )
     assert exp.result.sample_results[0].score == 0.0
     # Finalize must reflect the TRUSTED score, not the agent's 1.0 scorer.
-    rewards = await verifier.finalize()
+    rewards = (await verifier.finalize())["rewards"]
     assert rewards["reward"] == 0.0
 
 

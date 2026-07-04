@@ -53,6 +53,7 @@ class Verifier:
         selection_dataset_id: str | None = None,
         rescore_top_k: int = 3,
         score_baseline: bool = False,
+        baseline_score_attempts: int = 2,
     ):
         self.engine = engine
         self.admin_volume = Path(admin_volume)
@@ -67,9 +68,21 @@ class Verifier:
         self.selection_dataset_id = selection_dataset_id
         self.rescore_top_k = rescore_top_k
         self.score_baseline = score_baseline
+        # Baseline scoring is retried this many times total before its outcome is
+        # reported as an error; the nested eval can fail transiently (a nested
+        # harbor run crashing right after a large eval), and a single blip must
+        # not silently drop the regression check.
+        self._baseline_score_attempts = max(1, baseline_score_attempts)
 
-    async def finalize(self) -> dict[str, float]:
-        """Select the commit and score it on every target -> {reward_key: score}.
+    async def finalize(self) -> dict:
+        """Select the commit, score it on every target, and score the baseline.
+
+        Returns a wrapper ``{"rewards": {reward_key: score}, "baseline": {...}}``.
+        ``rewards`` is the reward.json payload the outer harness consumes (the CLI
+        writes only that to reward.json); ``baseline`` is the outcome of baseline
+        scoring, surfaced here because it is otherwise invisible: the admin volume
+        it used to be written to does not survive teardown, and the finalize
+        response echoed to the trial's stdout is the only host-durable channel.
 
         A run in which the optimizer produced no scorable candidate (never
         submitted in ``submit`` mode; no non-baseline experiments on the
@@ -89,7 +102,8 @@ class Verifier:
                 len(self.targets),
                 default_minimum_score,
             )
-            return {t.reward_key: float(default_minimum_score) for t in self.targets}
+            rewards = {t.reward_key: float(default_minimum_score) for t in self.targets}
+            return {"rewards": rewards, "baseline": {"skipped": "no candidate commit"}}
         logger.info(f"Verifier selected commit {sha} (mode={self.reward_mode})")
         rewards: dict[str, float] = {}
         for target in self.targets:
@@ -104,22 +118,29 @@ class Verifier:
             rewards[target.reward_key] = (
                 float(score) if score is not None else default_minimum_score
             )
-        await self._maybe_score_baseline(rewards)
-        return rewards
+        baseline = await self._maybe_score_baseline(rewards)
+        return {"rewards": rewards, "baseline": baseline}
 
-    async def _maybe_score_baseline(self, rewards: dict[str, float]) -> None:
-        """Admin-score the unmodified baseline on every target and persist it.
+    async def _maybe_score_baseline(self, rewards: dict[str, float]) -> dict:
+        """Admin-score the unmodified baseline on every target and report it.
 
         An optimized candidate can score WORSE than the untouched baseline
         (observed live: a weak inner model went 0.3 -> 0.2 after optimization);
         without this, the regression is invisible because auto_best excludes the
-        baseline from selection and nothing else ever scores it. Written to
-        <admin_volume>/baseline.json (NOT into reward.json, whose keys the outer
-        harness consumes) and logged next to the candidate's rewards. Failures
-        here never fail the trial.
+        baseline from selection and nothing else ever scores it.
+
+        Returns a structured outcome (``{"scores": ...}`` / ``{"error": ...}`` /
+        ``{"skipped": ...}``) that ``finalize`` surfaces in its response, so a
+        skip or failure is durably recorded rather than lost. A live trial once
+        skipped this silently: the nested baseline eval failed transiently and
+        the only record (a log line) died with the container at teardown. So the
+        eval is retried once, and any failure is returned instead of swallowed.
+        Baseline scoring still never fails the trial (reward.json is unaffected).
+        A best-effort copy is also written to <admin_volume>/baseline.json for
+        in-cluster debugging while the sidecar is alive.
         """
         if not self.score_baseline:
-            return
+            return {"skipped": "score_baseline is disabled"}
         if not self.base_commit:
             # Misconfiguration must not be a silent no-op: the operator asked
             # for baseline scoring and would otherwise never learn it is off.
@@ -127,33 +148,60 @@ class Verifier:
                 "score_baseline=True but base_commit is not set; skipping "
                 "baseline scoring."
             )
-            return
-        try:
-            baselines: dict[str, float] = {}
-            for target in self.targets:
-                exp = await self.engine.evaluate_admin(
-                    task=target.task,
-                    dataset_id=target.dataset_id,
-                    split=target.split,
-                    commit=self.base_commit,
-                    sample_ids=target.sample_ids,
+            return {"skipped": "base_commit is not set"}
+
+        last_error: Exception | None = None
+        for attempt in range(1, self._baseline_score_attempts + 1):
+            try:
+                baselines: dict[str, float] = {}
+                for target in self.targets:
+                    exp = await self.engine.evaluate_admin(
+                        task=target.task,
+                        dataset_id=target.dataset_id,
+                        split=target.split,
+                        commit=self.base_commit,
+                        sample_ids=target.sample_ids,
+                    )
+                    score = exp.result.score()
+                    baselines[target.reward_key] = (
+                        float(score) if score is not None else default_minimum_score
+                    )
+                # Best-effort local copy (admin volume does not survive teardown;
+                # the return value is the durable record).
+                try:
+                    self.admin_volume.mkdir(parents=True, exist_ok=True)
+                    (self.admin_volume / "baseline.json").write_text(
+                        json.dumps(baselines, indent=2)
+                    )
+                except OSError:
+                    logger.warning("could not write baseline.json to the admin volume")
+                for key, value in rewards.items():
+                    base = baselines.get(key)
+                    tag = (
+                        " (REGRESSION vs baseline)"
+                        if base is not None and value < base
+                        else ""
+                    )
+                    logger.info("finalize: %s=%s baseline=%s%s", key, value, base, tag)
+                return {"scores": baselines, "attempts": attempt}
+            except Exception as exc:  # noqa: BLE001 - never fail the trial on baseline scoring
+                last_error = exc
+                logger.warning(
+                    "baseline scoring attempt %d/%d failed: %s",
+                    attempt,
+                    self._baseline_score_attempts,
+                    exc,
                 )
-                score = exp.result.score()
-                baselines[target.reward_key] = (
-                    float(score) if score is not None else default_minimum_score
-                )
-            self.admin_volume.mkdir(parents=True, exist_ok=True)
-            (self.admin_volume / "baseline.json").write_text(
-                json.dumps(baselines, indent=2)
-            )
-            for key, value in rewards.items():
-                base = baselines.get(key)
-                tag = " (REGRESSION vs baseline)" if base is not None and value < base else ""
-                logger.info(
-                    "finalize: %s=%s baseline=%s%s", key, value, base, tag
-                )
-        except Exception:
-            logger.exception("baseline scoring failed; reward.json is unaffected")
+        logger.exception(
+            "baseline scoring failed after %d attempt(s); reward.json is unaffected",
+            self._baseline_score_attempts,
+            exc_info=last_error,
+        )
+        return {
+            "error": str(last_error),
+            "error_type": type(last_error).__name__ if last_error else None,
+            "attempts": self._baseline_score_attempts,
+        }
 
     async def _select_commit(self) -> str:
         if self.reward_mode == "submit":
