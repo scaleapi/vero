@@ -290,10 +290,14 @@ async function refresh() {
     </div>`;
   }).join("");
   const h = d.history || [];
-  document.getElementById("hist").innerHTML = h.length ? `<h1>scorecard</h1><table>
-    <tr><th>exp</th><th>question</th><th>baseline</th><th>bar</th><th>final</th><th>verdict</th></tr>` +
+  document.getElementById("hist").innerHTML = h.length ? `<h1>scorecard: finished experiments</h1>
+    <div class="sub">baseline = the unmodified agent's score before optimization &middot;
+    bar = the pre-registered score the optimized agent had to beat &middot;
+    final = what the optimized agent actually scored on the hidden test set</div><table>
+    <tr><th>exp</th><th>question</th><th>baseline</th><th>bar</th><th>final</th><th>outcome</th><th>what happened</th></tr>` +
     h.map(x => `<tr><td>${x.exp}</td><td>${x.question}</td><td>${x.baseline ?? "-"}</td>
-      <td>${x.bar ?? "-"}</td><td>${x.final ?? "-"}</td><td>${x.verdict ?? "-"}</td></tr>`).join("") + "</table>" : "";
+      <td>${x.bar ?? "-"}</td><td>${x.final ?? "-"}</td><td>${x.verdict ?? "-"}</td>
+      <td>${x.summary ?? "-"}</td></tr>`).join("") + "</table>" : "";
   document.getElementById("ts").textContent = "updated " + new Date().toLocaleTimeString();
 }
 refresh(); setInterval(refresh, 20000);
