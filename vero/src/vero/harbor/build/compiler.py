@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATES = Path(__file__).parent / "templates"
 
+# The StatusSummary field the sidecar sets to signal it grants the agent a free
+# baseline eval. The compiler renders the free-baseline instruction bullet only
+# when this field exists on the protocol shipping in the same tree (see the
+# free_baseline ctx entry). Kept as a named constant so the compiler<->protocol
+# coupling has one source: rename this and StatusSummary.<field> together.
+_FREE_BASELINE_FIELD = "free_baseline_available"
+
 # Container paths (must match the templates).
 VERO_DIR = "/opt/vero"
 AGENT_BASELINE = "/opt/agent-baseline"  # sidecar engine workspace
@@ -285,8 +292,11 @@ def compile_task(
         # different PR chain than the compiler, and an instruction that promises
         # it without it would send the agent to burn a metered eval on a commit
         # auto_best cannot select. Introspecting the protocol keeps the
-        # instruction truthful under any merge order.
-        free_baseline="free_baseline_available"
+        # instruction truthful under any merge order. _FREE_BASELINE_FIELD is the
+        # single source of the coupled field name: rename StatusSummary.<field> and
+        # this constant together (they cannot import-assert each other, since the
+        # field is absent on this branch's base until the sidecar PR merges).
+        free_baseline=_FREE_BASELINE_FIELD
         in {f.name for f in dataclasses.fields(StatusSummary)},
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
