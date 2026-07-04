@@ -74,6 +74,9 @@ class ServeConfig(BaseModel):
     # Total attempts for the finalize baseline eval (>=1): a transient nested-run
     # failure once silently dropped the regression check.
     baseline_score_attempts: int = 2
+    # auto_best never ships a candidate that fails to beat the untouched baseline
+    # on the selection split; it reverts to base_commit instead (needs base_commit).
+    auto_best_baseline_floor: bool = True
 
     # volumes / token
     agent_volume: str
@@ -237,6 +240,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         selection_dataset_id=config.dataset_id,
         score_baseline=config.score_baseline,
         baseline_score_attempts=config.baseline_score_attempts,
+        auto_best_baseline_floor=config.auto_best_baseline_floor,
     )
 
     token = generate_token()
