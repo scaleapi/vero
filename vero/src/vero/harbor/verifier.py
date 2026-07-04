@@ -54,6 +54,7 @@ class Verifier:
         rescore_top_k: int = 3,
         score_baseline: bool = False,
         baseline_score_attempts: int = 2,
+        auto_best_baseline_floor: bool = True,
     ):
         self.engine = engine
         self.admin_volume = Path(admin_volume)
@@ -68,6 +69,12 @@ class Verifier:
         self.selection_dataset_id = selection_dataset_id
         self.rescore_top_k = rescore_top_k
         self.score_baseline = score_baseline
+        # auto_best selection floor: never ship a candidate that fails to beat the
+        # untouched baseline on the selection split. Without it, auto_best (which
+        # excludes base_commit from the candidate pool) selects the least-bad
+        # candidate even when every candidate regressed, shipping a regression
+        # (observed live: a weak inner model, every candidate below baseline).
+        self.auto_best_baseline_floor = auto_best_baseline_floor
         # Baseline scoring is retried this many times total before its outcome is
         # reported as an error; the nested eval can fail transiently (a nested
         # harbor run crashing right after a large eval), and a single blip must
@@ -284,4 +291,36 @@ class Verifier:
             )
         # Highest admin score wins; ties break to the earliest shortlist position.
         rescored.sort(key=lambda t: (-t[0], t[1]))
-        return rescored[0][2]
+        best_score, _, best_commit = rescored[0]
+
+        # Selection floor: never ship a candidate that fails to beat the untouched
+        # baseline on the selection split. auto_best excludes base_commit from the
+        # candidate pool, so without this it selects the least-bad candidate even
+        # when every candidate regressed. Revert to the seed instead. Strict '>' so
+        # a statistical tie also reverts: if the optimizer cannot show an
+        # improvement, shipping the seed is the safe outcome. Needs a base_commit to
+        # compare against; costs one extra admin eval on the selection split.
+        if self.auto_best_baseline_floor and self.base_commit is not None:
+            base_dataset_id = self.selection_dataset_id
+            if base_dataset_id is None:
+                base_dataset_id = shortlist.iloc[0].get("dataset_subset_dataset_id")
+            base_exp = await self.engine.evaluate_admin(
+                task=self.selection_task,
+                dataset_id=base_dataset_id,
+                split=self.selection_split,
+                commit=self.base_commit,
+            )
+            base_s = base_exp.result.score()
+            base_score = float(base_s) if base_s is not None else default_minimum_score
+            if best_score <= base_score:
+                logger.info(
+                    "auto_best floor: best candidate %s (admin_score=%s) does not beat "
+                    "baseline %s (admin_score=%s); reverting to base_commit.",
+                    best_commit, best_score, self.base_commit, base_score,
+                )
+                return self.base_commit
+            logger.info(
+                "auto_best floor: best candidate %s (%s) beats baseline (%s); keeping it.",
+                best_commit, best_score, base_score,
+            )
+        return best_commit
