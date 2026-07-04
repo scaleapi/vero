@@ -125,3 +125,26 @@ def finalize_cmd(token_file, output):
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(reward))
     click.echo(json.dumps(reward, indent=2))
+
+
+@harbor.command("dashboard")
+@click.option("--meta", "meta_path", type=click.Path(path_type=Path), default=None,
+              help="JSON with experiment questions, pre-registered bars, and a scorecard.")
+@click.option("--jobs", "jobs_dirs", type=click.Path(path_type=Path), multiple=True,
+              help="Harbor jobs dir(s) to scan for reward.json finals. Repeatable.")
+@click.option("--host", default="127.0.0.1", show_default=True,
+              help="Bind address. Ledger rows include hidden-split scores; keep it local.")
+@click.option("--port", default=8300, show_default=True)
+def dashboard_cmd(meta_path, jobs_dirs, host, port):
+    """Operator dashboard: watch running optimization trials live (host-side).
+
+    Discovers eval-sidecar containers via docker, tails each trial's ledger
+    through the admin /experiments endpoint, scans jobs dirs for finals, and
+    serves a self-refreshing status page. Admin-side tool: run it where the
+    trials run, not inside a task container.
+    """
+    from vero.harbor.dashboard import DashboardConfig, serve_dashboard
+
+    serve_dashboard(DashboardConfig(
+        meta_path=meta_path, jobs_dirs=list(jobs_dirs), host=host, port=port,
+    ))
