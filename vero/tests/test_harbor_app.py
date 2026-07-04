@@ -75,7 +75,10 @@ class TestAgentEndpoints:
 class TestAdminEndpoint:
     def test_finalize_requires_token(self):
         verifier = MagicMock()
-        verifier.finalize = AsyncMock(return_value={"reward": 1.0})
+        # Mock mirrors the real finalize contract: {"rewards": ..., "baseline": ...}
+        # (the CLI extracts "rewards" for reward.json and echoes the rest to stdout).
+        payload = {"rewards": {"reward": 1.0}, "baseline": {"scores": {"reward": 0.8}}}
+        verifier.finalize = AsyncMock(return_value=payload)
         client = _client(verifier=verifier)
 
         assert client.post("/finalize").status_code == 403  # no token
@@ -83,7 +86,7 @@ class TestAdminEndpoint:
         verifier.finalize.assert_not_awaited()
 
         r = client.post("/finalize", headers={"Authorization": f"Bearer {TOKEN}"})
-        assert r.status_code == 200 and r.json() == {"reward": 1.0}
+        assert r.status_code == 200 and r.json() == payload
         verifier.finalize.assert_awaited_once()
 
 

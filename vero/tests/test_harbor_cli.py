@@ -79,4 +79,27 @@ def test_finalize_uses_token_and_writes_reward(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert cap["url"].endswith("/finalize")
     assert cap["headers"]["Authorization"] == "Bearer T0KEN"
+    # Back-compat: a bare-rewards response (older sidecar) still writes reward.json.
     assert json.loads(out.read_text()) == {"reward": 1.0}
+
+
+def test_finalize_writes_only_rewards_and_echoes_baseline(monkeypatch, tmp_path):
+    # New wrapper shape: reward.json gets only the rewards (the outer harness
+    # consumes its keys), while the baseline outcome is echoed to stdout, the one
+    # channel that survives teardown, so a baseline skip/failure is durably recorded.
+    monkeypatch.setenv("VERO_EVAL_URL", "http://sidecar:8000")
+    token_file = tmp_path / "tok"
+    token_file.write_text("T0KEN")
+    out = tmp_path / "reward.json"
+    cap: dict = {}
+    resp = {"rewards": {"accuracy": 0.4}, "baseline": {"scores": {"accuracy": 0.43}}}
+    _patch_httpx(monkeypatch, _Resp(200, resp), cap)
+
+    result = CliRunner().invoke(
+        harbor, ["finalize", "--token-file", str(token_file), "--output", str(out)]
+    )
+    assert result.exit_code == 0
+    # reward.json is only the rewards, not the baseline wrapper
+    assert json.loads(out.read_text()) == {"accuracy": 0.4}
+    # the baseline outcome is visible on stdout (captured into test-stdout.txt on the host)
+    assert "baseline" in result.output and "0.43" in result.output

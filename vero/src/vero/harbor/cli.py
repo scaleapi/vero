@@ -120,8 +120,14 @@ def finalize_cmd(token_file, output):
     from vero.harbor.auth import read_admin_token
 
     token = read_admin_token(token_file)
-    reward = _request("POST", "/finalize", headers={"Authorization": f"Bearer {token}"})
+    resp = _request("POST", "/finalize", headers={"Authorization": f"Bearer {token}"})
+    # finalize returns {"rewards": {...}, "baseline": {...}}. Only the rewards are
+    # the reward.json payload the outer harness consumes; the baseline outcome is
+    # echoed to stdout (the trial's stdout survives teardown, the admin volume does
+    # not) so a baseline skip or failure is durably recorded. Tolerate the older
+    # bare-rewards shape so a mixed-version sidecar still writes a valid reward.json.
+    rewards = resp["rewards"] if isinstance(resp, dict) and "rewards" in resp else resp
     out = Path(output)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(reward))
-    click.echo(json.dumps(reward, indent=2))
+    out.write_text(json.dumps(rewards))
+    click.echo(json.dumps(resp, indent=2))
