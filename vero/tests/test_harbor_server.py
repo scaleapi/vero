@@ -138,6 +138,49 @@ class TestFeedbackTierGate:
         assert not agent_vol.exists() or not list(agent_vol.rglob("*.json"))
 
 
+class TestAttemptDetailTierGate:
+    """Lever 3 hidden-split safety: the per-attempt {reward, exception} list
+    lives in sample output, which reaches the agent only through the
+    viewable-only per-sample files. Same enforcement layer as feedback."""
+
+    def _experiment_with_attempts(self, split):
+        exp = _experiment(split)
+        for sr in exp.result.sample_results.values():
+            sr.output = {
+                "task_name": "t0",
+                "attempts": [{"reward": 0.0, "exception": "SecretTimeoutError"}],
+            }
+        return exp
+
+    @pytest.mark.asyncio
+    async def test_attempts_reach_agent_on_viewable_only(self, tmp_path):
+        sidecar = _sidecar(
+            tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
+        )
+        sidecar.engine.evaluate = AsyncMock(
+            return_value=self._experiment_with_attempts("train")
+        )
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        blob = json.loads((dest / "0.json").read_text())
+        assert blob["output"]["attempts"] == [
+            {"reward": 0.0, "exception": "SecretTimeoutError"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_attempts_never_written_for_non_viewable(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation")  # non_viewable
+        sidecar.engine.evaluate = AsyncMock(
+            return_value=self._experiment_with_attempts("validation")
+        )
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        for f in (tmp_path / "agent_vol").rglob("*"):
+            if f.is_file():
+                blob = f.read_text()
+                assert "SecretTimeoutError" not in blob
+                assert "attempts" not in blob
+
+
 class TestSubmit:
     @pytest.mark.asyncio
     async def test_submit_records_nomination(self, tmp_path):

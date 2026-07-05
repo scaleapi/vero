@@ -82,6 +82,9 @@ class ServeConfig(BaseModel):
     # routing (per-sample files are written only for viewable splits).
     feedback_transcripts: bool = False
     feedback_max_bytes: int = 3000
+    # Lever 3 (Mode B): sample output carries a per-attempt {reward, exception}
+    # list. Same viewable-only exposure path as feedback_transcripts.
+    expose_attempt_detail: bool = False
     # Lever 2: consumed at COMPILE time (the instruction's multi-fidelity
     # section); recorded here so serve.json mirrors build.yaml. The sidecar's
     # subset-eval support itself is unconditional (EvalRequest.num_samples /
@@ -203,6 +206,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
             HarborConfig(**config.harbor),
             feedback_transcripts=config.feedback_transcripts,
             feedback_max_bytes=config.feedback_max_bytes,
+            expose_attempt_detail=config.expose_attempt_detail,
         )
 
     evaluator = Evaluator(

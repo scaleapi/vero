@@ -250,6 +250,7 @@ def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str)
         "feedback_transcripts": config.feedback_transcripts,
         "feedback_max_bytes": config.feedback_max_bytes,
         "instruct_multifidelity": config.instruct_multifidelity,
+        "expose_attempt_detail": config.expose_attempt_detail,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,

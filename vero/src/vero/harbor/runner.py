@@ -41,6 +41,7 @@ class HarborRunner:
         *,
         feedback_transcripts: bool = False,
         feedback_max_bytes: int = 3000,
+        expose_attempt_detail: bool = False,
     ):
         self.config = config
         # Lever 1: attach the transcript tail of a FAILED sample's trial to its
@@ -49,6 +50,10 @@ class HarborRunner:
         # here; this only controls whether the field is filled at collation.
         self.feedback_transcripts = feedback_transcripts
         self.feedback_max_bytes = feedback_max_bytes
+        # Lever 3: attach a per-attempt {reward, exception} list to each
+        # sample's output. Same tier gate as feedback: filled at collation,
+        # exposed only via the viewable-split per-sample files.
+        self.expose_attempt_detail = expose_attempt_detail
 
     async def produce_sample_results(
         self,
@@ -187,7 +192,9 @@ class HarborRunner:
                     f"samples 0."
                 )
         need_attempts = (
-            self.config.aggregate_attempts == "mean" or self.feedback_transcripts
+            self.config.aggregate_attempts == "mean"
+            or self.feedback_transcripts
+            or self.expose_attempt_detail
         )
         groups = self._trial_groups(jobs_dir) if need_attempts else {}
         for sample_id, task_name in pairs:
@@ -293,6 +300,12 @@ class HarborRunner:
             return SampleResult(
                 error=f"No Harbor trial result for task '{task_name}'.", **common
             )
+        attempt_detail = self._attempt_detail(attempts)
+
+        def _out(output: dict) -> dict:
+            if attempt_detail is not None:
+                output["attempts"] = attempt_detail
+            return output
         # Mean aggregation across attempts: average the reward over every SCORED
         # attempt, dirty or clean. Harbor can record an exception (agent timeout,
         # non-zero agent exit) and still run the verifier, so such an attempt
@@ -335,18 +348,20 @@ class HarborRunner:
                         "n_scored": float(len(scored)),
                         "n_clean": float(n_clean),
                     },
-                    output={
+                    output=_out({
                         "task_name": task_name,
                         "attempt_scores": scored,
                         "aggregate": "mean",
-                    },
+                    }),
                     **common,
                 )
         rewards = (trial.get("verifier_result") or {}).get("rewards") or {}
         if not rewards:
             return SampleResult(
                 error=f"No verifier rewards for task '{task_name}'.",
-                output={"task_name": task_name, "trial_name": trial.get("trial_name")},
+                output=_out(
+                    {"task_name": task_name, "trial_name": trial.get("trial_name")}
+                ),
                 **common,
             )
         score = self._extract_reward(rewards)
@@ -354,11 +369,11 @@ class HarborRunner:
             score=score,
             feedback=self._failure_feedback(score, attempts),
             metrics={k: float(v) for k, v in rewards.items()},
-            output={
+            output=_out({
                 "task_name": task_name,
                 "trial_name": trial.get("trial_name"),
                 "rewards": rewards,
-            },
+            }),
             **common,
         )
 
@@ -368,6 +383,27 @@ class HarborRunner:
                 return float(rewards[key])
         values = [float(v) for v in rewards.values()]
         return sum(values) / len(values) if values else 0.0
+
+    def _attempt_detail(self, attempts: list[dict] | None) -> list[dict] | None:
+        """Lever 3: one {reward, exception} entry per attempt, in attempt order
+        (sorted at load). reward is None when the attempt died before the
+        verifier scored it; exception is the recorded exception class name
+        (None for clean attempts). Off (or no attempts loaded) returns None,
+        which leaves the output dict without an 'attempts' key at all."""
+        if not self.expose_attempt_detail or not attempts:
+            return None
+        detail = []
+        for attempt in attempts:
+            rewards = (attempt.get("verifier_result") or {}).get("rewards")
+            detail.append(
+                {
+                    "reward": self._extract_reward(rewards) if rewards else None,
+                    "exception": (attempt.get("exception_info") or {}).get(
+                        "exception_type"
+                    ),
+                }
+            )
+        return detail
 
     def _failure_feedback(
         self, score: float, attempts: list[dict] | None

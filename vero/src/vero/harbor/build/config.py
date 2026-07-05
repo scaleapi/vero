@@ -81,6 +81,10 @@ class BuildConfig(BaseModel):
     # on the full split). Renders only when the sidecar in the same tree actually
     # accepts subset evals; see the compiler's ctx gate.
     instruct_multifidelity: bool = False
+    # Lever 3 (Mode B): each sample's output carries an `attempts` list, one
+    # {reward, exception} entry per attempt. Same viewable-only exposure as
+    # feedback_transcripts.
+    expose_attempt_detail: bool = False
 
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.

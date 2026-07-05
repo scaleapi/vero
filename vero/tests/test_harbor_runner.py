@@ -48,11 +48,12 @@ def _write_trial(
     jobs_dir: Path,
     trial: str,
     task_name: str,
-    rewards: dict,
+    rewards: dict | None,
     *,
     pane: str | None = None,
     trajectory: str | None = None,
     finished_at: str | None = None,
+    exception_type: str | None = None,
 ):
     # Real harbor layout: <jobs>/<timestamp>/<trial>/result.json, plus a job-level
     # <jobs>/<timestamp>/result.json summary (no task_name) that collation must skip.
@@ -62,9 +63,19 @@ def _write_trial(
     d = run / trial
     d.mkdir(parents=True, exist_ok=True)
     (run / "result.json").write_text(json.dumps({"job": "summary"}))  # job-level, no task_name
-    data = {"task_name": task_name, "trial_name": trial, "verifier_result": {"rewards": rewards}}
+    data = {
+        "task_name": task_name,
+        "trial_name": trial,
+        "verifier_result": {"rewards": rewards} if rewards is not None else None,
+    }
     if finished_at is not None:
         data["finished_at"] = finished_at
+    if exception_type is not None:
+        data["exception_info"] = {
+            "exception_type": exception_type,
+            "exception_message": "",
+            "exception_traceback": "",
+        }
     (d / "result.json").write_text(json.dumps(data))
     if pane is not None:
         (d / "agent").mkdir(exist_ok=True)
@@ -577,3 +588,70 @@ class TestTranscriptFeedback:
         r = self._result(runner, jobs)
         assert r.score == 0.5
         assert r.feedback is None
+
+
+class TestAttemptDetail:
+    """Lever 3 (expose_attempt_detail): sample output carries an `attempts`
+    list, one {reward, exception} entry per attempt. Population rules here;
+    the viewable-only exposure gate is the sidecar's (test_harbor_server)."""
+
+    def _result(self, runner, jobs, task="t0"):
+        trials = runner._load_trials(jobs)
+        groups = runner._trial_groups(jobs)
+        return runner._sample_result(
+            trials.get(task), 0, task, _params(), attempts=groups.get(task)
+        )
+
+    def test_one_entry_per_attempt_with_exception_names(self, tmp_path):
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+                n_attempts=3, aggregate_attempts="mean",
+            ),
+            expose_attempt_detail=True,
+        )
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "a", "t0", {"reward": 1.0}, finished_at="2026-01-01T00:01:00")
+        _write_trial(jobs, "b", "t0", {"reward": 0.0}, finished_at="2026-01-01T00:02:00",
+                     exception_type="AgentTimeoutError")
+        _write_trial(jobs, "c", "t0", None, finished_at="2026-01-01T00:03:00",
+                     exception_type="RuntimeError")
+        r = self._result(runner, jobs)
+        assert r.output["attempts"] == [
+            {"reward": 1.0, "exception": None},
+            {"reward": 0.0, "exception": "AgentTimeoutError"},
+            {"reward": None, "exception": "RuntimeError"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_best_mode_collates_attempts_end_to_end(self, tmp_path, monkeypatch):
+        # 'best' aggregation does not need the attempt groups for scoring, so
+        # this pins that _collate still loads them when the lever asks for it.
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = HarborRunner(
+            HarborConfig(task_source="org/ds@1", agent_import_path="pkg.mod:Agent"),
+            expose_attempt_detail=True,
+        )
+        params = _params()
+        result_dir = tmp_path / "result"
+        _write_trial(result_dir / "jobs", "trial0", "t0", {"reward": 1.0})
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0")])
+        runner._run_harbor = AsyncMock()
+        ws = MagicMock(project_path="/wt")
+        await runner.produce_sample_results(workspace=ws, params=params, result_dir=result_dir)
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 1.0  # best-mode scoring untouched
+        assert results[0].output["attempts"] == [{"reward": 1.0, "exception": None}]
+
+    def test_flag_off_leaves_output_without_attempts(self, tmp_path):
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "a", "t0", {"reward": 1.0}, finished_at="2026-01-01T00:01:00")
+        _write_trial(jobs, "b", "t0", {"reward": 0.0}, finished_at="2026-01-01T00:02:00")
+        best = self._result(_runner(), jobs)
+        assert "attempts" not in best.output
+        mean_runner = HarborRunner(HarborConfig(
+            task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        mean = self._result(mean_runner, jobs)
+        assert "attempts" not in mean.output

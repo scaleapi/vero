@@ -191,6 +191,27 @@ def test_feedback_transcripts_configured_through_yaml():
     assert raw["feedback_max_bytes"] == 512
 
 
+def test_expose_attempt_detail_reaches_serve_json(built):
+    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["expose_attempt_detail"] is False  # default off
+    cfg = ServeConfig.from_file(built / "environment" / "sidecar" / "serve.json")
+    assert cfg.expose_attempt_detail is False
+
+
+def test_expose_attempt_detail_configured_through_yaml():
+    from vero.harbor.build.compiler import _serve_config
+
+    config = BuildConfig.model_validate(yaml.safe_load(
+        "name: o/n\n"
+        "agent_repo: .\n"
+        "splits:\n"
+        "  - {split: validation, access: viewable}\n"
+        "expose_attempt_detail: true\n"
+    ))
+    raw = _serve_config(config, "ds", "sha")
+    assert raw["expose_attempt_detail"] is True
+
+
 def test_rendered_files_parse(built):
     tomllib.loads((built / "task.toml").read_text())  # valid TOML
     compose = yaml.safe_load((built / "environment/docker-compose.yaml").read_text())
