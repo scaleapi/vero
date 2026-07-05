@@ -77,6 +77,11 @@ class ServeConfig(BaseModel):
     # auto_best never ships a candidate that fails to beat the untouched baseline
     # on the selection split; it reverts to base_commit instead (needs base_commit).
     auto_best_baseline_floor: bool = True
+    # Lever 1 (Mode B): failed samples carry their trial-transcript tail in the
+    # per-sample `feedback` field. Exposure stays gated by the sidecar's tier
+    # routing (per-sample files are written only for viewable splits).
+    feedback_transcripts: bool = False
+    feedback_max_bytes: int = 3000
 
     # volumes / token
     agent_volume: str
@@ -189,7 +194,11 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         from vero.harbor.runner import HarborRunner
         from vero.harbor.config import HarborConfig
 
-        eval_strategy = HarborRunner(HarborConfig(**config.harbor))
+        eval_strategy = HarborRunner(
+            HarborConfig(**config.harbor),
+            feedback_transcripts=config.feedback_transcripts,
+            feedback_max_bytes=config.feedback_max_bytes,
+        )
 
     evaluator = Evaluator(
         workspace,

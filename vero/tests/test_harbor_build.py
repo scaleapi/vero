@@ -155,6 +155,34 @@ def test_score_baseline_true_through_compile_task(tmp_path, monkeypatch):
     assert raw["score_baseline"] is True
 
 
+def test_feedback_transcripts_reach_serve_json(built):
+    # Lever 1 plumbing: the flags must be in the compiler <-> serve contract
+    # (default off) and validate through ServeConfig.
+    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["feedback_transcripts"] is False
+    assert raw["feedback_max_bytes"] == 3000
+    cfg = ServeConfig.from_file(built / "environment" / "sidecar" / "serve.json")
+    assert cfg.feedback_transcripts is False
+    assert cfg.feedback_max_bytes == 3000
+
+
+def test_feedback_transcripts_configured_through_yaml():
+    # Through the actual YAML path, mirroring the score_baseline exemplar.
+    from vero.harbor.build.compiler import _serve_config
+
+    config = BuildConfig.model_validate(yaml.safe_load(
+        "name: o/n\n"
+        "agent_repo: .\n"
+        "splits:\n"
+        "  - {split: validation, access: viewable}\n"
+        "feedback_transcripts: true\n"
+        "feedback_max_bytes: 512\n"
+    ))
+    raw = _serve_config(config, "ds", "sha")
+    assert raw["feedback_transcripts"] is True
+    assert raw["feedback_max_bytes"] == 512
+
+
 def test_rendered_files_parse(built):
     tomllib.loads((built / "task.toml").read_text())  # valid TOML
     compose = yaml.safe_load((built / "environment/docker-compose.yaml").read_text())

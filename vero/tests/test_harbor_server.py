@@ -105,6 +105,39 @@ class TestRouting:
         assert summary.budget_remaining is None
 
 
+class TestFeedbackTierGate:
+    """Lever 1 hidden-split safety: per-sample feedback (transcript tails) rides
+    the per-sample result files, and _route_results writes those ONLY for
+    viewable splits. Nothing feedback-bearing may ever land on the agent volume
+    for a non_viewable or no_access split, regardless of any collation flag."""
+
+    @pytest.mark.asyncio
+    async def test_feedback_reaches_agent_on_viewable_only(self, tmp_path):
+        sidecar = _sidecar(
+            tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
+        )
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        assert "secret-0" in (dest / "0.json").read_text()
+
+    @pytest.mark.asyncio
+    async def test_feedback_never_written_for_non_viewable(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation")  # non_viewable
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        for f in (tmp_path / "agent_vol").rglob("*"):
+            if f.is_file():
+                blob = f.read_text()
+                assert "secret-" not in blob
+                assert "feedback" not in blob
+
+    @pytest.mark.asyncio
+    async def test_feedback_never_written_for_no_access(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="test")  # no_access
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="test"))
+        agent_vol = tmp_path / "agent_vol"
+        assert not agent_vol.exists() or not list(agent_vol.rglob("*.json"))
+
+
 class TestSubmit:
     @pytest.mark.asyncio
     async def test_submit_records_nomination(self, tmp_path):

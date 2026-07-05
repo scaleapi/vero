@@ -70,6 +70,12 @@ class BuildConfig(BaseModel):
     # write it to <admin_volume>/baseline.json, so a candidate that generalizes
     # WORSE than the untouched repo is visible as a regression.
     score_baseline: bool = False
+    # Lever 1 (Mode B): each FAILED sample (reward 0) of an eval carries the
+    # tail of its trial transcript in the per-sample `feedback` field. Rides
+    # the per-sample result files the sidecar writes ONLY for viewable splits,
+    # so it can never surface for non_viewable / no_access tiers.
+    feedback_transcripts: bool = False
+    feedback_max_bytes: int = 3000
 
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.

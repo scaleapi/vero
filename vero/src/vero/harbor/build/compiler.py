@@ -246,6 +246,8 @@ def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str)
         "base_commit": base_commit,
         "submit_enabled": config.submit_enabled,
         "score_baseline": config.score_baseline,
+        "feedback_transcripts": config.feedback_transcripts,
+        "feedback_max_bytes": config.feedback_max_bytes,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,

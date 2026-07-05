@@ -44,16 +44,34 @@ def _params():
     )
 
 
-def _write_trial(jobs_dir: Path, trial: str, task_name: str, rewards: dict):
+def _write_trial(
+    jobs_dir: Path,
+    trial: str,
+    task_name: str,
+    rewards: dict,
+    *,
+    pane: str | None = None,
+    trajectory: str | None = None,
+    finished_at: str | None = None,
+):
     # Real harbor layout: <jobs>/<timestamp>/<trial>/result.json, plus a job-level
     # <jobs>/<timestamp>/result.json summary (no task_name) that collation must skip.
+    # Transcripts (when present) live at <trial>/agent/terminus_2.pane and
+    # <trial>/agent/trajectory.json, next to result.json.
     run = jobs_dir / "2026-01-01__00-00-00"
     d = run / trial
     d.mkdir(parents=True, exist_ok=True)
     (run / "result.json").write_text(json.dumps({"job": "summary"}))  # job-level, no task_name
-    (d / "result.json").write_text(
-        json.dumps({"task_name": task_name, "trial_name": trial, "verifier_result": {"rewards": rewards}})
-    )
+    data = {"task_name": task_name, "trial_name": trial, "verifier_result": {"rewards": rewards}}
+    if finished_at is not None:
+        data["finished_at"] = finished_at
+    (d / "result.json").write_text(json.dumps(data))
+    if pane is not None:
+        (d / "agent").mkdir(exist_ok=True)
+        (d / "agent" / "terminus_2.pane").write_text(pane)
+    if trajectory is not None:
+        (d / "agent").mkdir(exist_ok=True)
+        (d / "agent" / "trajectory.json").write_text(trajectory)
 
 
 class TestBuildCommand:
@@ -454,3 +472,108 @@ class TestTimeoutSalvage:
             r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
         assert r.metrics["n_scored"] == 2.0
         assert any("2 scored attempt(s) of 3 configured" in m for m in caplog.messages)
+
+
+def _fb_runner(**kwargs):
+    return HarborRunner(
+        HarborConfig(task_source="org/ds@1", agent_import_path="pkg.mod:Agent"),
+        feedback_transcripts=True,
+        **kwargs,
+    )
+
+
+class TestTranscriptFeedback:
+    """Lever 1 (feedback_transcripts): a FAILED sample (reward 0) carries the
+    tail of its trial transcript in SampleResult.feedback. Population rules are
+    tested here; the hidden-split gate (per-sample files are viewable-only) is
+    the sidecar's and is covered in test_harbor_server."""
+
+    def _result(self, runner, jobs, task="t0"):
+        trials = runner._load_trials(jobs)
+        groups = runner._trial_groups(jobs)
+        return runner._sample_result(
+            trials.get(task), 0, task, _params(), attempts=groups.get(task)
+        )
+
+    @pytest.mark.asyncio
+    async def test_failed_carries_pane_tail_passed_does_not(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = _fb_runner()
+        params = _params()
+        result_dir = tmp_path / "result"
+        _write_trial(result_dir / "jobs", "trial0", "t0", {"reward": 0.0}, pane="failing tail")
+        _write_trial(result_dir / "jobs", "trial1", "t1", {"reward": 1.0}, pane="passing tail")
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+        runner._run_harbor = AsyncMock()
+        ws = MagicMock(project_path="/wt")
+        await runner.produce_sample_results(workspace=ws, params=params, result_dir=result_dir)
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 0.0
+        assert results[0].feedback == "failing tail"
+        assert results[1].score == 1.0
+        assert results[1].feedback is None  # passed samples carry no feedback
+
+    def test_flag_off_leaves_feedback_unset(self, tmp_path):
+        runner = _runner()  # default: feedback_transcripts=False
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="failing tail")
+        assert self._result(runner, jobs).feedback is None
+
+    def test_byte_cap_keeps_last_bytes_only(self, tmp_path):
+        runner = _fb_runner(feedback_max_bytes=16)
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="A" * 100 + "TAIL-OF-THE-PANE")
+        r = self._result(runner, jobs)
+        assert r.feedback == "TAIL-OF-THE-PANE"
+        assert len(r.feedback.encode()) <= 16
+
+    def test_falls_back_to_trajectory_when_pane_missing(self, tmp_path):
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, trajectory='{"steps": []}')
+        assert self._result(runner, jobs).feedback == '{"steps": []}'
+
+    def test_missing_transcripts_omitted_silently(self, tmp_path):
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0})  # no pane, no trajectory
+        r = self._result(runner, jobs)
+        assert r.score == 0.0
+        assert r.feedback is None
+
+    def test_first_failed_attempt_transcript_used(self, tmp_path):
+        # Two failed attempts: the FIRST one's transcript (by finished_at) is
+        # attached, deterministically, regardless of rglob order.
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+                n_attempts=2, aggregate_attempts="mean",
+            ),
+            feedback_transcripts=True,
+        )
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "zz-early", "t0", {"reward": 0.0}, pane="first attempt",
+                     finished_at="2026-01-01T00:01:00")
+        _write_trial(jobs, "aa-late", "t0", {"reward": 0.0}, pane="second attempt",
+                     finished_at="2026-01-01T00:09:00")
+        r = self._result(runner, jobs)
+        assert r.score == 0.0
+        assert r.feedback == "first attempt"
+
+    def test_partially_passing_mean_sample_gets_no_feedback(self, tmp_path):
+        # Failed means reward 0; a mean of [1.0, 0.0] is not a failed sample.
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+                n_attempts=2, aggregate_attempts="mean",
+            ),
+            feedback_transcripts=True,
+        )
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "a", "t0", {"reward": 1.0}, pane="p1",
+                     finished_at="2026-01-01T00:01:00")
+        _write_trial(jobs, "b", "t0", {"reward": 0.0}, pane="p2",
+                     finished_at="2026-01-01T00:02:00")
+        r = self._result(runner, jobs)
+        assert r.score == 0.5
+        assert r.feedback is None

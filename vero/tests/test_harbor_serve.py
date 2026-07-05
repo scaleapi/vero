@@ -221,6 +221,24 @@ async def test_ledger_reloads_spent_budget_across_restart(fixture):
     assert reloaded == after, "sidecar restart must not refill spent budget"
 
 
+@pytest.mark.asyncio
+async def test_feedback_levers_reach_harbor_runner(fixture):
+    # Lever 1 pass-through: ServeConfig -> build_components -> HarborRunner kwargs
+    # (mirrors how score_baseline reaches the Verifier).
+    agent_dir, head, task_dir, dataset_id, tmp = fixture
+    config = _serve_config(agent_dir, head, task_dir, dataset_id, tmp).model_copy(
+        update={
+            "harbor": {"task_source": "org/x", "agent_import_path": "p:C"},
+            "feedback_transcripts": True,
+            "feedback_max_bytes": 512,
+        }
+    )
+    sidecar, _, _ = await build_components(config)
+    runner = sidecar.engine.evaluator.eval_strategy
+    assert runner.feedback_transcripts is True
+    assert runner.feedback_max_bytes == 512
+
+
 def test_mode_b_sample_timeout_warns(caplog):
     # Setting sample_timeout in Mode B is a no-op (nested harbor tasks use their
     # own timeouts); the author must be told rather than silently ignored.

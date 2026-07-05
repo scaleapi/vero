@@ -35,8 +35,20 @@ logger = logging.getLogger(__name__)
 class HarborRunner:
     """Mode-B EvalStrategy: nested `harbor run` + collate -> SampleResults."""
 
-    def __init__(self, config: HarborConfig):
+    def __init__(
+        self,
+        config: HarborConfig,
+        *,
+        feedback_transcripts: bool = False,
+        feedback_max_bytes: int = 3000,
+    ):
         self.config = config
+        # Lever 1: attach the transcript tail of a FAILED sample's trial to its
+        # SampleResult.feedback. Whether the agent ever sees it is decided by
+        # the sidecar's tier routing (per-sample files are viewable-only), not
+        # here; this only controls whether the field is filled at collation.
+        self.feedback_transcripts = feedback_transcripts
+        self.feedback_max_bytes = feedback_max_bytes
 
     async def produce_sample_results(
         self,
@@ -174,11 +186,10 @@ class HarborRunner:
                     f"canonical '<org>/<name>' form; refusing to score all "
                     f"samples 0."
                 )
-        groups = (
-            self._trial_groups(jobs_dir)
-            if self.config.aggregate_attempts == "mean"
-            else {}
+        need_attempts = (
+            self.config.aggregate_attempts == "mean" or self.feedback_transcripts
         )
+        groups = self._trial_groups(jobs_dir) if need_attempts else {}
         for sample_id, task_name in pairs:
             if self._is_done(params, sample_id):
                 continue  # already collated successfully (resume); errors are redone
@@ -235,7 +246,16 @@ class HarborRunner:
             task_name = data.get("task_name")
             if not task_name:
                 continue
+            # Transcripts (agent/terminus_2.pane etc.) live next to result.json;
+            # keep the dir so feedback can find them after the path is dropped.
+            data["_trial_dir"] = str(result_json.parent)
             groups.setdefault(task_name, []).append(data)
+        # rglob order is undefined; sort each group so "first attempt" is a
+        # stable notion (feedback uses the first failed attempt's transcript).
+        for attempts in groups.values():
+            attempts.sort(
+                key=lambda d: (d.get("finished_at") or "", d.get("trial_name") or "")
+            )
         return groups
 
     @staticmethod
@@ -281,8 +301,10 @@ class HarborRunner:
         # two timeouts would score 1.0) and systematically forgives candidates
         # that make the agent slower. Only attempts with no rewards at all
         # (failed before the verifier scored) are excluded. Falls through to the
-        # single best trial when nothing scored.
-        if attempts:
+        # single best trial when nothing scored. `attempts` may also be present
+        # under 'best' aggregation (collation loads them for the feedback
+        # levers), so the mean path is gated on the config, not their presence.
+        if attempts and self.config.aggregate_attempts == "mean":
             scored_trials = [
                 t for t in attempts if (t.get("verifier_result") or {}).get("rewards")
             ]
@@ -303,10 +325,12 @@ class HarborRunner:
                         f"Task '{task_name}': mean over {len(scored)} scored "
                         f"attempt(s) of {self.config.n_attempts} configured."
                     )
+                mean = sum(scored) / len(scored)
                 return SampleResult(
-                    score=sum(scored) / len(scored),
+                    score=mean,
+                    feedback=self._failure_feedback(mean, attempts),
                     metrics={
-                        "reward_mean": sum(scored) / len(scored),
+                        "reward_mean": mean,
                         "n_attempts": float(len(attempts)),
                         "n_scored": float(len(scored)),
                         "n_clean": float(n_clean),
@@ -325,8 +349,10 @@ class HarborRunner:
                 output={"task_name": task_name, "trial_name": trial.get("trial_name")},
                 **common,
             )
+        score = self._extract_reward(rewards)
         return SampleResult(
-            score=self._extract_reward(rewards),
+            score=score,
+            feedback=self._failure_feedback(score, attempts),
             metrics={k: float(v) for k, v in rewards.items()},
             output={
                 "task_name": task_name,
@@ -342,6 +368,42 @@ class HarborRunner:
                 return float(rewards[key])
         values = [float(v) for v in rewards.values()]
         return sum(values) / len(values) if values else 0.0
+
+    def _failure_feedback(
+        self, score: float, attempts: list[dict] | None
+    ) -> str | None:
+        """Lever 1: transcript tail for a failed sample (score 0.0).
+
+        Uses the FIRST failed attempt only (attempts are sorted at load): the
+        first failure is the cheapest reproducible one, and one tail per sample
+        bounds the payload. Passed samples, and everything with the lever off,
+        return None (the field serializes as null either way, so responses are
+        byte-identical to before when disabled).
+        """
+        if not self.feedback_transcripts or score != 0.0 or not attempts:
+            return None
+        for attempt in attempts:
+            rewards = (attempt.get("verifier_result") or {}).get("rewards")
+            if not rewards or self._extract_reward(rewards) != 0.0:
+                continue
+            trial_dir = attempt.get("_trial_dir")
+            if not trial_dir:
+                return None
+            return self._read_transcript_tail(Path(trial_dir))
+        return None
+
+    def _read_transcript_tail(self, trial_dir: Path) -> str | None:
+        """Last ``feedback_max_bytes`` of the trial's transcript: the terminal
+        pane when present, else the trajectory; None (field omitted) when the
+        trial recorded neither."""
+        for rel in ("agent/terminus_2.pane", "agent/trajectory.json"):
+            path = trial_dir / rel
+            try:
+                data = path.read_bytes()
+            except OSError:
+                continue
+            return data[-self.feedback_max_bytes :].decode("utf-8", errors="replace")
+        return None
 
     def _existing(self, params: EvaluationParameters, sample_id: int) -> SampleResult | None:
         return load_sample_result(
