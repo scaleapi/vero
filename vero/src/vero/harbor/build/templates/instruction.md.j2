@@ -22,6 +22,23 @@ scored on the hidden test split at the end. Only commits *other than the seeded
 baseline* are selectable: baseline evals create no candidate, so make sure at least
 one eval is of a commit that contains your changes.{% endif %}
 
+{% if multifidelity %}
+## Screen cheaply, confirm expensively
+
+`vero harbor eval` also accepts `--num-samples N` (the first N samples of the
+split) or `--sample-ids 0,3,7` (specific samples). A subset eval finishes faster
+in rough proportion to its size, so it is the cheap way to triage ideas:
+
+- Cost: every eval, subset or full, spends 1 unit of the split's run budget.
+  The split's sample budget (when it has one) is debited only for the samples
+  actually run, so subsets stretch a sample-metered budget much further.
+- Noise: a subset aggregate is noisier than a full-split score. Treat subset
+  results as a coarse filter, not a ranking.
+- Strategy: screen rough ideas on a small fixed subset (the same sample ids
+  every time, so scores stay comparable), then spend full-split evals only on
+  the survivors. The final selection compares full-split scores.
+
+{% endif %}
 ## Rules
 
 - Budget is finite and metered per split — spend it wisely.

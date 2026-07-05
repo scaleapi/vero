@@ -82,6 +82,11 @@ class ServeConfig(BaseModel):
     # routing (per-sample files are written only for viewable splits).
     feedback_transcripts: bool = False
     feedback_max_bytes: int = 3000
+    # Lever 2: consumed at COMPILE time (the instruction's multi-fidelity
+    # section); recorded here so serve.json mirrors build.yaml. The sidecar's
+    # subset-eval support itself is unconditional (EvalRequest.num_samples /
+    # sample_ids), so there is nothing to toggle at serve time.
+    instruct_multifidelity: bool = False
 
     # volumes / token
     agent_volume: str

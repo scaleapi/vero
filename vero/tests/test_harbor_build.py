@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from vero.evaluation.engine import EvalRequest
 from vero.harbor.build import BuildConfig, compile_task
 from vero.harbor.protocol import StatusSummary
 from vero.harbor.serve import ServeConfig
@@ -22,6 +23,13 @@ from vero.harbor.serve import ServeConfig
 # tests below run the arm that matches whichever chains are merged here.
 _HAS_FREE_BASELINE = "free_baseline_available" in {
     f.name for f in dataclasses.fields(StatusSummary)
+}
+
+# Whether the sidecar in THIS tree accepts subset evals (num_samples /
+# sample_ids on the eval request); the multi-fidelity instruction section is
+# gated on it, same merge-order pattern as the free-baseline bullet.
+_HAS_SUBSET_EVALS = {"sample_ids", "num_samples"} <= {
+    f.name for f in dataclasses.fields(EvalRequest)
 }
 
 
@@ -283,6 +291,88 @@ def test_instruction_omits_free_baseline_claim_when_unsupported(built):
     # select (fatal on a run_budget=1 task).
     text = (built / "instruction.md").read_text()
     assert "budget-free" not in text
+
+
+def _multifidelity_config(tmp_path) -> BuildConfig:
+    return BuildConfig(
+        name="vero/gsm8k-opt",
+        agent_repo=str(_agent_repo(tmp_path)),
+        mode="A",
+        task="gsm8k",
+        dataset=str(_dataset(tmp_path)),
+        splits=[{"split": "validation", "access": "non_viewable"}],
+        instruct_multifidelity=True,
+    )
+
+
+@pytest.mark.skipif(
+    not _HAS_SUBSET_EVALS, reason="sidecar in this tree has no subset evals"
+)
+def test_instruction_teaches_multifidelity_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    out = compile_task(
+        _multifidelity_config(tmp_path), tmp_path / "task", vero_root=_stub_vero(tmp_path)
+    )
+    text = (out / "instruction.md").read_text()
+    assert "--num-samples" in text
+    assert "--sample-ids" in text
+    # ...and it must state the true budget economics: a subset eval still costs
+    # a full run-budget unit, while the sample budget scales with subset size.
+    assert "1 unit of the split's run budget" in text
+    assert "debited only for the samples" in text
+    assert "noisier" in text
+
+
+def test_instruction_omits_multifidelity_by_default(built):
+    text = (built / "instruction.md").read_text()
+    assert "--num-samples" not in text
+    assert "Screen cheaply" not in text
+
+
+def test_multifidelity_gate_suppresses_section_without_subset_evals(tmp_path, monkeypatch):
+    # Merge-order guard, exercised the way the free-baseline gate is designed:
+    # against a sidecar whose EvalRequest lacks subset-eval fields, the section
+    # must not render even when the build flag asks for it, or the instruction
+    # would teach a knob the eval endpoint rejects.
+    import dataclasses as dc
+
+    from vero.harbor.build import compiler
+
+    @dc.dataclass
+    class _LegacyEvalRequest:
+        dataset_id: str
+        split: str
+
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    monkeypatch.setattr(compiler, "EvalRequest", _LegacyEvalRequest)
+    out = compile_task(
+        _multifidelity_config(tmp_path), tmp_path / "task", vero_root=_stub_vero(tmp_path)
+    )
+    text = (out / "instruction.md").read_text()
+    assert "--num-samples" not in text
+    assert "Screen cheaply" not in text
+
+
+def test_instruct_multifidelity_reaches_serve_json(built):
+    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["instruct_multifidelity"] is False  # default off
+    assert ServeConfig.from_file(
+        built / "environment" / "sidecar" / "serve.json"
+    ).instruct_multifidelity is False
+
+
+def test_instruct_multifidelity_configured_through_yaml():
+    from vero.harbor.build.compiler import _serve_config
+
+    config = BuildConfig.model_validate(yaml.safe_load(
+        "name: o/n\n"
+        "agent_repo: .\n"
+        "splits:\n"
+        "  - {split: validation, access: non_viewable}\n"
+        "instruct_multifidelity: true\n"
+    ))
+    raw = _serve_config(config, "ds", "sha")
+    assert raw["instruct_multifidelity"] is True
 
 
 def test_instruction_tells_agent_to_spend_whole_budget(built):

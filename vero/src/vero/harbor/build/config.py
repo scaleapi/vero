@@ -76,6 +76,11 @@ class BuildConfig(BaseModel):
     # so it can never surface for non_viewable / no_access tiers.
     feedback_transcripts: bool = False
     feedback_max_bytes: int = 3000
+    # Lever 2: the compiled instruction teaches multi-fidelity screening (triage
+    # rough ideas on subset evals via num_samples / sample_ids, confirm survivors
+    # on the full split). Renders only when the sidecar in the same tree actually
+    # accepts subset evals; see the compiler's ctx gate.
+    instruct_multifidelity: bool = False
 
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.

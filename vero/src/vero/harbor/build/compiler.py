@@ -17,6 +17,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
+from vero.evaluation.engine import EvalRequest
 from vero.harbor.build.config import BuildConfig
 from vero.harbor.protocol import StatusSummary
 
@@ -248,6 +249,7 @@ def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str)
         "score_baseline": config.score_baseline,
         "feedback_transcripts": config.feedback_transcripts,
         "feedback_max_bytes": config.feedback_max_bytes,
+        "instruct_multifidelity": config.instruct_multifidelity,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,
@@ -360,6 +362,13 @@ def compile_task(
         # instruction truthful under any merge order.
         free_baseline="free_baseline_available"
         in {f.name for f in dataclasses.fields(StatusSummary)},
+        # Same merge-order-truthfulness introspection for the multi-fidelity
+        # section: it may only render when the sidecar shipping in this tree
+        # actually accepts subset evals (sample_ids / num_samples on the eval
+        # request), or the instruction would teach a knob that 400s.
+        multifidelity=config.instruct_multifidelity
+        and {"sample_ids", "num_samples"}
+        <= {f.name for f in dataclasses.fields(EvalRequest)},
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)
