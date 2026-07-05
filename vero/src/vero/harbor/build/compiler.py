@@ -271,6 +271,25 @@ def compile_task(
     from vero.core.constants import PACKAGE_DIR
 
     vero_root = vero_root or PACKAGE_DIR
+
+    # Mode A ignores the Mode-B-only feedback levers (they ride the nested
+    # `harbor run` collation, which Mode A never runs). Warn loudly at build time
+    # so a config that sets them in Mode A learns they will do nothing, rather
+    # than silently getting no feedback.
+    if config.mode == "A":
+        mode_b_only = [
+            n
+            for n in ("feedback_transcripts", "expose_attempt_detail")
+            if getattr(config, n)
+        ]
+        if mode_b_only:
+            logger.warning(
+                "Mode A build sets Mode-B-only lever(s) %s; these have no effect "
+                "in Mode A (they ride the nested `harbor run` collation) and will "
+                "be ignored.",
+                ", ".join(mode_b_only),
+            )
+
     out = Path(out_dir)
     if out.exists():
         shutil.rmtree(out)
@@ -366,10 +385,17 @@ def compile_task(
         # Same merge-order-truthfulness introspection for the multi-fidelity
         # section: it may only render when the sidecar shipping in this tree
         # actually accepts subset evals (sample_ids / num_samples on the eval
-        # request), or the instruction would teach a knob that 400s.
+        # request), or the instruction would teach a knob that 400s. It also
+        # requires at least one VIEWABLE evaluable split: on a non_viewable
+        # split the sidecar returns mean_score inline, so a 1-sample subset eval
+        # (which the multi-fidelity section teaches) recovers that single
+        # sample's exact score, defeating the non_viewable contract. Only a
+        # viewable split is safe to screen with subsets. no_access splits are
+        # not agent-evaluable at all, so they never count either.
         multifidelity=config.instruct_multifidelity
         and {"sample_ids", "num_samples"}
-        <= {f.name for f in dataclasses.fields(EvalRequest)},
+        <= {f.name for f in dataclasses.fields(EvalRequest)}
+        and any(s.access == "viewable" for s in config.splits),
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)

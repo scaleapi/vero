@@ -590,6 +590,141 @@ class TestTranscriptFeedback:
         assert r.feedback is None
 
 
+class TestTranscriptFeedbackEdgeCases:
+    """Byte-cap boundary + feedback_max_bytes<=0 + path-confinement + next-attempt
+    fallback. The tail must be exactly capped (never over), never unbounded when
+    the cap is 0, must not crash on a multibyte char straddling the boundary, must
+    refuse a symlinked / escaping transcript, and must try the next failed attempt
+    when the first has no transcript."""
+
+    def _result(self, runner, jobs, task="t0"):
+        trials = runner._load_trials(jobs)
+        groups = runner._trial_groups(jobs)
+        return runner._sample_result(
+            trials.get(task), 0, task, _params(), attempts=groups.get(task)
+        )
+
+    def test_exact_length_at_cap_returns_full(self, tmp_path):
+        # A transcript exactly cap bytes long is returned whole (not truncated).
+        pane = "B" * 16
+        runner = _fb_runner(feedback_max_bytes=16)
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane=pane)
+        r = self._result(runner, jobs)
+        assert r.feedback == pane
+        assert len(r.feedback.encode()) == 16
+
+    def test_one_byte_over_cap_truncates_to_cap(self, tmp_path):
+        # 17 bytes with a 16-byte cap keeps only the last 16 bytes.
+        runner = _fb_runner(feedback_max_bytes=16)
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="X" + "Y" * 16)
+        r = self._result(runner, jobs)
+        assert r.feedback == "Y" * 16
+        assert len(r.feedback.encode()) == 16
+
+    def test_multibyte_char_straddling_cap_does_not_crash(self, tmp_path):
+        # A 3-byte U+2603 (snowman) straddles the cap boundary. The slice cuts
+        # mid-character; errors="replace" must render it without crashing.
+        runner = _fb_runner(feedback_max_bytes=4)
+        jobs = tmp_path / "jobs"
+        # 6 bytes: 'AAA' + a 3-byte char -> last 4 bytes cut the char mid-sequence
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="AAA☃")
+        r = self._result(runner, jobs)  # must not raise
+        assert r.feedback is not None
+        assert len(r.feedback.encode()) <= 8  # replacement chars may re-expand slightly
+
+    def test_zero_cap_emits_no_feedback(self, tmp_path):
+        # feedback_max_bytes=0 means "no feedback", NOT the whole transcript.
+        runner = _fb_runner(feedback_max_bytes=0)
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="should not leak")
+        r = self._result(runner, jobs)
+        assert r.feedback is None
+
+    def test_negative_cap_emits_no_feedback(self, tmp_path):
+        runner = _fb_runner(feedback_max_bytes=-5)
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="should not leak")
+        r = self._result(runner, jobs)
+        assert r.feedback is None
+
+    def test_symlinked_transcript_is_refused(self, tmp_path):
+        # A symlinked transcript file must be skipped silently (field omitted).
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0})  # no real transcript
+        # place a secret outside the trial dir and symlink the pane path to it
+        secret = tmp_path / "secret.txt"
+        secret.write_text("SECRET-OUTSIDE")
+        trial_dir = jobs / "2026-01-01__00-00-00" / "trial0"
+        (trial_dir / "agent").mkdir(exist_ok=True)
+        (trial_dir / "agent" / "terminus_2.pane").symlink_to(secret)
+        r = self._result(runner, jobs)
+        assert r.feedback is None  # symlink refused, nothing leaked
+
+    def test_escaping_transcript_is_refused(self, tmp_path):
+        # A trajectory that is a symlink to a file outside the trial dir is also
+        # refused (path resolves outside trial_root).
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0})
+        outside = tmp_path / "outside.json"
+        outside.write_text('{"leak": true}')
+        trial_dir = jobs / "2026-01-01__00-00-00" / "trial0"
+        (trial_dir / "agent").mkdir(exist_ok=True)
+        (trial_dir / "agent" / "trajectory.json").symlink_to(outside)
+        r = self._result(runner, jobs)
+        assert r.feedback is None
+
+    def test_next_failed_attempt_used_when_first_has_no_transcript(self, tmp_path):
+        # First failed attempt records no transcript; the second failed attempt's
+        # transcript is used instead of giving up.
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+                n_attempts=2, aggregate_attempts="mean",
+            ),
+            feedback_transcripts=True,
+        )
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "zz-early", "t0", {"reward": 0.0},  # no pane/trajectory
+                     finished_at="2026-01-01T00:01:00")
+        _write_trial(jobs, "aa-late", "t0", {"reward": 0.0}, pane="second tail",
+                     finished_at="2026-01-01T00:09:00")
+        r = self._result(runner, jobs)
+        assert r.score == 0.0
+        assert r.feedback == "second tail"
+
+
+class TestAttemptSortOrder:
+    """Attempts missing finished_at must sort LAST, not first: an empty-string
+    timestamp would sort ahead of every real ISO timestamp and mislabel a
+    timestamp-less attempt as the "first" (which feedback keys off)."""
+
+    def test_missing_finished_at_sorts_last(self, tmp_path):
+        runner = _runner()
+        jobs = tmp_path / "jobs"
+        # one attempt with a real timestamp, one with none
+        _write_trial(jobs, "with-ts", "t0", {"reward": 0.0},
+                     finished_at="2026-01-01T00:05:00")
+        _write_trial(jobs, "no-ts", "t0", {"reward": 0.0})  # finished_at absent
+        groups = runner._trial_groups(jobs)
+        names = [a.get("trial_name") for a in groups["t0"]]
+        assert names == ["with-ts", "no-ts"]  # timestamped first, missing last
+
+    def test_feedback_uses_timestamped_attempt_over_timeless_one(self, tmp_path):
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "no-ts", "t0", {"reward": 0.0}, pane="timeless tail")
+        _write_trial(jobs, "with-ts", "t0", {"reward": 0.0}, pane="timestamped tail",
+                     finished_at="2026-01-01T00:05:00")
+        trials = runner._load_trials(jobs)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(trials.get("t0"), 0, "t0", _params(), attempts=groups.get("t0"))
+        assert r.feedback == "timestamped tail"
+
+
 class TestAttemptDetail:
     """Lever 3 (expose_attempt_detail): sample output carries an `attempts`
     list, one {reward, exception} entry per attempt. Population rules here;

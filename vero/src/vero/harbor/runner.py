@@ -259,9 +259,18 @@ class HarborRunner:
             groups.setdefault(task_name, []).append(data)
         # rglob order is undefined; sort each group so "first attempt" is a
         # stable notion (feedback uses the first failed attempt's transcript).
+        # An attempt with no finished_at must sort LAST, not first: an empty
+        # string would sort ahead of every real ISO timestamp and mislabel a
+        # timestamp-less attempt as the "first". The leading bool puts present
+        # timestamps first (False < True), then orders by the timestamp, and
+        # finally tie-breaks on the stable trial_name.
         for attempts in groups.values():
             attempts.sort(
-                key=lambda d: (d.get("finished_at") or "", d.get("trial_name") or "")
+                key=lambda d: (
+                    d.get("finished_at") is None,
+                    d.get("finished_at") or "",
+                    d.get("trial_name") or "",
+                )
             )
         return groups
 
@@ -410,13 +419,21 @@ class HarborRunner:
     ) -> str | None:
         """Lever 1: transcript tail for a failed sample (score 0.0).
 
-        Uses the FIRST failed attempt only (attempts are sorted at load): the
-        first failure is the cheapest reproducible one, and one tail per sample
-        bounds the payload. Passed samples, and everything with the lever off,
-        return None (the field serializes as null either way, so responses are
-        byte-identical to before when disabled).
+        Walks the failed attempts in load order (attempts are sorted at load)
+        and returns the FIRST one with a readable transcript tail: the earliest
+        failure is the cheapest reproducible one, and one tail per sample bounds
+        the payload. A failed attempt with no recorded trial dir, or whose trial
+        recorded no transcript, does not end the search: the next failed attempt
+        is tried before giving up. Passed samples, and everything with the lever
+        off, return None (the field serializes as null either way, so responses
+        are byte-identical to before when disabled).
         """
         if not self.feedback_transcripts or score != 0.0 or not attempts:
+            return None
+        # feedback_max_bytes <= 0 means "no feedback", never "unbounded": a bare
+        # data[-0:] slice would return the WHOLE transcript, so the cap must be
+        # positive to emit anything at all.
+        if self.feedback_max_bytes <= 0:
             return None
         for attempt in attempts:
             rewards = (attempt.get("verifier_result") or {}).get("rewards")
@@ -424,20 +441,42 @@ class HarborRunner:
                 continue
             trial_dir = attempt.get("_trial_dir")
             if not trial_dir:
-                return None
-            return self._read_transcript_tail(Path(trial_dir))
+                continue
+            tail = self._read_transcript_tail(Path(trial_dir))
+            if tail is not None:
+                return tail
         return None
 
     def _read_transcript_tail(self, trial_dir: Path) -> str | None:
         """Last ``feedback_max_bytes`` of the trial's transcript: the terminal
         pane when present, else the trajectory; None (field omitted) when the
-        trial recorded neither."""
+        trial recorded neither.
+
+        A non-positive cap emits nothing (matches _failure_feedback's guard).
+        The transcript path is confined to the trial dir: a symlinked transcript
+        file, or a resolved path that escapes the trial dir, is skipped silently
+        so a hostile trial layout cannot exfiltrate files outside its own dir.
+        """
+        if self.feedback_max_bytes <= 0:
+            return None
+        trial_root = trial_dir.resolve()
         for rel in ("agent/terminus_2.pane", "agent/trajectory.json"):
             path = trial_dir / rel
+            # Reject symlinks outright, and any path that resolves outside the
+            # trial dir, before touching the bytes.
+            if path.is_symlink():
+                continue
+            try:
+                resolved = path.resolve()
+                resolved.relative_to(trial_root)
+            except (OSError, ValueError):
+                continue
             try:
                 data = path.read_bytes()
             except OSError:
                 continue
+            # errors="replace": a multibyte char straddling the cap boundary is
+            # rendered as U+FFFD rather than crashing the collation.
             return data[-self.feedback_max_bytes :].decode("utf-8", errors="replace")
         return None
 

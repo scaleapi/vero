@@ -172,6 +172,27 @@ def _warn_mode_b_sample_timeout(config: ServeConfig) -> None:
         )
 
 
+def _warn_mode_a_ignores_feedback_levers(config: ServeConfig) -> None:
+    """The transcript-feedback / attempt-detail levers ride the Mode-B nested
+    `harbor run` collation (HarborRunner). Mode A (config.harbor is None) never
+    builds a HarborRunner, so these do nothing there; say so rather than let an
+    author think feedback is on.
+    """
+    if config.harbor is not None:
+        return
+    mode_b_only = [
+        n
+        for n in ("feedback_transcripts", "expose_attempt_detail")
+        if getattr(config, n)
+    ]
+    if mode_b_only:
+        logger.warning(
+            "Mode A serve config sets Mode-B-only lever(s) %s; these have no "
+            "effect in Mode A (no nested `harbor run`) and will be ignored.",
+            ", ".join(mode_b_only),
+        )
+
+
 async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Verifier, str]:
     """Assemble the sidecar + verifier (sharing one engine) and the admin token."""
     vero_home = get_vero_home_dir()
@@ -191,6 +212,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         )
 
     _warn_mode_b_sample_timeout(config)
+    _warn_mode_a_ignores_feedback_levers(config)
 
     workspace = await GitWorkspace.create(config.repo_path)
 

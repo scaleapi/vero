@@ -180,6 +180,18 @@ class TestAttemptDetailTierGate:
                 assert "SecretTimeoutError" not in blob
                 assert "attempts" not in blob
 
+    @pytest.mark.asyncio
+    async def test_attempts_never_written_for_no_access(self, tmp_path):
+        # no_access is admin/verifier only: no per-sample files at all, so the
+        # attempt detail can never surface (mirrors the feedback no_access case).
+        sidecar = _sidecar(tmp_path, split="test")  # no_access
+        sidecar.engine.evaluate = AsyncMock(
+            return_value=self._experiment_with_attempts("test")
+        )
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="test"))
+        agent_vol = tmp_path / "agent_vol"
+        assert not agent_vol.exists() or not list(agent_vol.rglob("*.json"))
+
 
 class TestSubmit:
     @pytest.mark.asyncio

@@ -259,6 +259,22 @@ class Verifier:
                 f"auto_best mode but no candidate experiments on split "
                 f"'{self.selection_split}'."
             )
+        # Rank on FULL-split evals only, WHEN ANY EXIST. A subset eval
+        # (num_samples / sample_ids, taught by the multi-fidelity lever) records
+        # a mean over a handful of samples, so a lucky small subset can inflate a
+        # candidate's recorded score and push it into the top-K shortlist over a
+        # genuinely better full-split candidate. A full-split eval is recorded
+        # with dataset_subset_sample_ids = None (DatasetSubset.is_full_set); any
+        # non-null value is a subset. If at least one candidate has a full-split
+        # eval, subset evals are dropped for ranking so they cannot displace it.
+        # If EVERY eval is a subset, there is no full-split candidate to protect,
+        # so the subset evals are the only ranking signal and are kept (the
+        # winner is still decided by an admin re-score on the full split, so this
+        # only controls which commits enter the shortlist).
+        if "dataset_subset_sample_ids" in split_df.columns:
+            full_split_df = split_df[split_df["dataset_subset_sample_ids"].isna()]
+            if len(full_split_df) > 0:
+                split_df = full_split_df
         # Shortlist by recorded score (cheap, agent-influenced -> not trusted as
         # final), one row per candidate (highest recorded score wins the slot).
         ranked = split_df.sort_values(

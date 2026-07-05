@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SplitAccessSpec(BaseModel):
@@ -35,6 +35,11 @@ class TargetSpec(BaseModel):
 
 class BuildConfig(BaseModel):
     """Inputs to `vero harbor build`."""
+
+    # Reject unknown top-level keys so a mistyped lever fails loudly at load
+    # time instead of silently disabling the feature: pydantic's default is to
+    # ignore extras, which would turn `feeback_transcripts: true` into a no-op.
+    model_config = ConfigDict(extra="forbid")
 
     # identity
     name: str = Field(description="Harbor task name, 'org/name' format.")

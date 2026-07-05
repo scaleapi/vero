@@ -314,15 +314,28 @@ def test_instruction_omits_free_baseline_claim_when_unsupported(built):
     assert "budget-free" not in text
 
 
-def _multifidelity_config(tmp_path) -> BuildConfig:
+def _multifidelity_config_with_splits(tmp_path, splits) -> BuildConfig:
     return BuildConfig(
         name="vero/gsm8k-opt",
         agent_repo=str(_agent_repo(tmp_path)),
         mode="A",
         task="gsm8k",
         dataset=str(_dataset(tmp_path)),
-        splits=[{"split": "validation", "access": "non_viewable"}],
+        splits=splits,
         instruct_multifidelity=True,
+    )
+
+
+def _multifidelity_config(tmp_path) -> BuildConfig:
+    # Includes a viewable split so the section renders: multi-fidelity is gated
+    # on a viewable evaluable split existing (subset evals on a non_viewable
+    # split would leak per-sample scores; see the compiler ctx gate).
+    return _multifidelity_config_with_splits(
+        tmp_path,
+        [
+            {"split": "train", "access": "viewable"},
+            {"split": "validation", "access": "non_viewable"},
+        ],
     )
 
 
@@ -348,6 +361,54 @@ def test_instruction_omits_multifidelity_by_default(built):
     text = (built / "instruction.md").read_text()
     assert "--num-samples" not in text
     assert "Screen cheaply" not in text
+
+
+@pytest.mark.skipif(
+    not _HAS_SUBSET_EVALS, reason="sidecar in this tree has no subset evals"
+)
+def test_multifidelity_suppressed_when_only_non_viewable_evaluable(tmp_path, monkeypatch):
+    # Hidden-split leak guard: on a non_viewable split the sidecar returns
+    # mean_score inline, so a 1-sample subset eval (which the section teaches)
+    # recovers that sample's exact score. With no viewable evaluable split the
+    # section must NOT render even when instruct_multifidelity is set.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    out = compile_task(
+        _multifidelity_config_with_splits(
+            tmp_path,
+            [
+                {"split": "validation", "access": "non_viewable"},
+                {"split": "test", "access": "no_access"},
+            ],
+        ),
+        tmp_path / "task",
+        vero_root=_stub_vero(tmp_path),
+    )
+    text = (out / "instruction.md").read_text()
+    assert "--num-samples" not in text
+    assert "Screen cheaply" not in text
+
+
+@pytest.mark.skipif(
+    not _HAS_SUBSET_EVALS, reason="sidecar in this tree has no subset evals"
+)
+def test_multifidelity_rendered_when_a_viewable_split_exists(tmp_path, monkeypatch):
+    # A viewable split is safe to screen with subsets (its per-sample results are
+    # already visible), so the section renders.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    out = compile_task(
+        _multifidelity_config_with_splits(
+            tmp_path,
+            [
+                {"split": "train", "access": "viewable"},
+                {"split": "validation", "access": "non_viewable"},
+            ],
+        ),
+        tmp_path / "task",
+        vero_root=_stub_vero(tmp_path),
+    )
+    text = (out / "instruction.md").read_text()
+    assert "--num-samples" in text
+    assert "Screen cheaply" in text
 
 
 def test_multifidelity_gate_suppresses_section_without_subset_evals(tmp_path, monkeypatch):
@@ -493,3 +554,60 @@ class TestPartitionNameValidation:
             lambda ts: {"org/task-a"},
         )
         compiler._validate_partition_names({"train": ["bare-name"]}, "org/bench")  # no raise
+
+
+class TestUnknownFieldRejection:
+    """A mistyped lever key must fail loudly at load, not silently disable the
+    feature: pydantic's default ignores extras, so `feeback_transcripts: true`
+    would compile a task with feedback OFF and no warning."""
+
+    def test_typo_lever_key_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            BuildConfig.model_validate(yaml.safe_load(
+                "name: o/n\n"
+                "agent_repo: .\n"
+                "splits:\n"
+                "  - {split: validation, access: non_viewable}\n"
+                "feeback_transcripts: true\n"  # typo: feeback (missing 'd')
+            ))
+
+    def test_known_keys_still_accepted(self):
+        cfg = BuildConfig.model_validate(yaml.safe_load(
+            "name: o/n\n"
+            "agent_repo: .\n"
+            "splits:\n"
+            "  - {split: validation, access: non_viewable}\n"
+            "feedback_transcripts: true\n"
+        ))
+        assert cfg.feedback_transcripts is True
+
+
+class TestModeAIgnoresFeedbackLevers:
+    """Mode A ignores the Mode-B-only feedback levers (they ride the nested
+    `harbor run` collation). compile_task must warn so an author does not think
+    feedback is on when it is not."""
+
+    def test_mode_a_with_feedback_lever_warns(self, tmp_path, monkeypatch, caplog):
+        monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+        config = BuildConfig(
+            name="vero/gsm8k-opt",
+            agent_repo=str(_agent_repo(tmp_path)),
+            mode="A",
+            task="gsm8k",
+            dataset=str(_dataset(tmp_path)),
+            splits=[{"split": "validation", "access": "non_viewable"}],
+            feedback_transcripts=True,
+            expose_attempt_detail=True,
+        )
+        with caplog.at_level("WARNING", logger="vero.harbor.build.compiler"):
+            compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+        joined = " ".join(caplog.messages)
+        assert "Mode-B-only" in joined
+        assert "feedback_transcripts" in joined
+        assert "expose_attempt_detail" in joined
+
+    def test_mode_a_without_feedback_lever_does_not_warn(self, built, caplog):
+        # `built` fixture is a Mode A config with the levers off: no warning.
+        assert not any("Mode-B-only" in m for m in caplog.messages)

@@ -146,6 +146,91 @@ class TestAutoBestSelection:
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
 
 
+class TestSubsetEvalShortlistFilter:
+    """auto_best ranks the shortlist on FULL-split evals only. A subset eval
+    (num_samples / sample_ids) records a mean over a few samples, so a lucky
+    1-sample eval can inflate a candidate's recorded score and steal a shortlist
+    slot from a genuinely better full-split candidate. Full-split evals have
+    dataset_subset_sample_ids = None; subset evals carry a list and are ignored
+    for ranking (the admin re-score still runs on the full split)."""
+
+    @pytest.mark.asyncio
+    async def test_lucky_subset_eval_does_not_outrank_full_split(self, tmp_path):
+        # 'lucky' has a high 1-sample eval (recorded 0.95) but a low full-split
+        # eval (0.30). 'solid' has a higher full-split eval (0.70). With
+        # rescore_top_k=1 only one commit is shortlisted; ranking on full-split
+        # evals must shortlist 'solid', not 'lucky'.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["validation", "validation", "validation"],
+                "dataset_subset_dataset_id": ["ds1", "ds1", "ds1"],
+                "dataset_subset_sample_ids": [[0], None, None],  # lucky subset, then full splits
+                "candidate_commit": ["lucky", "lucky", "solid"],
+                "mean_score": [0.95, 0.30, 0.70],
+                "candidate_created_at": [3, 1, 2],
+            }
+        )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            # admin re-score agrees the full-split ranking is right
+            score = {"solid": 0.7, "lucky": 0.3}.get(commit, 0.5)
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="validation",
+            selection_task="math",
+            rescore_top_k=1,
+            auto_best_baseline_floor=False,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
+        )
+        await v.finalize()
+        # 'solid' is selected (target-scored); 'lucky' never entered the shortlist
+        rescored = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert "lucky" not in rescored
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "solid"
+
+    @pytest.mark.asyncio
+    async def test_all_subset_evals_still_rankable(self, tmp_path):
+        # When EVERY eval is a subset, there is no full-split candidate to
+        # protect, so the subset evals are the only ranking signal and are kept
+        # (a legitimate all-subset workflow must still select a candidate). The
+        # admin re-score on the full split remains the trust anchor.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["validation", "validation"],
+                "dataset_subset_dataset_id": ["ds1", "ds1"],
+                "dataset_subset_sample_ids": [[0], [0, 1]],
+                "candidate_commit": ["a", "b"],
+                "mean_score": [0.9, 0.8],
+                "candidate_created_at": [1, 2],
+            }
+        )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="validation",
+            selection_task="math",
+            auto_best_baseline_floor=False,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
+        )
+        rewards = (await v.finalize())["rewards"]
+        # a candidate was selected and target-scored (not floored)
+        assert rewards == {"reward": 0.5}
+        engine.evaluate_admin.assert_awaited()
+
+
 class TestAutoBestBaselineFloor:
     """auto_best never ships a candidate that fails to beat the baseline.
 
