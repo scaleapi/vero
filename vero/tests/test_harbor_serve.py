@@ -16,7 +16,7 @@ import pytest
 
 from vero.core.dataset.store import resolve_and_save_dataset
 from vero.evaluation.engine import EvalRequest
-from vero.harbor.serve import ServeConfig, build_components
+from vero.harbor.serve import ServeConfigA, ServeConfigB, build_components
 
 
 def _git(path: Path, *args: str) -> str:
@@ -103,8 +103,8 @@ def fixture(tmp_path, monkeypatch):
     return agent_dir, head, task_dir, dataset_id, tmp_path
 
 
-def _serve_config(agent_dir, head, task_dir, dataset_id, tmp) -> ServeConfig:
-    return ServeConfig(
+def _serve_config(agent_dir, head, task_dir, dataset_id, tmp) -> ServeConfigA:
+    return ServeConfigA(
         repo_path=str(agent_dir),
         agent_repo_path=str(agent_dir),
         session_id="sess",
@@ -223,16 +223,28 @@ async def test_ledger_reloads_spent_budget_across_restart(fixture):
 
 @pytest.mark.asyncio
 async def test_feedback_levers_reach_harbor_runner(fixture):
-    # Lever 1 pass-through: ServeConfig -> build_components -> HarborRunner kwargs
-    # (mirrors how score_baseline reaches the Verifier).
+    # Lever 1 pass-through: ServeConfigB -> build_components -> HarborRunner kwargs
+    # (mirrors how score_baseline reaches the Verifier). Built as a Mode-B config
+    # directly: the levers are Mode-B-only under the type split.
     agent_dir, head, task_dir, dataset_id, tmp = fixture
-    config = _serve_config(agent_dir, head, task_dir, dataset_id, tmp).model_copy(
-        update={
-            "harbor": {"task_source": "org/x", "agent_import_path": "p:C"},
-            "feedback_transcripts": True,
-            "feedback_max_bytes": 512,
-            "expose_attempt_detail": True,
-        }
+    config = ServeConfigB(
+        mode="B",
+        repo_path=str(agent_dir),
+        agent_repo_path=str(agent_dir),
+        session_id="sess",
+        dataset_id=dataset_id,
+        split_accesses=[{"split": "test", "access": "non_viewable"}],
+        budgets=[{"split": "test", "dataset_id": dataset_id, "total_run_budget": 5}],
+        harbor={"task_source": "org/x", "agent_import_path": "p:C"},
+        feedback_transcripts=True,
+        feedback_max_bytes=512,
+        expose_attempt_detail=True,
+        reward_mode="auto_best",
+        selection_split="test",
+        agent_volume=str(tmp / "agent_vol"),
+        admin_volume=str(tmp / "admin_vol"),
+        admin_token_path=str(tmp / "admin_vol" / "token"),
+        timeout=300,
     )
     sidecar, _, _ = await build_components(config)
     runner = sidecar.engine.evaluator.eval_strategy
@@ -241,26 +253,25 @@ async def test_feedback_levers_reach_harbor_runner(fixture):
     assert runner.expose_attempt_detail is True
 
 
-def test_mode_b_sample_timeout_warns(caplog):
-    # Setting sample_timeout in Mode B is a no-op (nested harbor tasks use their
-    # own timeouts); the author must be told rather than silently ignored.
-    from vero.harbor.serve import ServeConfig, _warn_mode_b_sample_timeout
+def test_mode_mismatch_fields_rejected():
+    # PR #20's runtime warnings are superseded by the Mode-A / Mode-B type split:
+    # a wrong-mode field is now a load-time ValidationError, not a no-op. Mode B
+    # has no sample_timeout, and Mode A has no feedback levers / harbor.
+    from pydantic import ValidationError
 
     base = dict(
         repo_path="/r", agent_repo_path="/a", session_id="s", dataset_id="ds",
         split_accesses=[], budgets=[], agent_volume="/v", admin_volume="/adm",
-        admin_token_path="/t", harbor={"task_source": "org/x", "agent_import_path": "p:C"},
+        admin_token_path="/t",
     )
-    with caplog.at_level("WARNING"):
-        _warn_mode_b_sample_timeout(ServeConfig(**base, sample_timeout=1200))
-    # caplog.messages (getMessage()) rather than r.message: pytest's capture
-    # handler does not run Formatter.format(), so .message may be unset.
-    assert any("not enforced in Mode B" in m for m in caplog.messages)
-
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        _warn_mode_b_sample_timeout(ServeConfig(**base))  # not explicitly set
-        _warn_mode_b_sample_timeout(
-            ServeConfig(**{**base, "harbor": None, "task_project": "/tp"}, sample_timeout=900)
-        )  # Mode A: sample_timeout is real
-    assert not caplog.records
+    # Mode B rejects sample_timeout.
+    with pytest.raises(ValidationError):
+        ServeConfigB(mode="B", harbor=None, sample_timeout=1200, **base)
+    # Mode A rejects harbor / feedback levers.
+    with pytest.raises(ValidationError):
+        ServeConfigA(harbor={"task_source": "org/x"}, **base)
+    with pytest.raises(ValidationError):
+        ServeConfigA(feedback_transcripts=True, **base)
+    # The valid arrangements still construct.
+    ServeConfigA(sample_timeout=900, task_project="/tp", **base)
+    ServeConfigB(mode="B", harbor={"task_source": "org/x"}, **base)

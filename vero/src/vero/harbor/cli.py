@@ -53,9 +53,9 @@ def serve_cmd(config_path):
 @click.option("-o", "--out", required=True, help="Output task directory.")
 def build_cmd(config_path, out):
     """Compile a build.yaml into a runnable Harbor optimization task directory."""
-    from vero.harbor.build import BuildConfig, compile_task
+    from vero.harbor.build import compile_task, load_build_config
 
-    task_dir = compile_task(BuildConfig.from_file(config_path), out)
+    task_dir = compile_task(load_build_config(config_path), out)
     click.echo(f"Compiled task -> {task_dir}")
 
 
@@ -70,9 +70,9 @@ def run_cmd(config_path, agent, model, provider, extra):
     import subprocess
     import tempfile
 
-    from vero.harbor.build import BuildConfig, compile_task
+    from vero.harbor.build import compile_task, load_build_config
 
-    task_dir = compile_task(BuildConfig.from_file(config_path), Path(tempfile.mkdtemp()) / "task")
+    task_dir = compile_task(load_build_config(config_path), Path(tempfile.mkdtemp()) / "task")
     cmd = ["uvx", "harbor", "run", "-p", str(task_dir), "-a", agent, "-e", provider]
     if model:
         cmd += ["-m", model]
