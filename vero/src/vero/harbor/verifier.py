@@ -201,7 +201,13 @@ class Verifier:
                     )
                     continue
                 score = exp.result.score()
-                return float(score) if score is not None else None
+                if score is None:
+                    # Should be unreachable (the strict check above already
+                    # passed), but a None here must consume a retry like any
+                    # other unmeasurable outcome, never bypass the loop.
+                    last_error = "eval returned no aggregate score"
+                    continue
+                return float(score)
             except Exception as exc:  # noqa: BLE001 - retried, then surfaced as None
                 last_error = exc
                 logger.warning(
