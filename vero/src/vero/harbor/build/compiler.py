@@ -367,6 +367,10 @@ def compile_task(
         description=config.description,
         mode=config.mode,
         timeout=config.timeout,
+        # The verifier phase runs the whole finalize battery (shortlist
+        # re-scores + floor + targets + baseline attempts), not one eval;
+        # unset falls back to `timeout` for backward compatibility.
+        verifier_timeout=config.verifier_timeout or config.timeout,
         secrets=config.secrets,
         read_only_paths=config.read_only_paths,
         base_image_main=config.base_image_main,

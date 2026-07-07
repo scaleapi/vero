@@ -82,6 +82,15 @@ class _BuildConfigBase(BaseModel):
     timeout: int = 1800
     max_concurrency: int = 8
 
+    # Wall-clock budget for the VERIFIER phase (Harbor's [verifier] timeout_sec).
+    # Finalize is not one eval: it runs up to rescore_top_k shortlist re-scores
+    # + 1 floor eval + len(targets) target evals + len(targets) x
+    # baseline_score_attempts baseline evals, each a full nested run in Mode B.
+    # Sizing this at one eval's duration kills finalize mid-flight and the trial
+    # ships NO reward.json. Defaults to `timeout` when unset; size it as
+    # (rescore_top_k + 1 + 3 x len(targets)) x a single eval's duration + slack.
+    verifier_timeout: int | None = None
+
 
 class BuildConfigA(_BuildConfigBase):
     """Mode A: vero runs inference + scoring against a saved dataset."""
