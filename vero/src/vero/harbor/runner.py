@@ -274,19 +274,26 @@ class HarborRunner:
             )
         return groups
 
-    @staticmethod
-    def _trial_rank(data: dict, result_json: Path) -> tuple:
+    def _trial_rank(self, data: dict, result_json: Path) -> tuple:
         """Sort key for picking the best of several trials of one task. Higher wins:
-        prefer a clean trial with rewards, then any trial with rewards, then the most
-        recent attempt (finished_at, falling back to file mtime)."""
-        has_rewards = bool((data.get("verifier_result") or {}).get("rewards"))
+        a clean scored trial first, then any scored trial, then the HIGHER REWARD,
+        then recency (finished_at, falling back to file mtime).
+
+        The reward must be part of the key: with concurrent attempts, finish order
+        is nondeterministic, so ranking on recency alone made 'best' mean "the last
+        clean attempt to finish", and a later clean 0.0 could silently replace an
+        earlier clean 1.0. 'best' has to be monotone in the attempt scores
+        (max-of-score, pass@k-like) or a passing trial can be clobbered."""
+        rewards = (data.get("verifier_result") or {}).get("rewards") or {}
+        reward = self._extract_reward(rewards) if rewards else None
+        has_rewards = reward is not None
         clean = has_rewards and not data.get("exception_info")
         finished_at = data.get("finished_at") or ""
         try:
             mtime = result_json.stat().st_mtime
         except OSError:
             mtime = 0.0
-        return (clean, has_rewards, finished_at, mtime)
+        return (clean, has_rewards, reward if has_rewards else -1.0, finished_at, mtime)
 
     def _sample_result(
         self,
@@ -315,51 +322,62 @@ class HarborRunner:
             if attempt_detail is not None:
                 output["attempts"] = attempt_detail
             return output
-        # Mean aggregation across attempts: average the reward over every SCORED
-        # attempt, dirty or clean. Harbor can record an exception (agent timeout,
-        # non-zero agent exit) and still run the verifier, so such an attempt
-        # carries a real measured 0.0; dropping it would estimate
-        # P(pass | attempt finished cleanly), which is non-monotone (one pass plus
-        # two timeouts would score 1.0) and systematically forgives candidates
-        # that make the agent slower. Only attempts with no rewards at all
-        # (failed before the verifier scored) are excluded. Falls through to the
-        # single best trial when nothing scored. `attempts` may also be present
-        # under 'best' aggregation (collation loads them for the feedback
-        # levers), so the mean path is gated on the config, not their presence.
+        # Mean aggregation across attempts: average the reward over every attempt
+        # that RAN. Harbor can record an exception (agent timeout, non-zero agent
+        # exit) and still run the verifier, so such an attempt carries a real
+        # measured 0.0. An attempt that died BEFORE the verifier scored it
+        # (crash, rate limit) is also a real, failed attempt and counts as 0.0:
+        # dropping it would estimate P(pass | attempt survived to scoring), which
+        # a candidate can game by dying early on hard tasks. Measured live: a
+        # no-retry candidate outscored its retry-hardened successors purely
+        # through dropped rate-limited attempts, and won selection on the
+        # artifact. n_dead in the metrics records how many zeros came from
+        # unscored attempts so infra noise stays visible. A sample where NO
+        # attempt scored falls through to the single-trial path (which errors):
+        # an all-dead sample is an outage to investigate, never a silent 0.0.
+        # `attempts` may also be present under 'best' aggregation (collation
+        # loads them for the feedback levers), so the mean path is gated on the
+        # config, not their presence.
         if attempts and self.config.aggregate_attempts == "mean":
-            scored_trials = [
-                t for t in attempts if (t.get("verifier_result") or {}).get("rewards")
-            ]
-            if scored_trials:
-                scored = [
-                    self._extract_reward((t.get("verifier_result") or {}).get("rewards"))
-                    for t in scored_trials
-                ]
-                n_clean = sum(
-                    1 for t in scored_trials if not t.get("exception_info")
-                )
-                if len(scored) < self.config.n_attempts:
-                    # Fewer measurements than configured (attempts died before
-                    # scoring, or the nested run was cut off): the mean is
-                    # noisier than the config promises. Never let k shrink
-                    # silently; n_scored in the metrics records the actual k.
+            measured: list[float] = []
+            n_scored = 0
+            n_dead = 0
+            n_clean = 0
+            for t in attempts:
+                rewards = (t.get("verifier_result") or {}).get("rewards") or {}
+                reward = self._extract_reward(rewards) if rewards else None
+                if reward is not None:
+                    measured.append(reward)
+                    n_scored += 1
+                    if not t.get("exception_info"):
+                        n_clean += 1
+                else:
+                    measured.append(0.0)
+                    n_dead += 1
+            if n_scored:
+                if len(measured) < self.config.n_attempts or n_dead:
+                    # Fewer or dirtier measurements than the config promises:
+                    # the mean is noisier (or partly zero-filled). Never let
+                    # that happen silently; the metrics carry the actual counts.
                     logger.warning(
-                        f"Task '{task_name}': mean over {len(scored)} scored "
-                        f"attempt(s) of {self.config.n_attempts} configured."
+                        f"Task '{task_name}': mean over {len(measured)} "
+                        f"attempt(s) of {self.config.n_attempts} configured "
+                        f"({n_scored} scored, {n_dead} dead counted 0.0)."
                     )
-                mean = sum(scored) / len(scored)
+                mean = sum(measured) / len(measured)
                 return SampleResult(
                     score=mean,
                     feedback=self._failure_feedback(mean, attempts),
                     metrics={
                         "reward_mean": mean,
                         "n_attempts": float(len(attempts)),
-                        "n_scored": float(len(scored)),
+                        "n_scored": float(n_scored),
+                        "n_dead": float(n_dead),
                         "n_clean": float(n_clean),
                     },
                     output=_out({
                         "task_name": task_name,
-                        "attempt_scores": scored,
+                        "attempt_scores": measured,
                         "aggregate": "mean",
                     }),
                     **common,
@@ -374,6 +392,21 @@ class HarborRunner:
                 **common,
             )
         score = self._extract_reward(rewards)
+        if score is None:
+            # The verifier scored, but not on the configured metric (or on
+            # several unrecognized ones). Scoring a substitute metric, or an
+            # average, would silently change what the number means: error loud.
+            return SampleResult(
+                error=(
+                    f"Rewards for task '{task_name}' carry no usable metric "
+                    f"(reward_key={self.config.reward_key!r}, "
+                    f"keys={sorted(rewards)})."
+                ),
+                output=_out(
+                    {"task_name": task_name, "trial_name": trial.get("trial_name")}
+                ),
+                **common,
+            )
         return SampleResult(
             score=score,
             feedback=self._failure_feedback(score, attempts),
@@ -386,12 +419,28 @@ class HarborRunner:
             **common,
         )
 
-    def _extract_reward(self, rewards: dict) -> float:
-        for key in (self.config.reward_key, "pass", "reward"):
-            if key and key in rewards:
+    def _extract_reward(self, rewards: dict) -> float | None:
+        """Reward for one trial's rewards dict, or None when no unambiguous
+        metric is present.
+
+        A configured reward_key is a contract: a rewards dict missing it is an
+        unscorable measurement (None), never a silent fallback to another key.
+        Falling back would let attempts within one mean be scored on different
+        metrics, and averaging arbitrary keys would let a candidate inflate its
+        score by emitting easy auxiliary metrics (lint, partial credit) beside
+        the real one. Without a configured key, 'pass' then 'reward' are
+        accepted, then a sole remaining key (unambiguous); several unrecognized
+        keys are refused (None), not averaged.
+        """
+        if self.config.reward_key:
+            value = rewards.get(self.config.reward_key)
+            return None if value is None else float(value)
+        for key in ("pass", "reward"):
+            if key in rewards:
                 return float(rewards[key])
-        values = [float(v) for v in rewards.values()]
-        return sum(values) / len(values) if values else 0.0
+        if len(rewards) == 1:
+            return float(next(iter(rewards.values())))
+        return None
 
     def _attempt_detail(self, attempts: list[dict] | None) -> list[dict] | None:
         """Lever 3: one {reward, exception} entry per attempt, in attempt order
@@ -437,8 +486,12 @@ class HarborRunner:
             return None
         for attempt in attempts:
             rewards = (attempt.get("verifier_result") or {}).get("rewards")
-            if not rewards or self._extract_reward(rewards) != 0.0:
+            reward = self._extract_reward(rewards) if rewards else None
+            if reward is not None and reward != 0.0:
                 continue
+            # reward is None = the attempt died before the verifier scored it.
+            # It counts as 0.0 in mean aggregation, so its transcript (which
+            # shows the crash) is fair feedback material like any failure.
             trial_dir = attempt.get("_trial_dir")
             if not trial_dir:
                 continue

@@ -101,14 +101,24 @@ class TestBuildCommand:
 
 
 class TestExtractReward:
-    def test_priority_pass_then_reward_then_mean(self):
+    def test_priority_pass_then_reward_then_sole_key(self):
         r = _runner()
         assert r._extract_reward({"pass": 1.0, "reward": 0.0}) == 1.0
         assert r._extract_reward({"reward": 0.7}) == 0.7
-        assert r._extract_reward({"a": 0.2, "b": 0.4}) == pytest.approx(0.3)
+        assert r._extract_reward({"accuracy": 0.9}) == 0.9  # sole key: unambiguous
+
+    def test_several_unknown_keys_refused_not_averaged(self):
+        # Averaging arbitrary keys would let a candidate inflate its score by
+        # emitting easy auxiliary metrics beside the real one.
+        assert _runner()._extract_reward({"a": 0.2, "b": 0.4}) is None
 
     def test_reward_key_override(self):
         assert _runner(reward_key="acc")._extract_reward({"acc": 0.9, "pass": 0.0}) == 0.9
+
+    def test_configured_key_is_strict_no_fallback(self):
+        # A configured reward_key missing from the dict is unscorable (None),
+        # never a silent substitution of 'pass'/'reward'.
+        assert _runner(reward_key="acc")._extract_reward({"pass": 1.0}) is None
 
 
 class TestCollate:
@@ -302,12 +312,13 @@ class TestCollateMismatchGuard:
 
 
 class TestMeanAttemptAggregation:
-    """aggregate_attempts='mean': average the reward across every SCORED
-    attempt, dirty or clean (de-noising; estimates per-attempt pass
-    probability). Harbor scores timed-out attempts 0.0 while also recording
-    the exception; those must count, or the mean forgives slow candidates.
-    Default 'best' keeps the existing latest-clean behavior, which inflates
-    toward pass@k.
+    """aggregate_attempts='mean': average the reward across every attempt
+    that RAN (de-noising; estimates per-attempt pass probability). Harbor
+    scores timed-out attempts 0.0 while also recording the exception; those
+    must count, or the mean forgives slow candidates. Attempts that died
+    BEFORE scoring count 0.0 too (n_dead in metrics), or dying early becomes
+    a scoring exploit. Default 'best' picks the single highest-scoring clean
+    trial (pass@k-like).
     """
 
     def _write(self, run, trial, task, rewards=None, exc=False):
@@ -334,9 +345,11 @@ class TestMeanAttemptAggregation:
         assert r.score == 0.5
         assert r.metrics["n_scored"] == 2.0
 
-    def test_mean_excludes_attempts_without_rewards(self, tmp_path):
-        # An attempt that died before the verifier scored it carries no
-        # measurement; it is excluded (but still counted in n_attempts).
+    def test_mean_zero_fills_attempts_without_rewards(self, tmp_path):
+        # An attempt that died before the verifier scored it is a real, failed
+        # attempt and counts 0.0. Excluding it would estimate
+        # P(pass | attempt survived), which rewards dying early on hard tasks:
+        # a live optimizer won selection on exactly that artifact.
         runner = HarborRunner(HarborConfig(
             task_source="org/ds", agent_import_path="p:m",
             n_attempts=2, aggregate_attempts="mean",
@@ -346,9 +359,37 @@ class TestMeanAttemptAggregation:
         self._write(run, "t0bad", "t0", exc=True)
         groups = runner._trial_groups(jobs)
         r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
-        assert r.score == 1.0
+        assert r.score == 0.5
         assert r.metrics["n_scored"] == 1.0
+        assert r.metrics["n_dead"] == 1.0
         assert r.metrics["n_attempts"] == 2.0
+
+    def test_mean_all_attempts_dead_errors_not_zero(self, tmp_path):
+        # Every attempt died before scoring: that is an outage to investigate,
+        # not a silent 0.0 measurement; the sample must surface as an error.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", exc=True)
+        self._write(run, "t0b", "t0", exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.error is not None
+        assert r.score is None
+
+    def test_best_rank_is_monotone_in_reward(self, tmp_path):
+        # 'best' must never let a later clean 0.0 clobber an earlier clean 1.0:
+        # the reward is part of the rank, recency only breaks ties.
+        runner = _runner()
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        # _write derives finished_at from len(trial)%10: "t0a" -> 00:03,
+        # "t0badlate" -> 00:09, so the 0.0 trial genuinely finishes LATER.
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0badlate", "t0", rewards={"reward": 0.0})
+        trials = runner._load_trials(jobs)
+        assert (trials["t0"]["verifier_result"]["rewards"]["reward"]) == 1.0
 
     def test_mean_counts_scored_exception_attempts(self, tmp_path):
         # The live-GAIA shape: harbor records AgentTimeoutError but still runs
@@ -482,7 +523,10 @@ class TestTimeoutSalvage:
         with caplog.at_level("WARNING", logger="vero.harbor.runner"):
             r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
         assert r.metrics["n_scored"] == 2.0
-        assert any("2 scored attempt(s) of 3 configured" in m for m in caplog.messages)
+        assert any(
+            "2 attempt(s) of 3 configured (2 scored, 0 dead" in m
+            for m in caplog.messages
+        )
 
 
 def _fb_runner(**kwargs):
