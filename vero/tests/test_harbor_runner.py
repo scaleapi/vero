@@ -834,3 +834,24 @@ class TestAttemptDetail:
         ))
         mean = self._result(mean_runner, jobs)
         assert "attempts" not in mean.output
+
+
+class TestMeanRewardKeyMismatch:
+    def test_mean_zero_fills_reward_key_mismatch(self, tmp_path):
+        # An attempt whose rewards LACK the configured key is unscorable on the
+        # configured metric and counts 0.0 in the mean (n_dead), exactly like
+        # dying pre-verifier: falling back to another key would score attempts
+        # within one mean on different metrics.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean", reward_key="acc",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        w = TestMeanAttemptAggregation()
+        w._write(run, "t0a", "t0", rewards={"acc": 1.0})
+        w._write(run, "t0b", "t0", rewards={"other": 1.0})
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 0.5
+        assert r.metrics["n_dead"] == 1.0
+        assert r.metrics["n_scored"] == 1.0
