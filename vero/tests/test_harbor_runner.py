@@ -636,6 +636,33 @@ class TestTranscriptFeedback:
         assert r.score == 0.0
         assert r.feedback is None
 
+    def test_empty_pane_falls_through_to_trajectory(self, tmp_path):
+        # An empty transcript file carries nothing and must not surface as ""
+        # feedback; the empty pane falls through to the trajectory.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(
+            jobs, "trial0", "t0", {"reward": 0.0}, pane="", trajectory='{"steps": [1]}'
+        )
+        assert self._result(runner, jobs).feedback == '{"steps": [1]}'
+
+    def test_all_empty_transcripts_yield_no_feedback(self, tmp_path):
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="", trajectory="")
+        assert self._result(runner, jobs).feedback is None
+
+    def test_no_rewards_error_sample_carries_crash_transcript(self, tmp_path):
+        # A candidate edit that crashes the agent before scoring lands in the
+        # no-verifier-rewards error branch; the transcript is the only way the
+        # optimizer can see the crash it caused.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", None, pane="crash tail")
+        r = self._result(runner, jobs)
+        assert r.error is not None
+        assert r.feedback == "crash tail"
+
     def test_first_failed_attempt_transcript_used(self, tmp_path):
         # Two failed attempts: the FIRST one's transcript (by finished_at) is
         # attached, deterministically, regardless of rglob order.

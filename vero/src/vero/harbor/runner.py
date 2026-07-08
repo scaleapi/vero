@@ -411,6 +411,12 @@ class HarborRunner:
         if not rewards:
             return SampleResult(
                 error=f"No verifier rewards for task '{task_name}'.",
+                # The agent died before scoring. A candidate edit that CRASHES
+                # the agent lands here, and "no verifier rewards" alone gives
+                # the optimizer no way to see its own crash; the transcript
+                # does. Passed as score 0.0: an unscored attempt counts as a
+                # failure everywhere else too.
+                feedback=self._failure_feedback(0.0, attempts),
                 output=_out(
                     {"task_name": task_name, "trial_name": trial.get("trial_name")}
                 ),
@@ -552,6 +558,12 @@ class HarborRunner:
             try:
                 data = path.read_bytes()
             except OSError:
+                continue
+            # An empty transcript carries nothing: keep looking (an empty pane
+            # must fall through to the trajectory), and if every candidate is
+            # empty return None so the caller tries the next failed attempt
+            # instead of emitting "" as feedback.
+            if not data:
                 continue
             # errors="replace": a multibyte char straddling the cap boundary is
             # rendered as U+FFFD rather than crashing the collation.
