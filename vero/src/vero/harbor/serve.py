@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -81,6 +82,10 @@ class _ServeConfigBase(BaseModel):
     # splits (full-split evals always pass; <=1 disables). See
     # EvaluationSidecar.k_anonymity_floor for the leak this closes.
     k_anonymity_floor: int = 5
+
+    # Consumed at COMPILE time (the instruction's exhaust-budget bullet);
+    # recorded here so serve.json mirrors build.yaml, like instruct_multifidelity.
+    instruct_exhaust_budget: bool = True
 
     # volumes / token
     agent_volume: str
@@ -155,8 +160,12 @@ def _load_or_build_ledger(
     a sidecar restart would reset all spent budget to full, letting the agent
     regain its full evaluation budget by triggering a restart. On startup we
     reconstruct each SplitBudget and restore its persisted ``remaining_*`` values.
-    Falls back to the configured budgets if the file is missing or unreadable
-    (fail-safe to the configured budget, never to unlimited).
+
+    A MISSING file is a fresh boot: configured budgets. A file that exists but
+    cannot be parsed fails CLOSED: metered budgets restore with zero remaining.
+    The old fallback (configured budgets) refunded the agent everything already
+    spent, so any crash that corrupted the flush minted budget; spend that
+    cannot be read must be treated as fully spent, never as never-happened.
     """
     if persist_path.exists():
         try:
@@ -181,11 +190,28 @@ def _load_or_build_ledger(
             )
             return BudgetLedger(budgets, persist_path=persist_path)
         except (json.JSONDecodeError, KeyError, OSError) as e:
-            logger.warning(
-                "Could not reload persisted ledger %s (%s); using configured budgets.",
+            logger.error(
+                "Persisted ledger %s exists but is unreadable (%s); failing "
+                "CLOSED: metered agent budgets restore as exhausted. Admin and "
+                "finalize are unaffected. The unreadable file is preserved at "
+                "%s; delete ledger.json deliberately to boot fresh.",
                 persist_path,
                 e,
+                persist_path.with_suffix(".corrupt"),
             )
+            try:  # keep the evidence: the next flush overwrites persist_path
+                shutil.copyfile(persist_path, persist_path.with_suffix(".corrupt"))
+            except OSError:
+                pass
+            budgets = []
+            for cfg in budget_cfgs:
+                b = SplitBudget(**cfg)
+                if b.total_sample_budget is not None:
+                    b.remaining_sample_budget = 0
+                if b.total_run_budget is not None:
+                    b.remaining_run_budget = 0
+                budgets.append(b)
+            return BudgetLedger(budgets, persist_path=persist_path)
     return BudgetLedger(
         [SplitBudget(**b) for b in budget_cfgs], persist_path=persist_path
     )

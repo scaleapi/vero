@@ -8,6 +8,7 @@ and that a real eval flows into verifier selection + scoring.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import textwrap
 from pathlib import Path
@@ -16,7 +17,12 @@ import pytest
 
 from vero.core.dataset.store import resolve_and_save_dataset
 from vero.evaluation.engine import EvalRequest
-from vero.harbor.serve import ServeConfigA, ServeConfigB, build_components
+from vero.harbor.serve import (
+    ServeConfigA,
+    ServeConfigB,
+    _load_or_build_ledger,
+    build_components,
+)
 
 
 def _git(path: Path, *args: str) -> str:
@@ -219,6 +225,40 @@ async def test_ledger_reloads_spent_budget_across_restart(fixture):
     sidecar2, _, _ = await build_components(config)
     reloaded = sidecar2.engine.budget.get(dataset_id, "test").remaining_run_budget
     assert reloaded == after, "sidecar restart must not refill spent budget"
+
+
+class TestLedgerFailClosed:
+    """A persisted ledger that exists but cannot be read fails CLOSED: spend
+    that cannot be reconstructed is treated as fully spent. The old fallback
+    (configured budgets) refunded the agent everything already spent, so any
+    crash that corrupted the flush minted budget."""
+
+    _CFGS = [{
+        "split": "validation", "dataset_id": "ds",
+        "total_run_budget": 5, "total_sample_budget": 50,
+    }]
+
+    def test_missing_file_boots_configured(self, tmp_path):
+        led = _load_or_build_ledger(self._CFGS, tmp_path / "ledger.json")
+        b = led.get("ds", "validation")
+        assert b.remaining_run_budget == 5
+        assert b.remaining_sample_budget == 50
+
+    def test_unparseable_file_fails_closed_and_keeps_evidence(self, tmp_path):
+        p = tmp_path / "ledger.json"
+        p.write_text("{definitely not json")
+        led = _load_or_build_ledger(self._CFGS, p)
+        b = led.get("ds", "validation")
+        assert b.remaining_run_budget == 0
+        assert b.remaining_sample_budget == 0
+        # the unreadable original survives for the operator to inspect
+        assert p.with_suffix(".corrupt").read_text() == "{definitely not json"
+
+    def test_malformed_entries_fail_closed(self, tmp_path):
+        p = tmp_path / "ledger.json"
+        p.write_text(json.dumps([{"no_split_key": 1}]))
+        led = _load_or_build_ledger(self._CFGS, p)
+        assert led.get("ds", "validation").remaining_run_budget == 0
 
 
 @pytest.mark.asyncio

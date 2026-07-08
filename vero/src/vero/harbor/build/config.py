@@ -72,6 +72,13 @@ class _BuildConfigBase(BaseModel):
     # mean_score, so singleton subsets would hand back per-sample labels.
     k_anonymity_floor: int = 5
 
+    # Instruction lever: render the "unspent budget is wasted" persistence
+    # bullet that tells the optimizer to keep spending (re-measure the champion,
+    # try one more variant) instead of stopping early. On by default (current
+    # behavior); off makes stopping-early a choice the agent arrives at itself,
+    # which is the ablation arm for measuring what the exhortation contributes.
+    instruct_exhaust_budget: bool = True
+
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.
     read_only_paths: list[str] = Field(default_factory=list)
