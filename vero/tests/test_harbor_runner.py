@@ -99,6 +99,24 @@ class TestBuildCommand:
         assert "-p" in cmd and str(tmp_path) in cmd
         assert "-d" not in cmd
 
+    def test_harbor_requirement_layers_trusted_cli(self):
+        # The overlay must come before the `harbor` executable name so uv
+        # resolves the CLI from the trusted spec, not the candidate's lockfile.
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1",
+                agent_import_path="pkg.mod:Agent",
+                harbor_requirement="harbor==0.1.17",
+            )
+        )
+        cmd = runner._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert cmd[:6] == ["uv", "run", "--project", "/wt", "--with", "harbor==0.1.17"]
+        assert cmd[6] == "harbor"
+
+    def test_no_harbor_requirement_keeps_candidate_env(self):
+        cmd = _runner()._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert "--with" not in cmd
+
 
 class TestExtractReward:
     def test_priority_pass_then_reward_then_sole_key(self):

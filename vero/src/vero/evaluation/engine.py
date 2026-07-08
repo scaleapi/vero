@@ -146,8 +146,18 @@ class EvaluationEngine:
     # Evaluation
     # ------------------------------------------------------------------
 
-    async def evaluate(self, req: EvalRequest, *, admin: bool = False) -> Experiment:
-        """Meter (unless admin) and run one evaluation; return the full Experiment.
+    async def evaluate(
+        self, req: EvalRequest, *, admin: bool = False, free: bool = False
+    ) -> Experiment:
+        """Meter (unless admin or free) and run one evaluation; return the full
+        Experiment.
+
+        ``admin`` and ``free`` are distinct authorities and must stay separate:
+        ``admin`` grants ACCESS (bypasses the tier gate and the ledger), while
+        ``free`` only waives the BUDGET debit for an otherwise ordinary agent
+        eval (the sidecar's one free baseline eval). A free eval still runs as
+        the agent: conflating the two let the free-baseline path evaluate
+        ``no_access`` splits and return their aggregate score to the agent.
 
         ``no_access`` gating is EXPLICIT and fail-closed: when ``split_accesses``
         is configured, the split's tier is resolved (an unlisted split defaults
@@ -163,7 +173,7 @@ class EvaluationEngine:
                     f"and cannot be evaluated by the agent."
                 )
         sample_ids, n = self.resolve_samples(req)
-        if not admin:
+        if not admin and not free:
             await self.budget.reserve(req.dataset_id, req.split, n)
         return await self.evaluator.evaluate(
             commit=req.commit,

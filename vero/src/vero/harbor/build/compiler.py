@@ -242,6 +242,7 @@ def _serve_config(
         "base_commit": base_commit,
         "submit_enabled": config.submit_enabled,
         "score_baseline": config.score_baseline,
+        "k_anonymity_floor": config.k_anonymity_floor,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,

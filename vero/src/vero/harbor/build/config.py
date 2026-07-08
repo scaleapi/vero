@@ -67,6 +67,11 @@ class _BuildConfigBase(BaseModel):
     # WORSE than the untouched repo is visible as a regression.
     score_baseline: bool = False
 
+    # Minimum sample count for agent-chosen subset evals of non_viewable splits
+    # (full-split evals always pass; <=1 disables). Aggregate responses carry
+    # mean_score, so singleton subsets would hand back per-sample labels.
+    k_anonymity_floor: int = 5
+
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.
     read_only_paths: list[str] = Field(default_factory=list)

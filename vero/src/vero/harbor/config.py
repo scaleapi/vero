@@ -30,6 +30,16 @@ class HarborConfig:
     #           estimates pass probability instead of pass@k (which "best"
     #           inflates toward).
     aggregate_attempts: str = "best"
+    # Trusted source for the nested `harbor` CLI, as a uv requirement spec
+    # (e.g. "harbor==0.1.17" or a pinned git URL). When set, the runner layers
+    # it over the candidate env with `uv run --with`, whose ephemeral overlay
+    # takes precedence for both the console script and sys.path — so the
+    # orchestrator that scores the candidate resolves from THIS spec, not from
+    # whatever the candidate's own pyproject/uv.lock pin (which the agent
+    # controls, and could point at a fork that fabricates trial results
+    # without running anything). None keeps the current behavior: the
+    # candidate env supplies harbor, and is trusted to.
+    harbor_requirement: str | None = None
     extra_args: list[str] = field(default_factory=list)  # passthrough harbor run flags
 
     def __post_init__(self) -> None:

@@ -77,6 +77,11 @@ class _ServeConfigBase(BaseModel):
     # on the selection split; it reverts to base_commit instead (needs base_commit).
     auto_best_baseline_floor: bool = True
 
+    # Minimum sample count for agent-chosen subset evals of non_viewable
+    # splits (full-split evals always pass; <=1 disables). See
+    # EvaluationSidecar.k_anonymity_floor for the leak this closes.
+    k_anonymity_floor: int = 5
+
     # volumes / token
     agent_volume: str
     admin_volume: str
@@ -240,6 +245,10 @@ async def build_components(
         eval_strategy=eval_strategy,
     )
 
+    split_accesses = [
+        SplitAccess(split=s.split, access=SplitAccessLevel(s.access))
+        for s in config.split_accesses
+    ]
     db = ExperimentDatabase(id=config.session_id)  # shared by engine (writes) + verifier (reads)
     engine = EvaluationEngine(
         evaluator=evaluator,
@@ -253,12 +262,12 @@ async def build_components(
         ),
         session_id=config.session_id,
         vero_home=vero_home,
+        # The engine-side no_access gate is only armed when split_accesses is
+        # set. Without it the ledger was the sole gate (no_access splits are
+        # unbudgeted, so reserve() raised) — and every unmetered path (admin,
+        # the free baseline eval) walked straight past it.
+        split_accesses=split_accesses,
     )
-
-    split_accesses = [
-        SplitAccess(split=s.split, access=SplitAccessLevel(s.access))
-        for s in config.split_accesses
-    ]
     sidecar = EvaluationSidecar(
         engine=engine,
         split_accesses=split_accesses,
@@ -267,6 +276,7 @@ async def build_components(
         admin_volume=Path(config.admin_volume),
         submit_enabled=config.submit_enabled,
         base_commit=config.base_commit,
+        k_anonymity_floor=config.k_anonymity_floor,
     )
     verifier = Verifier(
         engine=engine,

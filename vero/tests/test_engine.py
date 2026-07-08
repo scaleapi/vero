@@ -162,3 +162,35 @@ class TestNoAccessGate:
         )
         svc.evaluator.evaluate.assert_awaited_once()
         assert svc.status()[("dev", "ds1")].remaining_run_budget == 2
+
+
+class TestFreeEval:
+    """`free` waives only the budget debit; every access gate still applies.
+
+    free and admin are distinct authorities: the sidecar's free baseline eval
+    once rode the admin flag and could thereby evaluate no_access splits and
+    hand the agent their aggregate score."""
+
+    @pytest.mark.asyncio
+    async def test_free_runs_without_debiting_budget(self, monkeypatch):
+        svc = _make_service(monkeypatch=monkeypatch)
+        await svc.evaluate(
+            EvalRequest(dataset_id="ds1", split="dev", commit="c1", num_samples=10),
+            free=True,
+        )
+        svc.evaluator.evaluate.assert_awaited_once()
+        assert svc.status()[("dev", "ds1")].remaining_run_budget == 3
+        assert svc.status()[("dev", "ds1")].remaining_sample_budget == 100
+
+    @pytest.mark.asyncio
+    async def test_free_does_not_bypass_no_access_gate(self, monkeypatch):
+        from vero.core.dataset import SplitAccess
+
+        svc = _make_service(monkeypatch=monkeypatch)
+        svc.split_accesses = [SplitAccess.no_access("test")]
+        with pytest.raises(InvalidSplitError):
+            await svc.evaluate(
+                EvalRequest(dataset_id="ds1", split="test", commit="c1", num_samples=10),
+                free=True,
+            )
+        svc.evaluator.evaluate.assert_not_awaited()

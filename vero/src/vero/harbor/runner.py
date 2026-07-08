@@ -109,8 +109,18 @@ class HarborRunner:
         jobs_dir: Path,
     ) -> list[str]:
         c = self.config
-        cmd = [
-            "uv", "run", "--project", project_path,
+        cmd = ["uv", "run", "--project", project_path]
+        # Resolve the nested harbor from the trusted spec rather than the
+        # candidate's lockfile (see HarborConfig.harbor_requirement). This
+        # raises the bar from "edit one pyproject line" to "tamper with the
+        # orchestrator in-process at runtime"; it is not a full boundary —
+        # the agent's code still imports into the nested harbor process via
+        # --agent-import-path, so a hostile candidate can in principle still
+        # forge results from inside. Full isolation needs an out-of-process
+        # verifier and is tracked separately.
+        if c.harbor_requirement:
+            cmd += ["--with", c.harbor_requirement]
+        cmd += [
             "harbor", "run",
             *c.source_args(),
             "--agent-import-path", c.agent_import_path,
