@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -124,14 +125,20 @@ class EvaluationSidecar:
             and sha == self.base_commit
             and not self._free_baseline_used
         )
-        exp = await self.engine.evaluate(
-            replace(req, commit=sha), admin=admin, free=free_baseline
-        )
-        # Consume the freebie only after the eval succeeded: an eval that
-        # raised (invalid split, infra failure) has given the agent nothing,
-        # so it must not burn the one free reference measurement.
+        # Claim the freebie BEFORE the await (asyncio is atomic between await
+        # points, so a concurrent second baseline eval sees the claim and pays)
+        # and refund it if the eval raises: a failed eval gave the agent
+        # nothing, so it must not burn the one free reference measurement.
         if free_baseline:
             self._free_baseline_used = True
+        try:
+            exp = await self.engine.evaluate(
+                replace(req, commit=sha), admin=admin, free=free_baseline
+            )
+        except BaseException:
+            if free_baseline:
+                self._free_baseline_used = False
+            raise
         # Route with the agent's real tier even when the eval was unmetered.
         result_path = self._route_results(exp, admin=admin)
         budget_remaining = None
@@ -282,31 +289,45 @@ class EvaluationSidecar:
         # agent's earlier evidence for the same commit; repeat measurements are
         # exactly the ones worth comparing. result_path in the response names
         # the dir for THIS eval.
+        results_root = self.agent_volume / "results"
+        if self._eval_seq == 0 and results_root.exists():
+            # Volume reuse (sidecar restart): resume the ordinal past every
+            # surviving dir, or the first N evals of the new session would
+            # silently wipe __e1..__eN — the exact erasure this scheme exists
+            # to prevent.
+            self._eval_seq = max(
+                (
+                    int(m.group(1))
+                    for d in results_root.iterdir()
+                    if (m := re.search(r"__e(\d+)$", d.name))
+                ),
+                default=0,
+            )
         self._eval_seq += 1
-        dest = (
-            self.agent_volume
-            / "results"
-            / f"{split}__{commit[:12]}__e{self._eval_seq}"
-        )
-        if dest.exists():  # ordinal collision only on volume reuse; never merge
+        dest = results_root / f"{split}__{commit[:12]}__e{self._eval_seq}"
+        if dest.exists():  # unreachable after the resume scan; never merge
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
         # Aggregate summary is label-safe for both visible and partial tiers.
-        # n_scored / n_errored / score_se qualify the mean: a mean over 3
+        # n_scored / n_errored / mean_score_se qualify the mean: a mean over 3
         # scored samples of 18, or one dominated by errored zero-fills, is a
         # different measurement than a clean full-split mean, and the agent
         # (and any auditor) should see that without per-sample access.
+        # mean_score_se is named to bind it to mean_score: both are computed
+        # over the zero-filled n_samples population (score() fills errored
+        # samples with 0.0), NOT over the n_scored subset — an SE of the
+        # 3-of-18-scored mean would be a different (and larger) number.
         sample_results = experiment.result.sample_results
         filled = [
             r.score if r.score is not None else 0.0
             for r in sample_results.values()
         ]
-        score_se = None
+        mean_score_se = None
         if len(filled) > 1:
             m = sum(filled) / len(filled)
             var = sum((x - m) ** 2 for x in filled) / (len(filled) - 1)
-            score_se = (var / len(filled)) ** 0.5
+            mean_score_se = (var / len(filled)) ** 0.5
         (dest / "summary.json").write_text(
             json.dumps(
                 {
@@ -320,7 +341,7 @@ class EvaluationSidecar:
                         1 for r in sample_results.values() if r.is_error()
                     ),
                     "mean_score": experiment.result.score(),
-                    "score_se": score_se,
+                    "mean_score_se": mean_score_se,
                     "status": experiment.result.status.value,
                 },
                 indent=2,
