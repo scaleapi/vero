@@ -1,6 +1,7 @@
 """Tests for vero.harbor.server.EvaluationSidecar — handlers, tier-routing, submit."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -83,7 +84,7 @@ class TestRouting:
         )
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
 
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         assert (dest / "summary.json").exists()
         assert {(dest / f"{i}.json").exists() for i in range(3)} == {True}
         assert summary.result_path == str(dest)
@@ -94,7 +95,7 @@ class TestRouting:
         sidecar = _sidecar(tmp_path, split="validation")  # non_viewable -> partial
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
 
-        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456__e1"
         assert (dest / "summary.json").exists()
         # NO per-sample files -> the label-bearing feedback never reaches the agent
         assert not list(dest.glob("[0-9]*.json"))
@@ -128,7 +129,7 @@ class TestFeedbackTierGate:
             tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
         )
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         assert "secret-0" in (dest / "0.json").read_text()
 
     @pytest.mark.asyncio
@@ -172,7 +173,7 @@ class TestAttemptDetailTierGate:
             return_value=self._experiment_with_attempts("train")
         )
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         blob = json.loads((dest / "0.json").read_text())
         assert blob["output"]["attempts"] == [
             {"reward": 0.0, "exception": "SecretTimeoutError"}
@@ -227,6 +228,40 @@ class TestStatus:
         assert status.submit_enabled is True
         assert status.splits[0]["split"] == "train"
         assert status.splits[0]["remaining_run_budget"] == 5
+
+
+class TestHonestSummary:
+    """summary.json must qualify its mean: how many samples actually scored,
+    how many errored, and the standard error — a mean over 3-of-18 scored
+    samples is a different measurement than a clean full-split mean."""
+
+    @pytest.mark.asyncio
+    async def test_summary_carries_qualifiers(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation")
+        s = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        data = json.loads((Path(s.result_path) / "summary.json").read_text())
+        # scores are [0.0, 1.0, 0.0]
+        assert data["n_samples"] == 3
+        assert data["n_scored"] == 3
+        assert data["n_errored"] == 0
+        assert data["mean_score"] == pytest.approx(1 / 3)
+        assert data["score_se"] == pytest.approx(1 / 3)  # sd .5774 / sqrt(3)
+        # enum VALUE, not "ExperimentResultStatus.SUCCESS"
+        assert data["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_reevals_get_versioned_dirs(self, tmp_path):
+        # Repeat measurements of one commit are exactly the evidence worth
+        # comparing (multifidelity confirms, champion re-evals); the second
+        # eval must not erase the first.
+        sidecar = _sidecar(tmp_path, split="validation")
+        s1 = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        s2 = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert s1.result_path != s2.result_path
+        assert s1.result_path.endswith("__e1")
+        assert s2.result_path.endswith("__e2")
+        assert (Path(s1.result_path) / "summary.json").exists()
+        assert (Path(s2.result_path) / "summary.json").exists()
 
 
 class TestKAnonymityFloor:
@@ -327,7 +362,7 @@ class TestFreeBaselineEval:
         assert sidecar.engine.evaluate.await_args.kwargs["free"] is True
         assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
         # and results were routed with the agent tier (summary written)
-        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456__e1"
         assert (dest / "summary.json").exists()
 
     @pytest.mark.asyncio

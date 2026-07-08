@@ -82,6 +82,7 @@ class EvaluationSidecar:
         # but at >= k times the sample budget per label. <= 1 disables the floor.
         self.k_anonymity_floor = k_anonymity_floor
         self._free_baseline_used = False
+        self._eval_seq = 0  # per-eval ordinal for result-dir versioning
 
     # ------------------------------------------------------------------
     # Handlers (the HTTP layer resolves `admin` from auth and calls these)
@@ -275,24 +276,52 @@ class EvaluationSidecar:
             return None
 
         commit = experiment.run.candidate.commit
-        dest = self.agent_volume / "results" / f"{split}__{commit[:12]}"
-        # Recreate the dir so it reflects exactly this metered run. The dir is keyed
-        # only on (split, commit[:12]); a prior eval of the same commit on a larger
-        # sample set would otherwise leave stale per-sample files behind that this
-        # run did not produce, and result_path would surface them as if they were.
-        if dest.exists():
+        # Every metered eval gets its own versioned dir. Keying on
+        # (split, commit) alone forced a wipe-and-rewrite, so a re-measurement
+        # (a multifidelity confirm, a noise re-eval of the champion) erased the
+        # agent's earlier evidence for the same commit; repeat measurements are
+        # exactly the ones worth comparing. result_path in the response names
+        # the dir for THIS eval.
+        self._eval_seq += 1
+        dest = (
+            self.agent_volume
+            / "results"
+            / f"{split}__{commit[:12]}__e{self._eval_seq}"
+        )
+        if dest.exists():  # ordinal collision only on volume reuse; never merge
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
         # Aggregate summary is label-safe for both visible and partial tiers.
+        # n_scored / n_errored / score_se qualify the mean: a mean over 3
+        # scored samples of 18, or one dominated by errored zero-fills, is a
+        # different measurement than a clean full-split mean, and the agent
+        # (and any auditor) should see that without per-sample access.
+        sample_results = experiment.result.sample_results
+        filled = [
+            r.score if r.score is not None else 0.0
+            for r in sample_results.values()
+        ]
+        score_se = None
+        if len(filled) > 1:
+            m = sum(filled) / len(filled)
+            var = sum((x - m) ** 2 for x in filled) / (len(filled) - 1)
+            score_se = (var / len(filled)) ** 0.5
         (dest / "summary.json").write_text(
             json.dumps(
                 {
                     "split": split,
                     "commit": commit,
-                    "n_samples": len(experiment.result.sample_results),
+                    "n_samples": len(sample_results),
+                    "n_scored": sum(
+                        1 for r in sample_results.values() if r.score is not None
+                    ),
+                    "n_errored": sum(
+                        1 for r in sample_results.values() if r.is_error()
+                    ),
                     "mean_score": experiment.result.score(),
-                    "status": str(experiment.result.status),
+                    "score_se": score_se,
+                    "status": experiment.result.status.value,
                 },
                 indent=2,
             )

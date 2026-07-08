@@ -353,6 +353,12 @@ class HarborRunner:
             n_scored = 0
             n_dead = 0
             n_clean = 0
+            # Dead attempts are not interchangeable: a rate-limited attempt is
+            # infra noise that retunes with capacity, while a crash points at
+            # the candidate (or a task bug), and dead attempts cluster hard by
+            # cause in practice. n_dead alone hides that, so record the
+            # exception type behind every zero-filled attempt.
+            dead_types: dict[str, int] = {}
             for t in attempts:
                 rewards = (t.get("verifier_result") or {}).get("rewards") or {}
                 reward = self._extract_reward(rewards) if rewards else None
@@ -364,6 +370,11 @@ class HarborRunner:
                 else:
                     measured.append(0.0)
                     n_dead += 1
+                    exc = (t.get("exception_info") or {}).get("exception_type")
+                    # An attempt can die without a recorded exception (the
+                    # verifier simply produced no rewards); keep it countable.
+                    key = exc or "no_rewards_recorded"
+                    dead_types[key] = dead_types.get(key, 0) + 1
             if n_scored:
                 if len(measured) < self.config.n_attempts or n_dead:
                     # Fewer or dirtier measurements than the config promises:
@@ -375,6 +386,14 @@ class HarborRunner:
                         f"({n_scored} scored, {n_dead} dead counted 0.0)."
                     )
                 mean = sum(measured) / len(measured)
+                mean_output = {
+                    "task_name": task_name,
+                    "attempt_scores": measured,
+                    "aggregate": "mean",
+                }
+                if dead_types:
+                    # dict, not metrics: metrics are float-valued by contract.
+                    mean_output["dead_exception_types"] = dead_types
                 return SampleResult(
                     score=mean,
                     feedback=self._failure_feedback(mean, attempts),
@@ -385,11 +404,7 @@ class HarborRunner:
                         "n_dead": float(n_dead),
                         "n_clean": float(n_clean),
                     },
-                    output=_out({
-                        "task_name": task_name,
-                        "attempt_scores": measured,
-                        "aggregate": "mean",
-                    }),
+                    output=_out(mean_output),
                     **common,
                 )
         rewards = (trial.get("verifier_result") or {}).get("rewards") or {}

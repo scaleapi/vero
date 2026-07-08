@@ -382,6 +382,28 @@ class TestMeanAttemptAggregation:
         assert r.metrics["n_dead"] == 1.0
         assert r.metrics["n_attempts"] == 2.0
 
+    def test_mean_records_dead_exception_types(self, tmp_path):
+        # n_dead alone hides WHY attempts died, and cause matters: rate-limit
+        # deaths are infra noise, crashes point at the candidate, and deaths
+        # cluster hard by cause (E1: 110/129 UnicodeDecodeErrors sat on two
+        # tasks). Every zero-filled attempt gets its exception type counted.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0bad", "t0", exc=True)  # exception_type "X"
+        self._write(run, "t0gone", "t0")  # no rewards AND no exception recorded
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.output["dead_exception_types"] == {"X": 1, "no_rewards_recorded": 1}
+        # all-clean samples carry no key at all
+        self._write(run, "t1a", "t1", rewards={"reward": 1.0})
+        groups = runner._trial_groups(jobs)
+        r1 = runner._sample_result(groups["t1"][0], 1, "t1", _params(), attempts=groups["t1"])
+        assert "dead_exception_types" not in r1.output
+
     def test_mean_all_attempts_dead_errors_not_zero(self, tmp_path):
         # Every attempt died before scoring: that is an outage to investigate,
         # not a silent 0.0 measurement; the sample must surface as an error.
