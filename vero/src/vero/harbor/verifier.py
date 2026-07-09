@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -244,7 +245,13 @@ class Verifier:
             counts: dict[str, int] = {}
             for r in exp.result.sample_results.values():
                 if r.error:
-                    counts[r.error] = counts.get(r.error, 0) + 1
+                    # Group on the CAUSE, not the sample: runner errors embed
+                    # the task name ("No verifier rewards for task 'x/y'..."),
+                    # so keying on the raw string would leave every sample in
+                    # its own 1x bucket and a deterministic crash across a
+                    # multi-task slice would read as a mixed bag.
+                    key = re.sub(r"for task '[^']*'", "for task '…'", r.error)
+                    counts[key] = counts.get(key, 0) + 1
             if not counts:
                 return "no per-sample errors recorded"
             top = sorted(counts.items(), key=lambda i: -i[1])[:3]

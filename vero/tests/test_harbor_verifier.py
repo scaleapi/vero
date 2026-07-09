@@ -783,6 +783,37 @@ class TestSelectionIntegrity:
         assert "3x:" in result["target_errors"]["reward"]
 
     @pytest.mark.asyncio
+    async def test_crash_cause_clusters_across_task_names(self, tmp_path):
+        # Runner error strings embed the task name; a slice spanning several
+        # tasks that all die of the SAME exception must still cluster as one
+        # dominant cause (grouping normalizes the task name away), or the
+        # deterministic-crash signature degrades into 1x singletons.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        exp = MagicMock()
+        exp.result.score = MagicMock(return_value=None)
+        exp.result.sample_results = {
+            i: MagicMock(
+                error=(
+                    f"No verifier rewards for task 'org/task-{i}'. "
+                    f"(attempts died: UnsupportedParamsError x6)"
+                )
+            )
+            for i in range(3)
+        }
+        engine.evaluate_admin = AsyncMock(return_value=exp)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert "3x:" in result["target_errors"]["reward"]
+        assert "UnsupportedParamsError x6" in result["target_errors"]["reward"]
+
+    @pytest.mark.asyncio
     async def test_target_eval_retries_then_floors_with_error_marker(self, tmp_path):
         # A persistently failing target eval floors the reward (reward.json
         # must still ship) and records the outage in the wrapper so a floored
