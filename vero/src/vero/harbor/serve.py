@@ -43,6 +43,8 @@ class _TargetCfg(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only).
+    model: str | None = None
 
 
 class _ServeConfigBase(BaseModel):

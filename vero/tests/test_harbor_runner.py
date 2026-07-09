@@ -117,6 +117,19 @@ class TestBuildCommand:
         cmd = _runner()._build_command("/wt", _params(), ["t0"], Path("/jobs"))
         assert "--with" not in cmd
 
+    def test_model_override_beats_configured_model(self):
+        # Transfer targets: a per-eval executor override (via task_params)
+        # wins over the task's configured model.
+        params = _params()
+        params.task_params = {"harbor_model_override": "openai/gpt-4o"}
+        cmd = _runner()._build_command("/wt", params, ["t0"], Path("/jobs"))
+        m = cmd[cmd.index("-m") + 1]
+        assert m == "openai/gpt-4o"
+
+    def test_no_override_uses_configured_model(self):
+        cmd = _runner()._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert cmd[cmd.index("-m") + 1] == "anthropic/x"
+
 
 class TestExtractReward:
     def test_priority_pass_then_reward_then_sole_key(self):

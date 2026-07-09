@@ -129,8 +129,12 @@ class HarborRunner:
             "--n-attempts", str(c.n_attempts),
             "--max-retries", str(c.max_retries),
         ]
-        if c.model:
-            cmd += ["-m", c.model]
+        # Per-eval executor override (transfer targets): the verifier scores
+        # the champion under a model it was not optimized on. Rides
+        # task_params so it needs no runner state.
+        model = (params.task_params or {}).get("harbor_model_override") or c.model
+        if model:
+            cmd += ["-m", str(model)]
         for task_name in task_names:
             cmd += ["-i", task_name]
         cmd += ["--jobs-dir", str(jobs_dir), *c.extra_args]

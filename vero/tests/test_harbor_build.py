@@ -363,6 +363,34 @@ def test_instruction_omits_free_baseline_claim_when_unsupported(built):
     assert "budget-free" not in text
 
 
+def test_target_model_reaches_serve_json(tmp_path, monkeypatch):
+    # Transfer probe: a target's executor-model override must survive the
+    # compile into serve.json and validate back through ServeConfig.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfigA(
+        name="vero/gsm8k-opt",
+        agent_repo=str(_agent_repo(tmp_path)),
+        task="gsm8k",
+        task_module="gsm8k_agent.vero_tasks",
+        dataset=str(_dataset(tmp_path)),
+        splits=[
+            {"split": "validation", "access": "non_viewable"},
+            {"split": "test", "access": "no_access"},
+        ],
+        budgets=[{"split": "validation", "total_run_budget": 5}],
+        selection_split="validation",
+        targets=[
+            {"split": "test", "reward_key": "reward"},
+            {"split": "test", "reward_key": "reward_4o", "model": "openai/gpt-4o"},
+        ],
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    cfg = load_serve_config(out / "environment" / "sidecar" / "serve.json")
+    by_key = {t.reward_key: t for t in cfg.targets}
+    assert by_key["reward_4o"].model == "openai/gpt-4o"
+    assert by_key["reward"].model is None
+
+
 def test_instruction_renders_exhaust_budget_by_default(built):
     text = (built / "instruction.md").read_text()
     assert "Unspent budget is wasted" in text
