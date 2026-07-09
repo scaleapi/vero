@@ -997,6 +997,21 @@ class TestInfraResilience:
         monkeypatch.setattr("asyncio.sleep", _fast_sleep)
         return runner, calls, sleeps
 
+    def test_config_rejects_zero_delay_when_retries_enabled(self):
+        # A zero delay silently nullifies the backoff and an instant retry
+        # re-enters the same outage; misconfiguration must fail loudly.
+        with pytest.raises(ValueError, match="infra_retry_delay_s"):
+            HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                         infra_retry_rounds=1, infra_retry_delay_s=0.0)
+        # with retries off the delay is never used, so 0 is not an error
+        HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                     infra_retry_rounds=0, infra_retry_delay_s=0.0)
+
+    def test_config_rejects_negative_rounds(self):
+        with pytest.raises(ValueError, match="infra_retry_rounds"):
+            HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                         infra_retry_rounds=-1)
+
     def test_infra_deaths_labeled_and_counted_but_still_zero_filled(self, tmp_path):
         # One scored attempt, one infra death, one candidate crash: the mean
         # zero-fills BOTH deaths (classification must never move the score),
@@ -1103,8 +1118,8 @@ class TestInfraResilience:
         assert results[0].score == 1.0
         assert results[1].error is None and results[1].score == 0.5
         assert results[1].output["infra_retry"] == {
-            "round": 1,
-            "discarded_dead_attempts": {"ConnectionError[infra]": 2},
+            "recovered_round": 1,
+            "discarded_rounds": [{"ConnectionError[infra]": 2}],
         }
         assert "infra_retry" not in (results[0].output or {})
         assert len(calls) == 2
@@ -1231,9 +1246,9 @@ class TestInfraResilience:
         assert results[1].score == 1.0
         assert results[1].metrics["n_scored"] == 2.0
         assert results[1].metrics["n_dead"] == 0.0
-        assert results[1].output["infra_retry"]["discarded_dead_attempts"] == {
-            "ConnectionError[infra]": 2
-        }
+        assert results[1].output["infra_retry"]["discarded_rounds"] == [
+            {"ConnectionError[infra]": 2}
+        ]
 
     @pytest.mark.asyncio
     async def test_multi_round_backoff_and_partial_recovery(self, tmp_path, monkeypatch):
@@ -1256,8 +1271,18 @@ class TestInfraResilience:
             workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
         )
         results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
-        assert results[0].score == 1.0 and results[0].output["infra_retry"]["round"] == 1
-        assert results[1].score == 0.5 and results[1].output["infra_retry"]["round"] == 2
+        assert results[0].score == 1.0
+        assert results[0].output["infra_retry"] == {
+            "recovered_round": 1,
+            "discarded_rounds": [{"ConnectionError[infra]": 1}],
+        }
+        # t1 burned TWO rounds before recovering; the audit marker must list
+        # both, not just the round immediately before recovery.
+        assert results[1].score == 0.5
+        assert results[1].output["infra_retry"] == {
+            "recovered_round": 2,
+            "discarded_rounds": [{"TimeoutError[infra]": 1}, {"TimeoutError[infra]": 1}],
+        }
         assert [c[0] for c in calls] == [["t0", "t1"], ["t0", "t1"], ["t1"]]
         assert [c[1].name for c in calls[1:]] == ["jobs-infra-retry-1", "jobs-infra-retry-2"]
         assert sleeps == [30.0, 60.0]

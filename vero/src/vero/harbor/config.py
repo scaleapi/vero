@@ -76,6 +76,18 @@ class HarborConfig:
                 f"aggregate_attempts must be 'best' or 'mean', got "
                 f"{self.aggregate_attempts!r}"
             )
+        if self.infra_retry_rounds < 0:
+            raise ValueError(
+                f"infra_retry_rounds must be >= 0, got {self.infra_retry_rounds}"
+            )
+        # A zero (or negative) delay silently nullifies the backoff, and an
+        # instant retry re-enters the same outage: 6 of 8 run attempts once
+        # burned inside a single live DNS blip for exactly this reason.
+        if self.infra_retry_rounds > 0 and self.infra_retry_delay_s <= 0:
+            raise ValueError(
+                f"infra_retry_delay_s must be > 0 when infra retries are "
+                f"enabled, got {self.infra_retry_delay_s}"
+            )
 
     @property
     def is_registry(self) -> bool:

@@ -173,14 +173,17 @@ class HarborRunner:
         ``infra_retry`` audit marker naming the discarded dead attempts, so
         the re-measurement is never invisible in the durable record.
         """
+        # Every discarded round per sample, in round order: a sample that
+        # rides several retry rounds before recovering must surface ALL the
+        # rounds it burned, not just the last one before recovery.
+        discard_history: dict[int, list[dict[str, int]]] = {}
         for round_no in range(1, self.config.infra_retry_rounds + 1):
             retry: list[tuple[int, str]] = []
-            prior_dead: dict[int, dict[str, int]] = {}
             for sid, t in pairs:
                 dead = self._transient_infra_dead(params, sid)
                 if dead:
                     retry.append((sid, t))
-                    prior_dead[sid] = dead
+                    discard_history.setdefault(sid, []).append(dead)
             if not retry:
                 return
             delay = self.config.infra_retry_delay_s * round_no
@@ -211,30 +214,31 @@ class HarborRunner:
                 )
                 continue
             self._collate(round_dir, got, params, ran=[t for _, t in got])
-            self._mark_recovered(params, got, prior_dead, round_no)
+            self._mark_recovered(params, got, discard_history, round_no)
 
     def _mark_recovered(
         self,
         params: EvaluationParameters,
         got: list[tuple[int, str]],
-        prior_dead: dict[int, dict[str, int]],
+        discard_history: dict[int, list[dict[str, int]]],
         round_no: int,
     ) -> None:
         """Stamp the audit marker onto samples the retry round recovered.
 
         A successful retry rebooks the sample from the fresh round alone, so
         without this the durable record would show a clean measurement with no
-        trace that a full round of dead attempts was discarded, and a
+        trace that full rounds of dead attempts were discarded, and a
         discarded round is exactly the kind of fact an auditor of the scores
-        must be able to see."""
+        must be able to see. ``discarded_rounds`` lists every burned round in
+        order, not just the one immediately before recovery."""
         for sid, _ in got:
             result = self._existing(params, sid)
             if result is None or result.is_error():
                 continue  # still failed; the error itself is the audit trail
             output = result.output if isinstance(result.output, dict) else {}
             output["infra_retry"] = {
-                "round": round_no,
-                "discarded_dead_attempts": prior_dead.get(sid, {}),
+                "recovered_round": round_no,
+                "discarded_rounds": discard_history.get(sid, []),
             }
             result.output = output
             save_sample_result(
