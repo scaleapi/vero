@@ -756,6 +756,33 @@ class TestSelectionIntegrity:
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
 
     @pytest.mark.asyncio
+    async def test_floored_target_records_dominant_crash_cause(self, tmp_path):
+        # An all-errored target eval floors the reward AND names the dominant
+        # per-sample cause in target_errors: a champion that deterministically
+        # crashes on this target's executor must be distinguishable from an
+        # infra outage in the one durable record.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        crash = "No verifier rewards for task 't'. (attempts died: UnsupportedParamsError x6)"
+        exp = MagicMock()
+        exp.result.score = MagicMock(return_value=None)
+        exp.result.sample_results = {
+            i: MagicMock(error=crash) for i in range(3)
+        }
+        engine.evaluate_admin = AsyncMock(return_value=exp)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"reward": 0.0}
+        assert "UnsupportedParamsError x6" in result["target_errors"]["reward"]
+        assert "3x:" in result["target_errors"]["reward"]
+
+    @pytest.mark.asyncio
     async def test_target_eval_retries_then_floors_with_error_marker(self, tmp_path):
         # A persistently failing target eval floors the reward (reward.json
         # must still ship) and records the outage in the wrapper so a floored

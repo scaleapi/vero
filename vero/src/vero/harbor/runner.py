@@ -409,8 +409,28 @@ class HarborRunner:
                 )
         rewards = (trial.get("verifier_result") or {}).get("rewards") or {}
         if not rewards:
+            # Name the cause in the error string itself: it is the one field
+            # that flows everywhere (DB, per-sample files, the verifier's
+            # target_errors), and "no verifier rewards" alone cannot separate
+            # a champion that crashes deterministically on this executor from
+            # an infra outage — a distinction that decides whether the cell is
+            # a measurement or a re-run.
+            cause = ""
+            if attempts:
+                dead = {}
+                for t in attempts:
+                    if (t.get("verifier_result") or {}).get("rewards"):
+                        continue
+                    exc = (t.get("exception_info") or {}).get("exception_type")
+                    key = exc or "no_rewards_recorded"
+                    dead[key] = dead.get(key, 0) + 1
+                if dead:
+                    causes = ", ".join(
+                        f"{k} x{v}" for k, v in sorted(dead.items(), key=lambda i: -i[1])
+                    )
+                    cause = f" (attempts died: {causes})"
             return SampleResult(
-                error=f"No verifier rewards for task '{task_name}'.",
+                error=f"No verifier rewards for task '{task_name}'.{cause}",
                 # The agent died before scoring. A candidate edit that CRASHES
                 # the agent lands here, and "no verifier rewards" alone gives
                 # the optimizer no way to see its own crash; the transcript

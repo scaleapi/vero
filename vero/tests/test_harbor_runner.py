@@ -663,6 +663,20 @@ class TestTranscriptFeedback:
         assert r.error is not None
         assert r.feedback == "crash tail"
 
+    def test_no_rewards_error_names_dead_exception_types(self, tmp_path):
+        # The error string must carry WHY the attempts died: it is the one
+        # field that flows to the DB, the per-sample files, and the verifier's
+        # target_errors, and it separates a deterministic candidate crash
+        # (measured live: 72/72 UnsupportedParamsError on an off-model
+        # executor) from an infra outage.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", None, exception_type="UnsupportedParamsError")
+        _write_trial(jobs, "trial1", "t0", None, exception_type="UnsupportedParamsError")
+        r = self._result(runner, jobs)
+        assert r.error is not None
+        assert "UnsupportedParamsError x2" in r.error
+
     def test_first_failed_attempt_transcript_used(self, tmp_path):
         # Two failed attempts: the FIRST one's transcript (by finished_at) is
         # attached, deterministically, regardless of rglob order.
