@@ -10,22 +10,24 @@ from uuid import uuid4
 
 from vero.agents.base import BaseAgent
 from vero.artifacts import FileSystemArtifact
-from vero.core.constants import default_minimum_score
 from vero.core.dataset import (
     SplitAccess,
     default_split_accesses,
 )
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluator import Evaluator
 from vero.filesystem import AccessRule, AccessType
-from vero.logging import SessionLogger, log_experiments_to_wandb
+from vero.logging import (
+    SessionLogger,
+    log_evaluations_to_wandb,
+    log_experiments_to_wandb,
+)
 from vero.sandbox import Sandbox
 from vero.session import BestVersion, Session
 from vero.tools import ToolRegistry
 from vero.tools.experiment_runner import SplitBudget
 from vero.utils import random_readable_id, recursively_serialize
-from vero.workspace import GitWorkspace
+from vero.workspace import GitWorkspace, Workspace
 
 if TYPE_CHECKING:
     import wandb
@@ -33,6 +35,18 @@ if TYPE_CHECKING:
     from jinja2 import Template
 
     DatasetT = Path | str | DatasetDict
+
+    from vero.evaluation import (
+        BudgetLedger,
+        EvaluationBackend,
+        EvaluationDatabase,
+        EvaluationEngine,
+        EvaluationLimits,
+        EvaluationRecord,
+        EvaluationSet,
+        ObjectiveSpec,
+    )
+    from vero.optimization import CandidateProducer, OptimizationRun, ProgramPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -96,11 +110,20 @@ class Policy:
     """
 
     # --- Core ---
-    project_path: (
-        Path | str
-    )  # Config input; resolved path is session.project_path (may differ after isolate/copy)
-    dataset: DatasetT | dict[str, DatasetT]
-    agent: BaseAgent
+    project_path: Path | str | None = None
+    dataset: DatasetT | dict[str, DatasetT] | None = None
+    agent: BaseAgent | None = None
+    workspace: Workspace | None = None
+    optimizer: CandidateProducer | None = None
+    backends: dict[str, EvaluationBackend] | None = None
+    default_backend_id: str | None = None
+    evaluation_set: EvaluationSet | None = None
+    objective: ObjectiveSpec | None = None
+    program_limits: EvaluationLimits | None = None
+    program_parameters: dict[str, Any] = field(default_factory=dict)
+    program_seed: int | None = None
+    program_budget_ledger: BudgetLedger | None = None
+    max_candidates: int = 1
     task: str | None = None
     task_project: Path | str | None = None
     task_module: str | None = None
@@ -165,6 +188,24 @@ class Policy:
     # --- Runtime ---
     session: Session | None = field(default=None, repr=False)
     session_logger: SessionLogger | None = field(default=None, repr=False)
+    program_policy: ProgramPolicy | None = field(default=None, init=False, repr=False)
+    evaluation_engine: EvaluationEngine | None = field(default=None, init=False, repr=False)
+    evaluation_db: EvaluationDatabase | None = field(default=None, init=False, repr=False)
+    program_run: OptimizationRun | None = field(default=None, init=False, repr=False)
+
+    @property
+    def is_program_policy(self) -> bool:
+        """Whether this Policy uses generic program evaluation rather than VeroTask."""
+        return self.dataset is None and any(
+            value is not None
+            for value in (
+                self.workspace,
+                self.optimizer,
+                self.backends,
+                self.evaluation_set,
+                self.objective,
+            )
+        )
 
     @property
     def _vero_home(self) -> Path:
@@ -212,11 +253,31 @@ class Policy:
         logger.debug(f"Session ID: {self.session_id}")
         create_session_dir(self.sessions_dir, self.session_id)
 
+        configured_project_path = (
+            Path(self.project_path)
+            if self.project_path is not None
+            else Path(self.workspace.project_path)
+            if self.workspace is not None
+            else None
+        )
+        if configured_project_path is None:
+            raise ValueError("Policy requires project_path or workspace")
+
         self.session = Session(
             session_id=self.session_id,
-            project_path=Path(self.project_path),
+            project_path=configured_project_path,
             vero_home=self._vero_home,
         )
+
+        if self.is_program_policy:
+            await self._init_program_policy()
+            return
+
+        if self.dataset is None or self.agent is None:
+            raise ValueError(
+                "VeroTask Policy requires both dataset and agent; generic program "
+                "Policy requires backends, evaluation_set, and objective"
+            )
 
         # Git workspace — create via sandbox.run() git commands
         project_path = Path(self.project_path)
@@ -337,26 +398,9 @@ class Policy:
         self._validate_budget_splits()
         self.session.budget = self.budget
 
-        # Evaluator — with explicit subprocess env
-        self.session.evaluator = Evaluator(
-            self.session.workspace,
-            self.session_id,
-            vero_home=self._vero_home,
-            subprocess_env_vars=self.subprocess_env_vars,
-            task_project=Path(self.task_project) if self.task_project else None,
-            task_module=self.task_module,
-        )
-
-        # Register artifact callbacks on evaluator so they fire for all eval paths
-        if self.artifacts:
-            vero_dir = f"{self.session.workspace.project_path}/_vero"
-            sandbox = self.session.workspace.sandbox
-
-            async def _on_experiment(exp):
-                for a in self.artifacts:
-                    await a.on_experiment(self, exp, vero_dir, sandbox)
-
-            self.session.evaluator.on_experiment.append(_on_experiment)
+        # Canonical engine with the existing Python task runner isolated behind
+        # one approved VeroTask backend.
+        await self._init_vero_task_evaluation()
 
         # Filesystem
         if self.filesystem_accesses is None:
@@ -365,9 +409,6 @@ class Policy:
             self.filesystem_accesses = resolve_filesystem_accesses(
                 Path(self.session.workspace.project_path)
             )
-
-        # Database (before artifacts, since TracesArtifact reads existing experiments)
-        self.session.db = self._maybe_make_db()
 
         # Remaining session fields from config
         self.session.split_accesses = self.split_accesses
@@ -407,6 +448,299 @@ class Policy:
 
         # Initialize agent
         self.agent.init(self.session)
+
+    async def _init_program_policy(self) -> None:
+        """Initialize the canonical dataset-free Policy path."""
+        from vero.core.sessions import (
+            get_session_db_path,
+            get_session_experiments_dir,
+        )
+        from vero.evaluation import (
+            BackendRegistry,
+            EvaluationDatabase,
+            EvaluationEngine,
+            EvaluationLimits,
+            Evaluator as ProgramEvaluator,
+        )
+        from vero.optimization import AgentCandidateProducer, ProgramPolicy
+
+        if not self.backends:
+            raise ValueError("generic program Policy requires at least one backend")
+        if self.evaluation_set is None:
+            raise ValueError("generic program Policy requires evaluation_set")
+        if self.objective is None:
+            raise ValueError("generic program Policy requires objective")
+        backend_id = self.default_backend_id
+        if backend_id is None:
+            if len(self.backends) != 1:
+                raise ValueError(
+                    "default_backend_id is required when multiple backends are registered"
+                )
+            backend_id = next(iter(self.backends))
+
+        if self.workspace is None:
+            if self.sandbox is None:
+                from vero.sandbox import LocalSandbox
+
+                self.sandbox = await LocalSandbox.create()
+            self.workspace = await GitWorkspace.from_path(
+                self.sandbox,
+                str(self.project_path),
+            )
+        workspace = self.workspace
+        if await workspace.is_dirty():
+            raise ValueError("generic program Policy requires a clean workspace")
+        if isinstance(workspace, GitWorkspace):
+            base_version = await workspace.resolve_ref(self.ref)
+            base_branch = await workspace.current_branch()
+        else:
+            base_version = await workspace.current_version()
+            base_branch = None
+
+        self.session.workspace = workspace
+        self.session.project_path = Path(workspace.project_path)
+        self.session.base_version = base_version
+        self.session.base_branch = base_branch
+
+        database_path = get_session_db_path(self.sessions_dir, self.session_id)
+        database = (
+            EvaluationDatabase.load_from_file(database_path)
+            if database_path.exists()
+            else EvaluationDatabase.from_evaluations_dir(
+                get_session_experiments_dir(self.sessions_dir, self.session_id),
+                db_id=self.session_id,
+            )
+        )
+        evaluator = ProgramEvaluator(
+            workspace=workspace,
+            sessions_dir=self.sessions_dir,
+            session_id=self.session_id,
+            use_copy=self.use_copy if isinstance(self.use_copy, bool) else True,
+        )
+        engine = EvaluationEngine(
+            evaluator=evaluator,
+            backends=BackendRegistry(self.backends),
+            database=database,
+            database_path=database_path,
+            budget_ledger=self.program_budget_ledger,
+        )
+
+        if self.filesystem_accesses is None:
+            from vero.core.veroaccess import resolve_filesystem_accesses
+
+            self.filesystem_accesses = resolve_filesystem_accesses(
+                Path(workspace.project_path)
+            )
+        workspace.set_access(
+            self.filesystem_accesses,
+            self.filesystem_default_access,
+        )
+        self._render_instructions()
+
+        producer = self.optimizer
+        self.evaluation_db = database
+        self.evaluation_engine = engine
+        self.program_policy = ProgramPolicy(
+            workspace=workspace,
+            engine=engine,
+            backend_id=backend_id,
+            evaluation_set=self.evaluation_set,
+            objective=self.objective,
+            optimizer=producer,
+            parameters=self.program_parameters,
+            limits=self.program_limits or EvaluationLimits(),
+            seed=self.program_seed,
+            max_candidates=self.max_candidates,
+            base_version=base_version,
+        )
+        self.session.program_policy = self.program_policy
+        self.session.evaluation_engine = engine
+        self.session.evaluation_database = database
+        self.session.evaluation_backend_id = backend_id
+        self.session.evaluation_objective = self.objective
+        if producer is None and self.agent is not None:
+            tool_sets = getattr(self.agent, "tool_sets", None)
+            if isinstance(tool_sets, list):
+                from vero.tools import EvaluationRunnerTool, EvaluationViewer
+
+                if not any(isinstance(tool, EvaluationRunnerTool) for tool in tool_sets):
+                    tool_sets.append(EvaluationRunnerTool())
+                if not any(isinstance(tool, EvaluationViewer) for tool in tool_sets):
+                    tool_sets.append(EvaluationViewer())
+            self.agent.init(self.session)
+            self.program_policy.optimizer = AgentCandidateProducer(
+                self.agent,
+                prompt=self.prompt,
+                max_turns=self.max_turns,
+                on_event=self._fire_event,
+            )
+        self.session.evaluator = evaluator  # type: ignore[assignment]
+        self.session.db = database  # type: ignore[assignment]
+
+    async def _init_vero_task_evaluation(self) -> None:
+        """Route the dataset-oriented API through canonical evaluation contracts."""
+        from vero.core.sessions import (
+            get_session_db_path,
+            get_session_experiments_dir,
+            get_session_dir,
+        )
+        from vero.evaluation import (
+            BackendRegistry,
+            BudgetLedger,
+            EvaluationBudget,
+            EvaluationDatabase,
+            EvaluationEngine,
+            Evaluator as ProgramEvaluator,
+            VeroTaskBackend,
+            VeroTaskBackendConfig,
+            VeroTaskEvaluatorAdapter,
+            compatibility_objective,
+            evaluation_database_to_experiment_database,
+            evaluation_record_to_experiment,
+        )
+
+        assert self.session is not None
+        assert self.session.workspace is not None
+
+        database_path = get_session_db_path(self.sessions_dir, self.session_id)
+        database = (
+            EvaluationDatabase.load_from_file(database_path)
+            if database_path.exists()
+            else EvaluationDatabase(id=self.session_id)
+        )
+        reconstructed = EvaluationDatabase.from_evaluations_dir(
+            get_session_experiments_dir(self.sessions_dir, self.session_id),
+            db_id=self.session_id,
+        )
+        for record in reconstructed.evaluations.values():
+            database.add_evaluation(record)
+
+        environment_names = []
+        if isinstance(self.subprocess_env_vars, list):
+            environment_names = [
+                item if isinstance(item, str) else item[0]
+                for item in self.subprocess_env_vars
+            ]
+        elif self.subprocess_env_vars is not None:
+            environment_names = [str(self.subprocess_env_vars)]
+
+        backend_id = "vero-task"
+        backend = VeroTaskBackend(
+            VeroTaskBackendConfig(
+                session_id=self.session_id,
+                vero_home=str(self._vero_home),
+                task=self.task,
+                task_project=str(Path(self.task_project).resolve())
+                if self.task_project
+                else None,
+                task_module=self.task_module,
+                subprocess_env_vars=environment_names,
+                error_rate_threshold=self.evaluation_parameters.error_rate_threshold,
+                use_threading=self.evaluation_parameters.use_threading,
+            ),
+            subprocess_env_vars=self.subprocess_env_vars,
+        )
+
+        budget_path = get_session_dir(
+            self.sessions_dir,
+            self.session_id,
+        ) / "evaluation_budget.json"
+        if budget_path.exists():
+            ledger = BudgetLedger.load(budget_path)
+        else:
+            canonical_budgets = []
+            for split_budget in self.budget or []:
+                evaluation_set = self._dataset_evaluation_set(
+                    dataset_id=split_budget.dataset_id,
+                    split=split_budget.split,
+                )
+                canonical_budgets.append(
+                    EvaluationBudget(
+                        backend_id=backend_id,
+                        evaluation_set_key=evaluation_set.budget_key(backend_id),
+                        total_runs=split_budget.total_run_budget,
+                        remaining_runs=split_budget.remaining_run_budget,
+                        total_cases=split_budget.total_sample_budget,
+                        remaining_cases=split_budget.remaining_sample_budget,
+                        max_cases_per_run=split_budget.max_samples_per_run,
+                    )
+                )
+            ledger = BudgetLedger(canonical_budgets, path=budget_path)
+            ledger.save()
+
+        evaluator = ProgramEvaluator(
+            workspace=self.session.workspace,
+            sessions_dir=self.sessions_dir,
+            session_id=self.session_id,
+            use_copy=self.use_copy if isinstance(self.use_copy, bool) else False,
+        )
+        engine = EvaluationEngine(
+            evaluator=evaluator,
+            backends=BackendRegistry({backend_id: backend}),
+            database=database,
+            database_path=database_path,
+            budget_ledger=ledger,
+        )
+        objective = self.objective or compatibility_objective()
+        self.objective = objective
+        compatibility_db = evaluation_database_to_experiment_database(database)
+
+        async def _on_evaluation(record):
+            try:
+                experiment = evaluation_record_to_experiment(record)
+            except ValueError:
+                return
+            compatibility_db.add_experiment(experiment)
+            if self.artifacts:
+                vero_dir = f"{self.session.workspace.project_path}/_vero"
+                sandbox = self.session.workspace.sandbox
+                for artifact in self.artifacts:
+                    await artifact.on_experiment(
+                        self,
+                        experiment,
+                        vero_dir,
+                        sandbox,
+                    )
+
+        engine.listeners.append(_on_evaluation)
+        adapter = VeroTaskEvaluatorAdapter(
+            engine=engine,
+            workspace=self.session.workspace,
+            backend_id=backend_id,
+            objective=objective,
+            task=self.task,
+            compatibility_db=compatibility_db,
+        )
+
+        self.evaluation_db = database
+        self.evaluation_engine = engine
+        self.default_backend_id = backend_id
+        self.session.evaluator = adapter  # type: ignore[assignment]
+        self.session.db = compatibility_db
+        self.session.evaluation_engine = engine
+        self.session.evaluation_database = database
+        self.session.evaluation_backend_id = backend_id
+        self.session.evaluation_objective = objective
+
+    @staticmethod
+    def _dataset_evaluation_set(
+        *,
+        dataset_id: str,
+        split: str,
+        sample_ids: list[int] | None = None,
+    ):
+        from vero.evaluation import AllCases, CaseIds, EvaluationSet
+
+        selection = (
+            CaseIds(ids=[str(sample_id) for sample_id in sample_ids])
+            if sample_ids is not None
+            else AllCases()
+        )
+        return EvaluationSet(
+            name=dataset_id,
+            partition=split,
+            selection=selection,
+        )
 
     async def _setup_vero_dir(self) -> None:
         """Set up _vero/ directory in the workspace and exclude from version control."""
@@ -712,8 +1046,17 @@ class Policy:
             if self.metadata:
                 self.wandb_run.config.update(self.metadata)
 
-            # Register wandb logger as DB listener
-            if self.session.db:  # type: ignore
+            # Register the appropriate durable-record listener.
+            if self.is_program_policy and self.evaluation_engine is not None:
+                self.evaluation_engine.listeners.append(
+                    lambda record: (
+                        log_evaluations_to_wandb(self.wandb_run, [record])
+                        if self.wandb_run is not None
+                        and not self.wandb_run._is_finished
+                        else None
+                    )
+                )
+            elif self.session.db:  # type: ignore
                 self.session.db.listeners.append(  # type: ignore
                     lambda experiment: (
                         log_experiments_to_wandb(self.wandb_run, [experiment])
@@ -746,6 +1089,29 @@ class Policy:
         Returns:
             BestVersion with the best commit found.
         """
+        if self.is_program_policy:
+            async with self:
+                assert self.program_policy is not None
+                self.program_run = await self.program_policy.run(
+                    skip_initial_evaluation=skip_initial_eval
+                )
+                best_record = self.program_run.best
+                return BestVersion(
+                    commit=best_record.request.candidate.commit
+                    if best_record is not None
+                    else None,
+                    split=self.evaluation_set.name
+                    if self.evaluation_set is not None
+                    else None,
+                    score=best_record.objective.value
+                    if best_record is not None and best_record.objective is not None
+                    else None,
+                    objective_metric=self.objective.selector.metric
+                    if self.objective is not None
+                    else None,
+                    evaluation_id=best_record.id if best_record is not None else None,
+                )
+
         async with self:
             if not skip_initial_eval:
                 logger.info(f"Running initial evaluation on {eval_split} split")
@@ -780,6 +1146,8 @@ class Policy:
 
     def _fire_event(self, raw_event: Any) -> None:
         """Serialize a raw SDK event and dispatch to all on_event callbacks."""
+        if self.agent is None:
+            return
         serialized = self.agent.serialize_event(raw_event)
         if serialized is None:
             return
@@ -791,6 +1159,8 @@ class Policy:
 
     async def step(self, input: str | None = None, max_turns: int | None = None) -> Any:
         """Execute optimization steps via the agent backend."""
+        if self.agent is None:
+            raise ValueError("step() requires an agent-backed Policy")
         if max_turns is None:
             max_turns = self.max_turns
         if input is None:
@@ -811,6 +1181,10 @@ class Policy:
 
         self.initialized(validate=True)
 
+        if self.is_program_policy:
+            assert self.program_policy is not None
+            return await self.program_policy.evaluate_version(commit)  # type: ignore[return-value]
+
         if dataset_id is None:
             dataset_id = self.session.dataset_id  # type: ignore
 
@@ -826,6 +1200,7 @@ class Policy:
             db=self.session.db if add_to_db else None,  # type: ignore
             evaluation_parameters=self.evaluation_parameters,
             use_copy=use_copy,
+            add_to_compatibility_db=add_to_db,
         )
 
         # Log to wandb (Policy-specific, not in evaluator)
@@ -838,39 +1213,112 @@ class Policy:
 
         return experiment
 
+    async def evaluate_candidate(
+        self,
+        commit: str,
+        *,
+        backend_id: str | None = None,
+        evaluation_set: EvaluationSet | None = None,
+        parameters: dict[str, Any] | None = None,
+        limits: EvaluationLimits | None = None,
+        objective: ObjectiveSpec | None = None,
+    ) -> EvaluationRecord:
+        """Evaluate a versioned program through an approved canonical backend."""
+        from datetime import datetime
+
+        from vero.core.db.candidate import Candidate
+        from vero.evaluation import EvaluationLimits, EvaluationRequest
+
+        self.initialized(validate=True)
+        if self.evaluation_engine is None or self.evaluation_db is None:
+            raise ValueError("Policy does not have a canonical evaluation engine")
+        assert self.session is not None
+        assert self.session.workspace is not None
+
+        workspace = self.session.workspace
+        if isinstance(workspace, GitWorkspace):
+            commit = await workspace.resolve_ref(commit)
+        selected_backend = backend_id or self.default_backend_id
+        if selected_backend is None:
+            raise ValueError("backend_id is required")
+        selected_set = evaluation_set or self.evaluation_set
+        if selected_set is None:
+            raise ValueError("evaluation_set is required")
+        selected_objective = objective or self.objective
+        if selected_objective is None:
+            raise ValueError("objective is required")
+
+        candidate = self.evaluation_db.candidates.get((workspace.name, commit))
+        if candidate is None:
+            candidate = Candidate(
+                commit=commit,
+                repo_name=workspace.name,
+                created_at=datetime.now(),
+            )
+        selected_parameters = (
+            parameters
+            if parameters is not None
+            else self.program_parameters
+            if self.is_program_policy
+            else self.evaluation_parameters.task_params
+        )
+        selected_limits = limits
+        if selected_limits is None:
+            if self.is_program_policy:
+                selected_limits = self.program_limits or EvaluationLimits()
+            else:
+                selected_limits = EvaluationLimits(
+                    timeout_seconds=self.evaluation_parameters.timeout,
+                    case_timeout_seconds=self.evaluation_parameters.sample_timeout,
+                    max_concurrency=self.evaluation_parameters.max_concurrency,
+                    retry_config=self.evaluation_parameters.retry_config,
+                )
+        request = EvaluationRequest(
+            candidate=candidate,
+            evaluation_set=selected_set,
+            parameters=selected_parameters,
+            limits=selected_limits,
+            seed=self.program_seed if self.is_program_policy else None,
+        )
+        return await self.evaluation_engine.evaluate_record(
+            backend_id=selected_backend,
+            request=request,
+            objective_spec=selected_objective,
+        )
+
     def _get_best_from_db(
         self, splits: list[str], exclude_base: bool = False
     ) -> BestVersion:
         """Query DB for best experiment, optionally excluding base commit."""
-        if not self.session.db:  # type: ignore
+        if self.evaluation_db is None or self.objective is None:
             return BestVersion()
 
-        df = self.session.db.get_experiments_df(fill_score=default_minimum_score)  # type: ignore
-
-        if df.empty or "dataset_subset_split" not in df.columns:
-            logger.debug("No experiments found in DB.")
-            return BestVersion()
+        from vero.evaluation import select_best_evaluation
 
         for split in splits:
-            split_df = df[df["dataset_subset_split"] == split]
-            if exclude_base:
-                split_df = split_df[
-                    split_df["candidate_commit"] != self.session.base_version  # type: ignore
-                ]
-            split_df = split_df.sort_values(  # type: ignore
-                by=["mean_score", "candidate_created_at"], ascending=[False, False]
-            )  # type: ignore
-
-            if len(split_df) > 0:
-                best_row = split_df.iloc[0]
+            records = [
+                record
+                for record in self.evaluation_db.evaluations.values()
+                if record.backend_id == self.default_backend_id
+                and record.objective_spec == self.objective
+                and record.request.evaluation_set.partition == split
+                and (
+                    not exclude_base
+                    or record.request.candidate.commit != self.session.base_version  # type: ignore[union-attr]
+                )
+            ]
+            best = select_best_evaluation(records)
+            if best is not None:
                 logger.info(
-                    f"Best {split} experiment: {best_row['candidate_commit']} "
-                    f"(score: {best_row['mean_score']}, exclude_base={exclude_base})"
+                    f"Best {split} evaluation: {best.request.candidate.commit} "
+                    f"(objective: {best.objective.value}, exclude_base={exclude_base})"
                 )
                 return BestVersion(
-                    commit=best_row["candidate_commit"],
+                    commit=best.request.candidate.commit,
                     split=split,
-                    score=best_row["mean_score"],
+                    score=best.objective.value,
+                    objective_metric=self.objective.selector.metric,
+                    evaluation_id=best.id,
                 )
 
         logger.debug(f"No experiments found in splits: {splits}")
@@ -882,6 +1330,21 @@ class Policy:
         First checks if the agent extracted a best commit (e.g. from structured output).
         Falls back to querying the experiment DB.
         """
+        if self.is_program_policy:
+            if self.evaluation_db is None or self.objective is None:
+                return BestVersion()
+            assert self.program_policy is not None
+            record = self.program_policy.best_evaluation()
+            return BestVersion(
+                commit=record.request.candidate.commit if record else None,
+                split=record.request.evaluation_set.name if record else None,
+                score=record.objective.value
+                if record and record.objective is not None
+                else None,
+                objective_metric=self.objective.selector.metric,
+                evaluation_id=record.id if record else None,
+            )
+        assert self.agent is not None
         agent_best = self.agent.get_best_version()
         if agent_best.commit is not None:
             logger.info(
@@ -896,6 +1359,31 @@ class Policy:
         self, splits: list[str] | None = None
     ) -> BestVersion:
         """Find best experiment excluding the baseline commit — the agent's best effort."""
+        if self.is_program_policy:
+            if (
+                self.evaluation_db is None
+                or self.objective is None
+                or self.session is None
+                or self.session.workspace is None
+            ):
+                return BestVersion()
+            assert self.program_policy is not None
+            record = self.program_policy.best_evaluation(
+                exclude_candidate=(
+                    self.session.workspace.name,
+                    self.session.base_version,
+                ),
+            )
+            return BestVersion(
+                commit=record.request.candidate.commit if record else None,
+                split=record.request.evaluation_set.name if record else None,
+                score=record.objective.value
+                if record and record.objective is not None
+                else None,
+                objective_metric=self.objective.selector.metric,
+                evaluation_id=record.id if record else None,
+            )
+        assert self.agent is not None
         agent_best = self.agent.get_best_version()
         if agent_best.commit is not None:
             return agent_best
@@ -911,6 +1399,24 @@ class Policy:
         """Return a dictionary representation of the policy."""
 
         assert self.session
+
+        if self.is_program_policy:
+            return {
+                "schema_version": 2,
+                "session_id": self.session_id,
+                "base_version": self.session.base_version,
+                "current_commit": self.get_best_version().commit,
+                "backend_id": self.program_policy.backend_id
+                if self.program_policy is not None
+                else None,
+                "evaluation_set": self.evaluation_set.model_dump(mode="json")
+                if self.evaluation_set is not None
+                else None,
+                "objective": self.objective.model_dump(mode="json")
+                if self.objective is not None
+                else None,
+                "metadata": self.metadata,
+            }
 
         base = {
             "session_id": self.session_id,
@@ -945,8 +1451,19 @@ class Policy:
 
         assert self.session
 
-        # Save database dump
-        if self.session.db is not None:
+        if self.is_program_policy:
+            config_path = get_session_config_path(self.sessions_dir, self.session_id)
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(json.dumps(self.as_dict(), indent=2, default=str))
+            return
+
+        # Canonical records are the durable source of truth. The Experiment DB,
+        # when present, is only a deprecated in-memory view.
+        if self.evaluation_db is not None:
+            db_path = get_session_db_path(self.sessions_dir, self.session_id)
+            self.evaluation_db.save_to_file(db_path)
+            logger.debug(f"Saved database to: {db_path}")
+        elif self.session.db is not None:
             db_path = get_session_db_path(self.sessions_dir, self.session_id)
             self.session.db.save_to_file(db_path)
             logger.debug(f"Saved database to: {db_path}")
@@ -992,6 +1509,30 @@ class Policy:
         """Finish the session and log a summary to wandb if enabled."""
         self.save_session_artifacts()
 
+        if self.is_program_policy:
+            if self.wandb_run is not None and not self.wandb_run._is_finished:
+                best = (
+                    self.program_policy.best_evaluation()
+                    if self.program_policy is not None
+                    else None
+                )
+                self.wandb_run.summary.update(
+                    {
+                        "config": self.as_dict(),
+                        "best_evaluation_id": best.id if best else None,
+                        "best_commit": best.request.candidate.commit if best else None,
+                        "best_objective": best.objective.value
+                        if best is not None and best.objective is not None
+                        else None,
+                        "best_feasible": best.objective.feasible
+                        if best is not None and best.objective is not None
+                        else None,
+                        "usage": self.agent.usage() if self.agent is not None else {},
+                    }
+                )
+                self.wandb_run.finish()
+            return
+
         if self.session_logger is not None:
             self.session_logger.close()
 
@@ -1001,21 +1542,33 @@ class Policy:
         # Get best results per split from experiments DB
         results = {}
 
-        assert self.session.db
+        if self.evaluation_db is not None and self.objective is not None:
+            from vero.evaluation import select_best_evaluation
 
-        df = self.session.db.get_experiments_df(fill_score=default_minimum_score)
-        if not df.empty and "dataset_subset_split" in df.columns:
-            splits = df["dataset_subset_split"].unique()
-            for split in splits:
-                split_df = df[df["dataset_subset_split"] == split]
-                split_df = split_df.sort_values(by="mean_score", ascending=False)  # type: ignore
-                best_row = split_df.iloc[0]
-                best_row_dict = best_row.to_dict()
+            splits = {
+                record.request.evaluation_set.partition
+                for record in self.evaluation_db.evaluations.values()
+                if record.request.evaluation_set.partition is not None
+            }
+            for split in sorted(splits):
+                best = select_best_evaluation(
+                    record
+                    for record in self.evaluation_db.evaluations.values()
+                    if record.backend_id == self.default_backend_id
+                    and record.objective_spec == self.objective
+                    and record.request.evaluation_set.partition == split
+                )
+                if best is None:
+                    continue
                 results[split] = {
-                    "commit": best_row_dict["candidate_commit"],
-                    "score": best_row_dict["mean_score"],
-                    "error_rate": best_row_dict["error_rate"],
-                    "num_samples": best_row_dict["num_results"],
+                    "commit": best.request.candidate.commit,
+                    "score": best.objective.value,
+                    "objective_metric": self.objective.selector.metric,
+                    "feasible": best.objective.feasible,
+                    "status": best.report.status.value,
+                    "error_rate": best.report.metrics.get("error_rate"),
+                    "num_samples": best.report.metrics.get("num_results"),
+                    "evaluation_id": best.id,
                 }
 
         summary = {

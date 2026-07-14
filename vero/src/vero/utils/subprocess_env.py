@@ -22,6 +22,7 @@ SYSTEM_DEFAULTS = [
 # Vars vero always forwards if present
 VERO_DEFAULTS = [
     "UV_INDEX",
+    "UV_CACHE_DIR",
 ]
 
 # An env var spec: either a name (read from os.environ) or (name, callable) for computed values

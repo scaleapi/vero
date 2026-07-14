@@ -12,6 +12,8 @@ not Sandbox — the sandbox is a dumb I/O layer.
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import NamedTuple
@@ -244,14 +246,29 @@ class LocalSandbox(Sandbox):
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd),
             env=env,
+            start_new_session=os.name == "posix",
         )
 
         async def terminate():
-            proc.terminate()
+            if proc.returncode is not None:
+                return
+            if os.name == "posix":
+                try:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    return
+            else:
+                proc.terminate()
             try:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
-                proc.kill()
+                if os.name == "posix":
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        return
+                else:
+                    proc.kill()
                 await proc.wait()
 
         try:

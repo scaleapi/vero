@@ -90,11 +90,14 @@ class Evaluator:
 
         return build_subprocess_env(self._subprocess_env_vars)
 
-    def _get_subprocess_env_with_vero_home(self) -> dict[str, str] | None:
+    def _get_subprocess_env_with_vero_home(self) -> dict[str, str]:
         """Build subprocess env and ensure VERO_HOME_DIR is set."""
         env = self.subprocess_env
-        if env is not None:
-            env["VERO_HOME_DIR"] = str(self.vero_home)
+        if env is None:
+            from vero.utils.subprocess_env import build_subprocess_env
+
+            env = build_subprocess_env()
+        env["VERO_HOME_DIR"] = str(self.vero_home)
         return env
 
     @staticmethod

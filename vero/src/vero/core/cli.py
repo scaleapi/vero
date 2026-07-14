@@ -151,7 +151,9 @@ def session_inspect(session_id: str):
         config = json.loads(config_path.read_text())
         click.echo("Config:")
         click.echo(f"  session_id:     {config.get('session_id', '?')}")
-        click.echo(f"  base_commit:    {config.get('base_commit', '?')}")
+        click.echo(
+            f"  base_commit:    {config.get('base_version', config.get('base_commit', '?'))}"
+        )
         click.echo(f"  current_commit: {config.get('current_commit', '?')}")
         click.echo(f"  base_branch:    {config.get('base_branch', '?')}")
         click.echo(f"  task:           {config.get('task') or '(not set)'}")
@@ -173,12 +175,41 @@ def session_inspect(session_id: str):
 
         for exp_id in experiment_ids:
             exp_dir = experiments_dir / exp_id
+            canonical_path = exp_dir / "evaluation.json"
             meta_path = exp_dir / "result_metadata.json"
             params_path = exp_dir / "evaluation_parameters.json"
 
             info_parts = [f"  {exp_id[:12]}"]
 
-            if params_path.exists():
+            if canonical_path.exists():
+                try:
+                    manifest = json.loads(canonical_path.read_text())
+                    request = manifest.get("request", {})
+                    candidate = request.get("candidate", {})
+                    evaluation_set = request.get("evaluation_set", {})
+                    report = manifest.get("report", {})
+                    objective = manifest.get("objective") or {}
+                    info_parts.append(
+                        f"commit={str(candidate.get('commit', '?'))[:8]}"
+                    )
+                    info_parts.append(
+                        f"set={evaluation_set.get('name', '?')}"
+                    )
+                    if evaluation_set.get("partition") is not None:
+                        info_parts.append(
+                            f"partition={evaluation_set['partition']}"
+                        )
+                    info_parts.append(f"status={report.get('status', '?')}")
+                    info_parts.append(
+                        f"cases={len(manifest.get('case_files', []))}"
+                    )
+                    if objective.get("value") is not None:
+                        info_parts.append(f"objective={objective['value']:.3f}")
+                    if objective.get("feasible") is not None:
+                        info_parts.append(f"feasible={objective['feasible']}")
+                except Exception:
+                    info_parts.append("invalid-canonical-manifest")
+            elif params_path.exists():
                 try:
                     params = json.loads(params_path.read_text())
                     run = params.get("run", {})
@@ -189,7 +220,7 @@ def session_inspect(session_id: str):
                 except Exception:
                     pass
 
-            if meta_path.exists():
+            if not canonical_path.exists() and meta_path.exists():
                 try:
                     meta = json.loads(meta_path.read_text())
                     status = meta.get("status", "?")
@@ -199,7 +230,7 @@ def session_inspect(session_id: str):
 
             # Count samples
             samples_dir = exp_dir / "samples"
-            if samples_dir.exists():
+            if not canonical_path.exists() and samples_dir.exists():
                 n_samples = sum(1 for f in samples_dir.iterdir() if f.suffix == ".json")
                 info_parts.append(f"samples={n_samples}")
 
@@ -669,26 +700,33 @@ def check(
 
 @main.command()
 @click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Generic program configuration (defaults to ./vero.toml when present)",
+)
+@click.option(
     "--project-path",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="Path to agent project",
 )
 @click.option(
-    "--task", type=str, required=True, help="Task name from vero_tasks module"
+    "--task", type=str, required=False, help="Task name from vero_tasks module"
 )
 @click.option(
     "--dataset",
     "--dataset-path",
     "dataset_path",
     type=str,
-    required=True,
+    required=False,
     help="Path to dataset (or dataset ID)",
 )
 @click.option(
     "--split",
     type=click.Choice(["train", "test", "validation"]),
-    required=True,
+    required=False,
     help="Dataset split",
 )
 @click.option("--commit", type=str, default=None, help="Git commit to evaluate")
@@ -740,10 +778,11 @@ def check(
     help="Explicit Python module for task registration (e.g. my_eval_tasks.vero_tasks)",
 )
 def evaluate(
-    project_path: Path,
-    task: str,
-    dataset_path: Path,
-    split: str,
+    config_path: Path | None,
+    project_path: Path | None,
+    task: str | None,
+    dataset_path: Path | None,
+    split: str | None,
     commit: str | None = None,
     sample_ids: list[int] | None = None,
     num_samples: int | None = None,
@@ -759,6 +798,30 @@ def evaluate(
 ):
     """Run an evaluation on an agent codebase."""
     import asyncio
+
+    if config_path is None and project_path is None and Path("vero.toml").exists():
+        config_path = Path("vero.toml")
+    if config_path is not None:
+        from vero.config import build_program_runtime, load_config
+
+        async def _evaluate_program():
+            runtime = await build_program_runtime(load_config(config_path))
+            record = await runtime.policy.evaluate_version(runtime.policy.base_version)
+            click.echo(f"Session ID: {runtime.session_id}")
+            click.echo(f"Evaluation ID: {record.id}")
+            click.echo(f"Commit: {record.request.candidate.commit}")
+            click.echo(f"Status: {record.report.status.value}")
+            value = record.objective.value if record.objective is not None else None
+            click.echo(f"Objective: {value}")
+            return record
+
+        return asyncio.run(_evaluate_program())
+
+    if project_path is None or task is None or dataset_path is None or split is None:
+        raise click.UsageError(
+            "provide --config for generic programs, or --project-path, --dataset, "
+            "--task, and --split for VeroTask evaluation"
+        )
 
     from vero.evaluator import run_evaluation
 
@@ -791,20 +854,27 @@ def evaluate(
 
 @main.command()
 @click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Generic program configuration (defaults to ./vero.toml when present)",
+)
+@click.option(
     "--project-path",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="Path to agent project",
 )
 @click.option(
-    "--task", type=str, required=True, help="Task name from vero_tasks module"
+    "--task", type=str, required=False, help="Task name from vero_tasks module"
 )
 @click.option(
     "--dataset",
     "--dataset-path",
     "dataset_path",
     type=str,
-    required=True,
+    required=False,
     help="Path to dataset (or dataset ID)",
 )
 @click.option(
@@ -853,9 +923,10 @@ def evaluate(
     help="Path to .env file for evaluation subprocesses",
 )
 def run(
-    project_path: str,
-    task: str,
-    dataset_path: str,
+    config_path: Path | None,
+    project_path: str | None,
+    task: str | None,
+    dataset_path: str | None,
     agent: str,
     model: str,
     max_turns: int,
@@ -885,6 +956,41 @@ def run(
     """
     import asyncio
 
+    if config_path is None and project_path is None and Path("vero.toml").exists():
+        config_path = Path("vero.toml")
+    if config_path is not None:
+        from vero.config import build_program_runtime, load_config
+
+        async def _run_program():
+            runtime = await build_program_runtime(
+                load_config(config_path),
+                require_optimizer=True,
+            )
+            result = await runtime.policy.run()
+            click.echo(f"Session ID: {runtime.session_id}")
+            click.echo(f"Baseline commit: {result.baseline.request.candidate.commit}")
+            click.echo(
+                f"Baseline objective: "
+                f"{result.baseline.objective.value if result.baseline.objective else None}"
+            )
+            click.echo(
+                f"Best commit: "
+                f"{result.best.request.candidate.commit if result.best else None}"
+            )
+            click.echo(
+                f"Best objective: "
+                f"{result.best.objective.value if result.best and result.best.objective else None}"
+            )
+            return result
+
+        return asyncio.run(_run_program())
+
+    if project_path is None or task is None or dataset_path is None:
+        raise click.UsageError(
+            "provide --config for generic programs, or --project-path, --dataset, "
+            "and --task for VeroTask optimization"
+        )
+
     from vero.policy import Policy
 
     if agent == "claude-code":
@@ -912,7 +1018,7 @@ def run(
         dataset=dataset_path,
         agent=agent_instance,
         task=task,
-        git_ref=git_ref,
+        ref=git_ref,
         isolate=isolate,
         max_turns=max_turns,
         train_budget=train_budget,

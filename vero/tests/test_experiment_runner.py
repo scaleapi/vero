@@ -11,6 +11,12 @@ from vero.core.db.dataset import DatasetSubset
 from vero.core.db.result import ExperimentResult, ExperimentResultStatus
 from vero.core.db.run import ExperimentRun
 from vero.exceptions import ExperimentBudgetExceeded, InvalidSplitError
+from vero.evaluation import (
+    BudgetLedger,
+    EvaluationBudget,
+    EvaluationCost,
+    EvaluationSet,
+)
 from vero.tools.experiment_runner import ExperimentRunnerTool, SplitBudget
 from vero.tools.utils import get_tools_from_class
 from vero.tools.utils.openai_agents import tool_set_instance_to_oai_tools
@@ -592,6 +598,59 @@ class TestExperimentRunnerToolEvaluate:
         # Budget should still be decremented
         assert tool._budget_map[("dev", "ds1")].remaining_sample_budget == 90
         assert tool._budget_map[("dev", "ds1")].remaining_run_budget == 4
+
+    @pytest.mark.asyncio
+    async def test_canonical_engine_ledger_is_not_decremented_again_by_tool(
+        self,
+        mock_evaluator,
+    ):
+        evaluation_set = EvaluationSet(name="ds1", partition="dev")
+        ledger = BudgetLedger(
+            [
+                EvaluationBudget(
+                    backend_id="vero-task",
+                    evaluation_set_key=evaluation_set.budget_key("vero-task"),
+                    total_runs=3,
+                    total_cases=10,
+                )
+            ]
+        )
+
+        async def canonical_evaluate(**kwargs):
+            assert kwargs["meter_budget"] is True
+            await ledger.reserve(
+                "vero-task",
+                evaluation_set,
+                EvaluationCost(cases=2),
+            )
+            return make_mock_experiment()
+
+        mock_evaluator.evaluate = AsyncMock(side_effect=canonical_evaluate)
+        compatibility_budget = SplitBudget(
+            split="dev",
+            dataset_id="ds1",
+            total_sample_budget=10,
+            total_run_budget=3,
+        )
+        tool = ExperimentRunnerTool(
+            evaluator=mock_evaluator,
+            split_budgets=[compatibility_budget],
+        )
+        tool._canonical_ledger = ledger
+        tool._canonical_backend_id = "vero-task"
+
+        await tool.evaluate_commit(
+            commit="abc123",
+            dataset_id="ds1",
+            split="dev",
+            sample_ids=[0, 1],
+        )
+
+        canonical_budget = ledger.get("vero-task", evaluation_set)
+        assert canonical_budget.remaining_cases == 8
+        assert canonical_budget.remaining_runs == 2
+        assert compatibility_budget.remaining_sample_budget == 10
+        assert compatibility_budget.remaining_run_budget == 3
 
 
 class TestExperimentRunnerToolCheckBudget:

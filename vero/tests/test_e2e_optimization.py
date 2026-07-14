@@ -11,6 +11,7 @@ Uses example packages from examples/matmul-kernel and examples/matmul-eval.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import textwrap
@@ -197,6 +198,71 @@ async def test_workspace_save_and_evaluate(workspace):
     sr = experiment.result.sample_results[0]
     assert sr.score < 999999.0, "Modified kernel should still be correct"
     assert sr.metrics["correct"] == 1.0
+
+
+async def test_policy_evaluation_uses_canonical_vero_task_backend(workspace):
+    """The deprecated dataset API is a view over one schema-v2 evaluation."""
+    kernel_dir, task_dir, dataset_path, vero_home = workspace
+
+    from vero.agents.base import BaseAgent
+    from vero.evaluation import VeroTaskEvaluatorAdapter
+    from vero.policy import Policy
+
+    class NoOpAgent(BaseAgent):
+        def init(self, session):
+            self.session = session
+
+        async def step(self, input, max_turns=200, on_event=None, **kwargs):
+            return None
+
+        def serialize_trace(self):
+            return None
+
+        def serialize_state(self):
+            return None
+
+        def deserialize_state(self, state):
+            return None
+
+    policy = Policy(
+        vero_home=vero_home,
+        project_path=kernel_dir,
+        dataset=dataset_path,
+        agent=NoOpAgent(),
+        task="matmul",
+        task_project=str(task_dir),
+        task_module="matmul_eval.matmul_task",
+        use_copy=False,
+        use_default_logging=False,
+        enable_console=False,
+    )
+    await policy.init()
+
+    experiment = await policy.evaluate_version(
+        policy.session.base_version,
+        split="test",
+        sample_ids=[0],
+    )
+
+    assert isinstance(policy.session.evaluator, VeroTaskEvaluatorAdapter)
+    assert len(policy.evaluation_db.evaluations) == 1
+    record = next(iter(policy.evaluation_db.evaluations.values()))
+    assert record.schema_version == 2
+    assert record.backend_id == "vero-task"
+    assert record.objective.value == experiment.result.score()
+    experiments_dir = (
+        vero_home / "sessions" / policy.session_id / "experiments"
+    )
+    result_dirs = [path for path in experiments_dir.iterdir() if path.is_dir()]
+    assert result_dirs == [experiments_dir / record.id]
+    assert (result_dirs[0] / "evaluation.json").exists()
+    assert not (result_dirs[0] / "evaluation_parameters.json").exists()
+
+    policy.finish()
+    database = json.loads(
+        (vero_home / "sessions" / policy.session_id / "database.json").read_text()
+    )
+    assert database["schema_version"] == 2
 
 
 async def test_policy_run_optimizes_kernel(workspace):

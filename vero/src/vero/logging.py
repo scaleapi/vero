@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     import wandb
 
     from vero.core.db.database import Experiment
+    from vero.evaluation import EvaluationRecord
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,38 @@ def log_experiments_to_wandb(
     for experiment in experiments:
         wandb_run.log(experiment.summary())
     logger.info(f"Logged {len(experiments)} experiments to wandb.")
+
+
+def log_evaluations_to_wandb(
+    wandb_run: wandb.Run,
+    evaluations: list[EvaluationRecord],
+) -> None:
+    """Log canonical objective and report fields without dataset assumptions."""
+    for record in evaluations:
+        evaluation_set = record.request.evaluation_set
+        prefix = evaluation_set.name
+        if evaluation_set.partition is not None:
+            prefix = f"{prefix}/{evaluation_set.partition}"
+        payload = {
+            f"{prefix}/candidate_commit": record.request.candidate.commit,
+            f"{prefix}/evaluation_id": record.id,
+            f"{prefix}/status": record.report.status.value,
+        }
+        if record.objective_spec is not None:
+            payload[f"{prefix}/objective_metric"] = (
+                record.objective_spec.selector.metric
+            )
+        if record.objective is not None:
+            payload[f"{prefix}/objective"] = record.objective.value
+            payload[f"{prefix}/feasible"] = record.objective.feasible
+        payload.update(
+            {
+                f"{prefix}/metric/{metric}": value
+                for metric, value in record.report.metrics.items()
+            }
+        )
+        wandb_run.log(payload)
+    logger.info("Logged %s canonical evaluations to wandb.", len(evaluations))
 
 
 def setup_logging(verbose: bool = False, levels: dict[str, int] | None = None):

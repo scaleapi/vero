@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, NoReturn
+from typing import Any, Callable, NoReturn
 
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.evaluation import BaseEvaluationParameters
@@ -104,6 +104,8 @@ class ExperimentRunnerTool:
     _budget_map: dict[tuple[str, str], SplitBudget] = field(
         default_factory=dict, repr=False
     )
+    _canonical_ledger: Any = field(default=None, repr=False)
+    _canonical_backend_id: str | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.split_budgets:
@@ -122,6 +124,26 @@ class ExperimentRunnerTool:
         self.run_constraints = session.evaluation_parameters
         self._task = session.task
         self._budget_map = {(sb.split, sb.dataset_id): sb for sb in self.split_budgets}
+        engine = getattr(session, "evaluation_engine", None)
+        self._canonical_ledger = (
+            engine.budget_ledger if engine is not None else None
+        )
+        self._canonical_backend_id = getattr(
+            session,
+            "evaluation_backend_id",
+            None,
+        )
+
+    def _canonical_budget(self, dataset_id: str, split: str):
+        if self._canonical_ledger is None or self._canonical_backend_id is None:
+            return None
+        from vero.evaluation import EvaluationSet
+
+        evaluation_set = EvaluationSet(name=dataset_id, partition=split)
+        return self._canonical_ledger.get(
+            self._canonical_backend_id,
+            evaluation_set,
+        )
 
     def _get_dataset_info(self, dataset_id: str):
         """Get dataset info from the store."""
@@ -217,6 +239,35 @@ class ExperimentRunnerTool:
 
         # Check if this split and dataset combination is allowed
         self._validate_split_access(dataset_id, split)
+        canonical = self._canonical_budget(dataset_id, split)
+        if self._canonical_ledger is not None:
+            if canonical is None:
+                raise InvalidSplitError(
+                    f"No canonical budget found for dataset_id={dataset_id}, split={split}"
+                )
+            if canonical.remaining_runs is not None and canonical.remaining_runs <= 0:
+                raise ExperimentBudgetExceeded(
+                    f"No runs left for the {split} split of the {dataset_id} dataset."
+                )
+            if (
+                canonical.remaining_cases is not None
+                and canonical.remaining_cases < requested_num_samples
+            ):
+                raise ExperimentBudgetExceeded(
+                    f"Requested {requested_num_samples} samples for the {split} split "
+                    f"of the {dataset_id} dataset, but the remaining sample budget only "
+                    f"allows for {canonical.remaining_cases} samples."
+                )
+            if (
+                canonical.max_cases_per_run is not None
+                and requested_num_samples > canonical.max_cases_per_run
+            ):
+                raise ExperimentBudgetExceeded(
+                    f"Requested {requested_num_samples} samples for the {split} split "
+                    f"of the {dataset_id} dataset, but only "
+                    f"{canonical.max_cases_per_run} are allowed per run."
+                )
+            return
         budget = self._budget_map[(split, dataset_id)]
 
         # Determine if we have enough runs left
@@ -241,6 +292,23 @@ class ExperimentRunnerTool:
         """Update the remaining budget for a given dataset and split and return a message about the update."""
 
         self._validate_split_access(dataset_id, split)
+        canonical = self._canonical_budget(dataset_id, split)
+        if self._canonical_ledger is not None:
+            if canonical is None:
+                return ""
+            parts = []
+            if canonical.total_cases is not None:
+                parts.append(
+                    f"Used {num_samples} samples from the total "
+                    f"{canonical.total_cases} sample budget. Remaining sample budget: "
+                    f"{canonical.remaining_cases}."
+                )
+            if canonical.total_runs is not None:
+                parts.append(
+                    f"Used 1 run from the total {canonical.total_runs} run budget. "
+                    f"Remaining runs: {canonical.remaining_runs}"
+                )
+            return " ".join(parts)
         budget = self._budget_map[(split, dataset_id)]
 
         info = ""
@@ -268,6 +336,10 @@ class ExperimentRunnerTool:
         """Evaluate a version of the codebase specified by a Git commit on a subset of a dataset."""
 
         try:
+            kwargs = {}
+            if self._canonical_ledger is not None:
+                kwargs["meter_budget"] = True
+                kwargs["add_to_compatibility_db"] = add_to_db
             return await self.evaluator.evaluate(
                 commit=commit,
                 dataset_id=dataset_id,
@@ -276,9 +348,14 @@ class ExperimentRunnerTool:
                 sample_ids=sample_ids,
                 db=self.db if add_to_db else None,
                 evaluation_parameters=self.run_constraints,
+                **kwargs,
             )
-        except ExperimentRunFailedError as e:
-            if e.returncode >= 3:
+        except Exception as e:
+            from vero.evaluation import EvaluationBudgetExceeded
+
+            if isinstance(e, EvaluationBudgetExceeded):
+                raise ExperimentBudgetExceeded(str(e)) from e
+            if isinstance(e, ExperimentRunFailedError) and e.returncode >= 3:
                 self.on_fatal(str(e))
             raise
 
@@ -296,6 +373,22 @@ class ExperimentRunnerTool:
             A string containing the remaining budget for the given dataset and split.
         """
         self._validate_split_access(dataset_id, split)
+        canonical = self._canonical_budget(dataset_id, split)
+        if self._canonical_ledger is not None:
+            if canonical is None:
+                return "No evaluation budget is configured."
+            info = ""
+            if canonical.total_cases is not None:
+                info += (
+                    f"Remaining sample budget: {canonical.remaining_cases} / "
+                    f"{canonical.total_cases} samples. "
+                )
+            if canonical.total_runs is not None:
+                info += (
+                    f"Remaining run budget: {canonical.remaining_runs} / "
+                    f"{canonical.total_runs} runs."
+                )
+            return info
         budget = self._budget_map[(split, dataset_id)]
 
         info = ""

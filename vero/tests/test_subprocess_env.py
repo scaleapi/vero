@@ -46,6 +46,11 @@ class TestBuildSubprocessEnv:
         env = build_subprocess_env()
         assert env["UV_INDEX"] == "https://index.example.com/"
 
+    def test_uv_cache_forwarded_by_default(self, monkeypatch):
+        monkeypatch.setenv("UV_CACHE_DIR", "/tmp/uv-cache")
+        env = build_subprocess_env()
+        assert env["UV_CACHE_DIR"] == "/tmp/uv-cache"
+
     def test_mixed_string_and_callable(self, monkeypatch):
         monkeypatch.setenv("KEY_A", "value-a")
         env = build_subprocess_env(source=[

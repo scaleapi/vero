@@ -1,7 +1,7 @@
 [project]
 name = "scale-vero"
 version = "0.4.7"
-description = "A package for optimizing uv-based agents with coding agents."
+description = "A generic optimizer for versioned programs and agents."
 readme = "README.md"
 authors = [
     { name = "Varun Ursekar", email = "oss@scale.com" }

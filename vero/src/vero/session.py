@@ -20,6 +20,8 @@ class BestVersion(BaseModel):
     split: str | None = None
     score: float | None = None
     summary: str | None = None
+    objective_metric: str | None = None
+    evaluation_id: str | None = None
 
 
 @dataclass
@@ -46,3 +48,8 @@ class Session:
     skills: dict[str, Path] = field(default_factory=dict)
     base_version: str | None = None
     base_branch: str | None = None
+    program_policy: object | None = None
+    evaluation_engine: object | None = None
+    evaluation_database: object | None = None
+    evaluation_backend_id: str | None = None
+    evaluation_objective: object | None = None

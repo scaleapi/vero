@@ -1,8 +1,61 @@
 # VeRO: Versioning Rewards and Observations
 
-`vero` is a package for optimizing LLM-based workflows and agents. It leverages coding agents, evaluations, and git version control to hill-climb "agents as code".
+VeRO is a generic optimizer for versioned programs. It combines a candidate producer,
+Git versioning, trusted evaluation backends, explicit objectives, and durable results to
+improve code in any language or framework. Python agents remain a supported target,
+not a requirement.
 
 ## Quickstart
+
+Define the editable target and keep its evaluation harness outside the target
+repository:
+
+```toml
+# vero.toml
+[target]
+root = "./target"
+
+[evaluation]
+backend = "command"
+harness_root = "./evaluator"
+command = [
+  "./evaluate",
+  "--workspace", "{workspace}",
+  "--request", "{request}",
+  "--report", "{report}",
+]
+evaluation_set = "performance"
+
+[objective]
+metric = "latency_ms"
+direction = "minimize"
+
+[[objective.constraints]]
+metric = "correct"
+operator = "=="
+value = 1.0
+
+[optimizer]
+root = "./optimizer"
+command = ["./optimize", "--workspace", "{workspace}"]
+max_candidates = 3
+```
+
+The harness reads a versioned JSON request and writes an `EvaluationReport`. It may
+compile, test, benchmark, simulate, or otherwise measure the checked-out candidate.
+
+```bash
+vero evaluate --config vero.toml
+vero run --config vero.toml
+```
+
+See [`examples/c-matmul`](examples/c-matmul/) for an end-to-end C target with no Python
+package, VeRO dependency, dataset, or agent framework. The deterministic example
+optimizer can be replaced by a coding-agent command.
+
+### Agent optimization
+
+The existing dataset/VeroTask path remains available for optimizing Python agents:
 
 ```python
 from agents import Agent as OAIAgent
@@ -61,9 +114,32 @@ Combine groups: `uv pip install scale-vero[optimize,claude,wandb]`
 
 ## Core Concepts
 
+### Program policy
+
+`ProgramPolicy` owns the single-producer optimization loop. It evaluates the baseline,
+asks a candidate producer to edit the versioned workspace, commits each change,
+evaluates it through an approved backend, and selects the best feasible result using
+the declared objective. Evaluation is independent of candidate production, so future
+population and evolutionary strategies can reuse the same engine.
+
 ### Policy
 
-`Policy` is the top-level object that orchestrates optimization. It composes an `Agent` backend and manages all shared infrastructure (git, datasets, evaluator, experiment database, wandb).
+`Policy` supports the generic constructor (`optimizer`, `backends`, `evaluation_set`,
+and `objective`) without a dataset or task. Its compatibility constructor still accepts
+`agent`, `dataset`, and `task` for dataset-backed VeroTask optimization and optional W&B
+logging. Both constructors write the same schema-v2 `EvaluationRecord`; the dataset API
+returns a deprecated `Experiment` view of that record.
+
+Canonical evaluations are also available directly:
+
+```python
+record = await policy.evaluate_candidate(
+    commit="abc123",
+    backend_id="performance",
+    evaluation_set=evaluation_set,
+)
+print(record.objective.value, record.objective.feasible)
+```
 
 ```python
 from vero.policy import Policy
@@ -178,6 +254,8 @@ They implement the `ToolSet` protocol and carry an `exclude_tools` field to cont
 | `ExperimentRunnerTool` | Run experiments on dataset subsets |
 | `ExperimentViewer` | View experiment results |
 | `DatasetViewer` | Explore dataset samples |
+| `EvaluationRunnerTool` | Evaluate a generic program candidate |
+| `EvaluationViewer` | View canonical summaries, reports, cases, and artifacts |
 | `WebSearch` | Search the web |
 | `WebFetch` | Fetch web pages |
 | `ContextStore` | Key-value store for agent context |
@@ -205,13 +283,11 @@ All data is stored under `~/.vero/sessions/{session_id}/`:
 ```
 sessions/{session_id}/
 ├── experiments/{result_id}/
-│   ├── evaluation_parameters.json
-│   ├── result_metadata.json         # Status, run_id (for DB reconstruction)
-│   └── samples/
-│       ├── 0.json    # Self-describing: includes input, output, score, commit, etc.
-│       ├── 1.json
-│       └── ...
-├── database.json                    # Experiment DB (cache — rebuildable from experiments/)
+│   ├── evaluation.json              # Schema-v2 request, report, provenance, objective
+│   ├── cases/                       # Hashed canonical case checkpoints
+│   ├── artifacts/                   # Logs, profiles, compiler output, traces
+│   └── backend/                     # Backend-private files
+├── database.json                    # Schema-v2 evaluation index
 ├── agent_trace/                     # Per-turn agent event log
 │   ├── turn_0000.json
 │   ├── turn_0001.json
@@ -220,9 +296,11 @@ sessions/{session_id}/
 └── result.json
 ```
 
-Each `SampleResult` is self-describing with `commit`, `result_id`, `input`, `output`, `score`, and `feedback`.
+Legacy VeroTask sessions using `evaluation_parameters.json` and `samples/` remain
+readable through compatibility adapters.
 
-The `experiments/` directory is the source of truth — `database.json` can be rebuilt from it via `ExperimentDatabase.from_experiments_dir()`.
+The `experiments/` directory is the source of truth; `database.json` can be rebuilt from
+the canonical manifests and case files.
 
 ### Resuming and Forking Sessions
 
