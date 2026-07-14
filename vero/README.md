@@ -1,25 +1,25 @@
-# VeRO: Versioning, Rewards, and Observations
+# VeRO: A Harness for Agents to Optimize Programs
 
 [![arXiv](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
 [![ICML 2026](https://img.shields.io/badge/ICML-2026-4b44ce.svg)](https://arxiv.org/abs/2602.22480)
 
-> **The optimizer can be an agent. The target can be any program.**
+VeRO gives coding agents a feedback loop for improving code:
 
-VeRO turns a version-controlled codebase into an optimization problem: propose a
-change, run a trusted evaluation, capture rewards and observations, and repeat. Use it
-to improve an LLM agent, a C kernel, a prompt-and-tool harness, a compiler pass, or any
-other program that can be edited and measured.
+1. An optimizer edits a program.
+2. VeRO saves the candidate and runs your evaluator.
+3. The optimizer sees the scores, errors, and execution traces.
+4. The loop repeats until VeRO finds the best version within your budget.
 
-- **Any target:** source code in any language or framework
-- **Any evaluator:** tests, benchmarks, simulators, datasets, or sandboxed environments
-- **Pluggable optimizer:** use a coding agent or bring your own search strategy
+The target does not have to be an agent—or even Python. It can be an LLM harness, a C
+kernel, a prompt pipeline, a compiler pass, or any other program you can edit and
+measure. Your evaluator can run tests, benchmarks, simulations, datasets, or sandboxed
+tasks. You choose the objective; VeRO manages versioning, budgets, and observations.
 
-VeRO was introduced in the ICML 2026 paper
-[**VeRO: A Harness for Agents to Optimize Agents**](https://arxiv.org/abs/2602.22480).
-Across 120 optimization experiments on five tasks, the default VeRO-Agent raised the
-average best score from a 0.50 baseline to 0.61. The paper studies agent-harness
-optimization; the framework exposes the more general abstraction underneath: a
-versioned program, an objective, and an optimization loop.
+VeRO stands for **Versioning, Rewards, and Observations**. It was introduced in the
+ICML 2026 paper [**VeRO: A Harness for Agents to Optimize
+Agents**](https://arxiv.org/abs/2602.22480), where the default VeRO-Agent improved the
+average best score from a 0.50 baseline to 0.61 across five tasks. This repository
+generalizes that same loop from optimizing agents to optimizing programs.
 
 > **Want to see it work?** Try the [C matrix multiplication example](examples/c-matmul/),
 > where VeRO improves compiled code without requiring the target to be an agent or a
@@ -27,8 +27,9 @@ versioned program, an objective, and an optimization loop.
 
 ## Quickstart
 
-Define the editable target and keep its evaluation harness outside the target
-repository:
+Give VeRO three things: the program it may edit, a command that evaluates the program,
+and an optimizer that proposes changes. For example, this configuration optimizes a
+program for latency while requiring it to remain correct:
 
 ```toml
 # vero.toml
@@ -61,13 +62,16 @@ command = ["./optimize", "--workspace", "{workspace}"]
 max_candidates = 3
 ```
 
-The harness reads a versioned JSON request and writes an `EvaluationReport`. It may
-compile, test, benchmark, simulate, or otherwise measure the checked-out candidate.
+First, evaluate the current program. Then run the optimization loop:
 
 ```bash
 vero evaluate --config vero.toml
 vero run --config vero.toml
 ```
+
+The evaluation command receives the candidate workspace and writes a JSON report. It
+can compile, test, benchmark, simulate, or otherwise measure the candidate. The
+optimizer can be a coding agent or any command that edits the workspace.
 
 See [`examples/c-matmul`](examples/c-matmul/) for an end-to-end C target with no Python
 package, VeRO dependency, dataset, or agent framework. The deterministic example
