@@ -1,9 +1,29 @@
-# VeRO: Versioning Rewards and Observations
+# VeRO: Versioning, Rewards, and Observations
 
-VeRO is a generic optimizer for versioned programs. It combines a candidate producer,
-Git versioning, trusted evaluation backends, explicit objectives, and durable results to
-improve code in any language or framework. Python agents remain a supported target,
-not a requirement.
+[![arXiv](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
+[![ICML 2026](https://img.shields.io/badge/ICML-2026-4b44ce.svg)](https://arxiv.org/abs/2602.22480)
+
+> **The optimizer can be an agent. The target can be any program.**
+
+VeRO turns a version-controlled codebase into an optimization problem: propose a
+change, run a trusted evaluation, capture rewards and observations, and repeat. Use it
+to improve an LLM agent, a C kernel, a prompt-and-tool harness, a compiler pass, or any
+other program that can be edited and measured.
+
+- **Any target:** source code in any language or framework
+- **Any evaluator:** tests, benchmarks, simulators, datasets, or sandboxed environments
+- **Pluggable optimizer:** use a coding agent or bring your own search strategy
+
+VeRO was introduced in the ICML 2026 paper
+[**VeRO: A Harness for Agents to Optimize Agents**](https://arxiv.org/abs/2602.22480).
+Across 120 optimization experiments on five tasks, the default VeRO-Agent raised the
+average best score from a 0.50 baseline to 0.61. The paper studies agent-harness
+optimization; the framework exposes the more general abstraction underneath: a
+versioned program, an objective, and an optimization loop.
+
+> **Want to see it work?** Try the [C matrix multiplication example](examples/c-matmul/),
+> where VeRO improves compiled code without requiring the target to be an agent or a
+> Python package.
 
 ## Quickstart
 
@@ -83,9 +103,12 @@ print(f"Best commit: {best.commit}, score: {best.score}")
 
 ### Pre-requisites
 
+- Python 3.11+
 - `uv` ([install](https://docs.astral.sh/uv/getting-started/installation/))
 - `git`
-- Access to an LLM gateway (LiteLLM, OpenAI, etc.)
+
+An LLM provider is only required when the optimizer or target uses one. The command
+backend and non-agent targets do not require an LLM dependency or API key.
 
 ### From PyPI
 
