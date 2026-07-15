@@ -104,7 +104,7 @@ async def create_local_optimization_session(
     session_id = session_id or session_dir.name
     if not session_id.strip():
         raise ValueError("session ID must not be empty")
-    if not producers:
+    if not producers and max_candidates:
         raise ValueError("at least one candidate producer is required")
 
     sandbox = await LocalSandbox.create(root=project_path.parent)

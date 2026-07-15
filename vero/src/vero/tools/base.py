@@ -56,12 +56,9 @@ class FileSystemWriteBase(ABC):
     sandbox: Sandbox | None = None
     workspace: Workspace | None = None
 
-    def bind(self, session: Session) -> None:
-        if session.workspace:
-            self.sandbox = session.workspace.sandbox
-        if session.workspace:
-            self.workspace = session.workspace
-
+    def bind(self, context: AgentContext) -> None:
+        self.sandbox = context.workspace.sandbox
+        self.workspace = context.workspace
 
     async def _is_file_tracked(self, path: str) -> bool:
         """Check if a file is tracked by the workspace. Git-specific for now."""

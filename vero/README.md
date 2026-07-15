@@ -156,8 +156,10 @@ async def score(case, output, context):
     )
 ```
 
-Connect it with `PythonTaskBackend`, which runs the task inside each isolated
-candidate's uv project. Cases remain outside the editable target.
+Connect it with `PythonTaskBackend`. The task module and cases live in a trusted
+external uv project; VeRO overlays each isolated candidate with
+`uv --with-editable` so the harness imports the exact program version being
+measured without making evaluator code editable.
 
 ```python
 from vero.evaluation import PythonTaskBackend, PythonTaskBackendConfig

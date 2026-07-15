@@ -203,6 +203,12 @@ class GitWorkspace(Workspace):
         except RuntimeError:
             return False
 
+    def _copied_project_path(self, copied_root: str) -> str:
+        relative = PurePosixPath(self._project_path).relative_to(self._root)
+        if str(relative) == ".":
+            return copied_root
+        return _join(copied_root, str(relative))
+
     # ── Copies ──────────────────────────────────────────────────────
 
     async def copy(self, name: str | None = None, from_version: str | None = None) -> GitWorkspace:
@@ -224,7 +230,7 @@ class GitWorkspace(Workspace):
             return GitWorkspace(
                 sandbox=self._sandbox,
                 root=target_path,
-                project_path=target_path,
+                project_path=self._copied_project_path(target_path),
                 name=self._name,
             )
 
@@ -252,7 +258,7 @@ class GitWorkspace(Workspace):
             yield GitWorkspace(
                 sandbox=self._sandbox,
                 root=target_path,
-                project_path=target_path,
+                project_path=self._copied_project_path(target_path),
                 name=self._name,
             )
         finally:

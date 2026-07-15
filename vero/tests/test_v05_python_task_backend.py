@@ -67,16 +67,18 @@ async def test_python_task_backend_builds_uv_command_and_resolves_cost(tmp_path:
             module="target.tasks",
             task="quality",
             cases_path=str(cases),
-            project_directory="packages/target",
+            target_project_directory="packages/target",
             uv_executable=sys.executable,
         )
     )
 
     command = backend._command.config.command
-    assert command[:4] == [
+    assert command[:6] == [
         sys.executable,
         "run",
         "--project",
+        str(tmp_path),
+        "--with-editable",
         "{workspace}/packages/target",
     ]
     assert command[-4:] == ["--request", "{request}", "--report", "{report}"]
@@ -113,17 +115,26 @@ async def test_python_task_backend_optimizes_target_task_module(tmp_path: Path):
     target = tmp_path / "target"
     target.mkdir()
     (target / "factor.txt").write_text("1\n", encoding="utf-8")
-    (target / "target_tasks.py").write_text(
+    (target / "target_program.py").write_text(
         """
 from pathlib import Path
+
+def multiply(value):
+    factor = int(Path(__file__).with_name("factor.txt").read_text())
+    return value * factor
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "evaluation_tasks.py").write_text(
+        """
 from vero_tasks import TaskOutput, TaskResult, create_task
+from target_program import multiply
 
 task = create_task("multiply")
 
 @task.inference()
 async def infer(case, context):
-    factor = int(Path(__file__).with_name("factor.txt").read_text())
-    return TaskOutput(output=case["value"] * factor)
+    return TaskOutput(output=multiply(case["value"]))
 
 @task.evaluation()
 async def evaluate(case, output, context):
@@ -155,9 +166,10 @@ import sys
 
 arguments = sys.argv[1:]
 project = arguments[arguments.index("--project") + 1]
+target = arguments[arguments.index("--with-editable") + 1]
 module_index = arguments.index("-m")
 module = arguments[module_index + 1]
-sys.path[:0] = [project, {str(tasks_source)!r}]
+sys.path[:0] = [project, target, {str(tasks_source)!r}]
 sys.argv = [module, *arguments[module_index + 2:]]
 runpy.run_module(module, run_name="__main__")
 """,
@@ -179,7 +191,7 @@ Path(sys.argv[1], "factor.txt").write_text("2\\n")
     backend = PythonTaskBackend(
         PythonTaskBackendConfig(
             harness_root=str(tmp_path),
-            module="target_tasks",
+            module="evaluation_tasks",
             task="multiply",
             cases_path=str(cases),
             uv_executable=str(fake_uv),

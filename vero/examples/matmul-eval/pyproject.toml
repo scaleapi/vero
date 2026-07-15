@@ -3,7 +3,7 @@ name = "matmul-eval"
 version = "0.1.0"
 description = "Evaluation task for the matmul kernel — measures correctness and speed"
 requires-python = ">=3.11"
-dependencies = ["scale-vero[evaluate]"]
+dependencies = ["scale-vero-tasks>=0.1.0"]
 
 [build-system]
 requires = ["hatchling"]
@@ -13,4 +13,4 @@ build-backend = "hatchling.build"
 packages = ["src/matmul_eval"]
 
 [tool.uv.sources]
-scale-vero = { path = "../../", editable = true }
+scale-vero-tasks = { path = "../../../vero-tasks", editable = true }

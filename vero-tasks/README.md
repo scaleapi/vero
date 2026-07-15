@@ -22,6 +22,8 @@ async def evaluate(case, output, context):
 ```
 
 The runner accepts a VeRO command-evaluation request and an external JSON/JSONL
-case file, imports the target task module, and writes a schema-v1 evaluation
-report. This keeps Python benchmark ergonomics separate from VeRO's
+case file, imports a task module, and writes a schema-v1 evaluation report. The
+standard VeRO adapter runs this package in a trusted evaluator project while
+overlaying the candidate package as an editable dependency. This keeps Python
+benchmark ergonomics separate from both the target program and VeRO's
 language-neutral evaluation kernel.

@@ -1,9 +1,6 @@
-"""Naive matrix multiply kernel. Optimize this!"""
-
-from vero.core.resource import resource
+"""Naive matrix multiply kernel. Optimize this program."""
 
 
-@resource("kernel")
 def multiply(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
     """Multiply two matrices using the naive O(n^3) algorithm.
 

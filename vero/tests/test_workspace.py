@@ -243,6 +243,48 @@ class TestCopies:
         )
         assert content == "x = 1\n"
 
+    @pytest.mark.asyncio
+    async def test_copies_preserve_subdirectory_project(self, tmp_path):
+        _init_git_repo(tmp_path)
+        subdir = tmp_path / "packages" / "target"
+        subdir.mkdir(parents=True)
+        (subdir / "program.py").write_text("value = 1\n")
+        subprocess.run(
+            ["git", "add", "."], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@test",
+                "commit",
+                "-m",
+                "add target",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
+        )
+        workspace = await GitWorkspace.from_path(
+            LocalSandbox(root=tmp_path), subdir
+        )
+
+        async with workspace.temp_copy() as copy_workspace:
+            relative = Path(copy_workspace.project_path).relative_to(
+                copy_workspace.root
+            )
+            assert relative == Path("packages/target")
+            assert Path(copy_workspace.project_path, "program.py").is_file()
+
+        persistent = await workspace.copy(name="subproject-copy")
+        try:
+            relative = Path(persistent.project_path).relative_to(persistent.root)
+            assert relative == Path("packages/target")
+        finally:
+            await persistent.destroy()
+
 
 class TestAtVersion:
     @pytest.mark.asyncio

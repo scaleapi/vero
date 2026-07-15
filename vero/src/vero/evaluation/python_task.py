@@ -31,13 +31,13 @@ def _default_uv() -> str:
 
 
 class PythonTaskBackendConfig(EvaluationModel):
-    """Configuration for importing a target task module in its uv project."""
+    """Configuration for an external task harness and editable target package."""
 
     harness_root: str
     module: str
     task: str
     cases_path: str
-    project_directory: str = "."
+    target_project_directory: str = "."
     evaluation_set_name: str = "default"
     partition: str | None = None
     uv_executable: str = Field(default_factory=_default_uv)
@@ -66,13 +66,14 @@ class PythonTaskBackendConfig(EvaluationModel):
             raise ValueError("Python task partition must not be empty")
         return value
 
-    @field_validator("project_directory")
+    @field_validator("target_project_directory")
     @classmethod
-    def validate_project_directory(cls, value: str) -> str:
+    def validate_target_project_directory(cls, value: str) -> str:
         path = Path(value)
         if not value.strip() or path.is_absolute() or ".." in path.parts:
             raise ValueError(
-                "Python task project_directory must stay within the candidate workspace"
+                "Python task target_project_directory must stay within the "
+                "candidate workspace"
             )
         return path.as_posix()
 
@@ -88,16 +89,16 @@ class PythonTaskBackendConfig(EvaluationModel):
 
 
 class PythonTaskBackend:
-    """Evaluate target Python tasks through uv and the scale-vero-tasks runner."""
+    """Run an external Python task harness against an editable candidate."""
 
     name = "python-task"
     version = "1"
 
     def __init__(self, config: PythonTaskBackendConfig):
         self.config = config
-        project = "{workspace}"
-        if config.project_directory != ".":
-            project += f"/{config.project_directory}"
+        target = "{workspace}"
+        if config.target_project_directory != ".":
+            target += f"/{config.target_project_directory}"
         self._command = CommandBackend(
             CommandBackendConfig(
                 harness_root=config.harness_root,
@@ -105,7 +106,9 @@ class PythonTaskBackend:
                     config.uv_executable,
                     "run",
                     "--project",
-                    project,
+                    config.harness_root,
+                    "--with-editable",
+                    target,
                     config.python_executable,
                     "-m",
                     "vero_tasks.runner",

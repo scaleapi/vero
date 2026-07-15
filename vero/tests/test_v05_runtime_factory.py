@@ -151,7 +151,7 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
         backend=backend,
         objective=objective,
         evaluation_set=EvaluationSet(name="quality"),
-        producers={"default": producer},
+        producers={},
         max_candidates=0,
     )
     resumed_result = await resumed.run(skip_baseline_evaluation=True)
