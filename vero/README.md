@@ -216,6 +216,22 @@ candidate before producing Harbor rewards. Hidden final evaluations use the
 same backend contracts with unmetered admin authorization, so this deployment
 does not introduce a parallel evaluation model.
 
+Install the optional server dependencies with `scale-vero[harbor]`. A sidecar
+image provides a trusted `module:factory` callable that accepts its JSON config
+and returns `SidecarComponents`; start it with:
+
+```bash
+vero harbor serve \
+  --factory trusted_deployment:build_components \
+  --config /etc/vero/sidecar.json \
+  --admin-token /shared/admin-token
+```
+
+The optimizer uses `vero harbor eval`, `status`, and `submit` through
+`VERO_EVAL_URL`. Harbor's trusted verifier uses `vero harbor finalize` with the
+root-readable token file and writes only the final reward mapping to
+`reward.json`.
+
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
 a non-Git version store, an evolutionary search algorithm, or an orchestrator

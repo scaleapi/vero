@@ -914,6 +914,22 @@ wheels = [
 ]
 
 [[package]]
+name = "fastapi"
+version = "0.139.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-doc" },
+    { name = "pydantic" },
+    { name = "starlette" },
+    { name = "typing-extensions" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d3/af/a5f50ccfa659ec1802cb4ca842c23f06d906a8cc9aef6016a2caeea3d4ed/fastapi-0.139.0.tar.gz", hash = "sha256:99ab7b2d92223c76d6cf10757ab3f89d45b38267fc20b2a136cf02f6beac3145", size = 423016, upload-time = "2026-07-01T16:35:33.436Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/7c/8e3c6ad324ea5cb36604fc3f968554887891c316d9dfde57761611d907ad/fastapi-0.139.0-py3-none-any.whl", hash = "sha256:cf15e1e9e667ddb0ad63811e60bd11390d1aac838ca4a7a23f421807b2308189", size = 130339, upload-time = "2026-07-01T16:35:32.19Z" },
+]
+
+[[package]]
 name = "fastjsonschema"
 version = "2.21.2"
 source = { registry = "https://pypi.org/simple" }
@@ -4269,6 +4285,10 @@ evaluate = [
     { name = "haikunator" },
     { name = "rich" },
 ]
+harbor = [
+    { name = "fastapi" },
+    { name = "uvicorn" },
+]
 jupyter = [
     { name = "jupyter" },
 ]
@@ -4324,6 +4344,7 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'optimize'", specifier = ">=4.3.0" },
     { name = "docker", marker = "extra == 'docker'", specifier = ">=7.1.0" },
+    { name = "fastapi", marker = "extra == 'harbor'", specifier = ">=0.110" },
     { name = "haikunator", marker = "extra == 'evaluate'", specifier = ">=2.1.0" },
     { name = "haikunator", marker = "extra == 'optimize'", specifier = ">=2.1.0" },
     { name = "jinja2", marker = "extra == 'optimize'", specifier = ">=3.1.6" },
@@ -4349,10 +4370,11 @@ requires-dist = [
     { name = "toml", specifier = ">=0.10.2" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "trafilatura", marker = "extra == 'optimize'", specifier = ">=2.0.0" },
+    { name = "uvicorn", marker = "extra == 'harbor'", specifier = ">=0.27" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.2.5" },
     { name = "wcmatch", marker = "extra == 'optimize'", specifier = ">=10.1" },
 ]
-provides-extras = ["wandb", "sgp", "docker", "claude", "optimize", "jupyter", "kaggle", "evaluate", "plot", "notebook"]
+provides-extras = ["wandb", "sgp", "docker", "harbor", "claude", "optimize", "jupyter", "kaggle", "evaluate", "plot", "notebook"]
 
 [package.metadata.requires-dev]
 dev = [

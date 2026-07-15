@@ -323,5 +323,10 @@ def session_inspect(session_dir: Path) -> None:
     click.echo(manifest.model_dump_json(indent=2))
 
 
+from vero.harbor.cli import harbor as harbor_command
+
+main.add_command(harbor_command)
+
+
 if __name__ == "__main__":
     main()

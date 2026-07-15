@@ -34,6 +34,10 @@ sgp = [
 docker = [
     "docker>=7.1.0",
 ]
+harbor = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+]
 claude = [
     "claude-agent-sdk>=0.1.56",
 ]
