@@ -12,8 +12,6 @@ from typing import Any
 from pydantic import Field
 
 from vero.core.constants import default_minimum_score
-from vero.core.db.result import ExperimentResultStatus
-from vero.core.evaluation import BaseEvaluationParameters
 from vero.evaluation.backend import EvaluationContext
 from vero.evaluation.legacy import _convert_case
 from vero.evaluation.models import (
@@ -29,6 +27,7 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.evaluation.vero_task_protocol import BaseEvaluationParameters
 from vero.evaluator import Evaluator as LegacyEvaluator
 
 
@@ -332,7 +331,7 @@ class VeroTaskBackend:
             metrics["score"] = score
         status = (
             EvaluationStatus.SUCCESS
-            if experiment.result.status == ExperimentResultStatus.SUCCESS
+            if experiment.result.status.value == "success"
             else EvaluationStatus.FAILED
         )
         report = EvaluationReport(

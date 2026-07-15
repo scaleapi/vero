@@ -309,7 +309,7 @@ All data is stored under `~/.vero/sessions/{session_id}/`:
 
 ```
 sessions/{session_id}/
-├── experiments/{result_id}/
+├── experiments/{evaluation_id}/
 │   ├── evaluation.json              # Schema-v2 request, report, provenance, objective
 │   ├── cases/                       # Hashed canonical case checkpoints
 │   ├── artifacts/                   # Logs, profiles, compiler output, traces
@@ -331,7 +331,7 @@ the canonical manifests and case files.
 
 ### Resuming and Forking Sessions
 
-Resume an existing session (reconnects to the same project and experiments):
+Resume an existing session (reconnects to the same project and evaluations):
 
 ```python
 resumed = Policy.resume(
@@ -341,12 +341,12 @@ resumed = Policy.resume(
     task="main",
 )
 async with resumed:
-    # DB is reconstructed from experiments on disk
+    # DB is reconstructed from schema-v2 evaluations on disk
     # Use skip_initial_eval=True since baseline already exists
     best = await resumed.run(skip_initial_eval=True)
 ```
 
-Fork creates a copy of the project and experiments in a new session:
+Fork creates a copy of the project and evaluations in a new session:
 
 ```python
 forked = Policy.fork(

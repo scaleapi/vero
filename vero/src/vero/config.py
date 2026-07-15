@@ -223,11 +223,14 @@ async def build_program_runtime(
     database = (
         EvaluationDatabase.load_from_file(database_path)
         if database_path.exists()
-        else EvaluationDatabase.from_evaluations_dir(
-            session_dir / "experiments",
-            db_id=session_id,
-        )
+        else EvaluationDatabase(id=session_id)
     )
+    reconstructed = EvaluationDatabase.from_evaluations_dir(
+        session_dir / "experiments",
+        db_id=session_id,
+    )
+    for record in reconstructed.evaluations.values():
+        database.add_evaluation(record)
 
     command_config = CommandBackendConfig(
         harness_root=str(harness_root),

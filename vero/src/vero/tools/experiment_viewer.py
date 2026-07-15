@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -12,6 +11,7 @@ from vero.core.dataset import (
 )
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.db.result import SampleResult
+from vero.evaluation import EvaluationDatabase, evaluation_record_to_experiment
 from vero.tools.utils import is_tool
 from vero.tools.utils.pandas import query_and_order_df
 from vero.utils import df_to_format
@@ -19,24 +19,42 @@ from vero.utils import df_to_format
 if TYPE_CHECKING:
     import pandas as pd
 
-
-
-@dataclass
 class ExperimentViewer:
-    """View results and statistics of experiments."""
+    """Deprecated dataset view over a canonical evaluation database."""
 
-    exclude_tools: list[str] = field(default_factory=list)
+    def __init__(
+        self,
+        *,
+        exclude_tools: list[str] | None = None,
+        db: ExperimentDatabase | None = None,
+        database: EvaluationDatabase | None = None,
+        exclude_splits: list[str] | None = None,
+    ):
+        self.exclude_tools = list(exclude_tools or [])
+        self._legacy_db = db
+        self.database = database
+        self.exclude_splits = list(exclude_splits or [])
 
-    # Runtime fields — set during bind()
-    db: ExperimentDatabase | None = None
-    exclude_splits: list[str] = field(default_factory=list)
+    @property
+    def db(self) -> ExperimentDatabase | None:
+        """Return a legacy view without retaining a second canonical copy."""
+        if self._legacy_db is not None:
+            return self._legacy_db
+        if self.database is None:
+            return None
+        from vero.evaluation import evaluation_database_to_experiment_database
+
+        return evaluation_database_to_experiment_database(self.database)
 
     def bind(self, session) -> None:
-        self.db = session.db
+        self.database = session.database
+        self._legacy_db = None
         if session.split_accesses:
             self.exclude_splits = get_non_viewable_splits(session.split_accesses)
 
-        assert isinstance(self.db, ExperimentDatabase), "db must be an ExperimentDatabase"
+        assert isinstance(self.database, EvaluationDatabase), (
+            "database must be an EvaluationDatabase"
+        )
         assert isinstance(self.exclude_splits, list), "exclude_splits must be a list"
 
     def experiments(self, splits: list[str] | None = None) -> list[Experiment]:
@@ -47,7 +65,7 @@ class ExperimentViewer:
             if disallowed:
                 raise ValueError(f"You do not have permission to view these splits: {disallowed}")
 
-        def filter_fn(experiment: Experiment) -> bool:
+        def allowed(experiment: Experiment) -> bool:
             split = experiment.run.dataset_subset.split
             if split in self.exclude_splits:
                 return False
@@ -56,7 +74,20 @@ class ExperimentViewer:
             else:
                 return True
 
-        return self.db.get_experiments(filter_fn=filter_fn)
+        if self.database is not None:
+            projected = []
+            for record in self.database.get_evaluations():
+                try:
+                    experiment = evaluation_record_to_experiment(record)
+                except ValueError:
+                    continue
+                if allowed(experiment):
+                    projected.append(experiment)
+            return projected
+        if self.db is None:
+            raise ValueError("ExperimentViewer is not bound to an evaluation database")
+        assert self._legacy_db is not None
+        return self._legacy_db.get_experiments(filter_fn=allowed)
 
     def df(self, splits: list[str] | None = None) -> "pd.DataFrame":
         from vero.core.constants import default_minimum_score
@@ -64,7 +95,12 @@ class ExperimentViewer:
         # TODO: fill_score should come from the task definition (score range
         # is task-specific, not always 0-based). For now, use the global
         # default so errors are penalized and the agent sees their cost.
-        return self.db.get_experiments_df(self.experiments(splits), fill_score=default_minimum_score)
+        compatibility_db = ExperimentDatabase(id="evaluation-view")
+        for experiment in self.experiments(splits):
+            compatibility_db.add_experiment(experiment)
+        return compatibility_db.get_experiments_df(
+            fill_score=default_minimum_score
+        )
 
     @classmethod
     def load_from_file(cls, path_to_experiments_db_json: Path | str) -> "ExperimentViewer":
@@ -72,8 +108,8 @@ class ExperimentViewer:
         path_to_experiments_db_json = Path(path_to_experiments_db_json).resolve()
         if not path_to_experiments_db_json.exists():
             raise FileNotFoundError(f"Path {path_to_experiments_db_json} does not exist")
-        db = ExperimentDatabase.load_from_file(path_to_experiments_db_json)
-        return cls(db=db)
+        database = EvaluationDatabase.load_from_file(path_to_experiments_db_json)
+        return cls(database=database)
 
     @is_tool
     def readme(self) -> str:
@@ -162,7 +198,7 @@ When viewing experiment tables, these score columns are available:
             KeyError: If experiment not found or split is excluded
         """
         # Search across all experiments in the database
-        all_experiments = self.db.get_experiments()
+        all_experiments = self.experiments()
 
         for experiment in all_experiments:
             if experiment.id == experiment_id:

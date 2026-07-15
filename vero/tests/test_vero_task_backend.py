@@ -9,6 +9,7 @@ import pytest
 from datasets import Dataset, DatasetDict
 
 from vero.agents.base import BaseAgent
+from vero.artifacts import TracesArtifact
 from vero.core.db.candidate import Candidate
 from vero.core.db.database import Experiment
 from vero.core.db.dataset import DatasetSample, DatasetSubset
@@ -302,6 +303,8 @@ async def test_dataset_policy_routes_evaluation_through_vero_task_backend(
         task="score",
         use_copy=False,
         vero_home=tmp_path / "vero-home",
+        artifacts=[TracesArtifact()],
+        split_accesses=[],
         use_default_logging=False,
         enable_console=False,
     )
@@ -322,6 +325,46 @@ async def test_dataset_policy_routes_evaluation_through_vero_task_backend(
     record = next(iter(policy.evaluation_db.evaluations.values()))
     assert record.backend_id == "vero-task"
     assert record.schema_version == 2
+    assert policy.session.policy is policy
+    assert policy.session.engine.database is policy.session.database
+    assert policy.session.engine.budget_ledger is policy.session.budget_ledger
+    assert {
+        "evaluator",
+        "db",
+        "budget",
+        "evaluation_parameters",
+        "program_policy",
+        "evaluation_engine",
+        "evaluation_database",
+        "evaluation_backend_id",
+        "evaluation_objective",
+    }.isdisjoint(vars(policy.session))
+    compatibility_db = policy.session.db
+    assert compatibility_db is not None
+    assert [item.id for item in compatibility_db.get_experiments()] == [record.id]
+    result_dir = (
+        Path(policy._vero_home)
+        / "sessions"
+        / policy.session_id
+        / "experiments"
+        / record.id
+    )
+    assert (result_dir / "evaluation.json").exists()
+    assert not (result_dir / "evaluation_parameters.json").exists()
+    trace_dir = (
+        target
+        / "_vero"
+        / "traces"
+        / f"test__{record.request.candidate.commit[:8]}"
+    )
+    trace_summary = json.loads((trace_dir / "summary.json").read_text())
+    assert trace_summary["evaluation_id"] == record.id
+    assert trace_summary["objective"]["value"] == 0.75
+    case_files = [
+        path for path in trace_dir.glob("*.json") if path.name != "summary.json"
+    ]
+    assert len(case_files) == 1
+    assert json.loads(case_files[0].read_text())["case_id"] == "0"
     assert policy.get_best_version(["test"]).evaluation_id == record.id
     policy.finish()
     database_payload = json.loads((

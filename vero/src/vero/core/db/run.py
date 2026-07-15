@@ -12,7 +12,11 @@ if TYPE_CHECKING:
 
 
 class ExperimentRun(BaseModel):
-    """A run of a candidate system on a dataset subset.
+    """Deprecated VeroTask protocol request for a dataset subset.
+
+    General evaluation code should use ``EvaluationRequest`` and
+    ``EvaluationSet``. This type remains part of the Python task subprocess
+    protocol.
 
     Attributes:
         candidate: The candidate system to evaluate.

@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class DatasetSample(BaseModel):
-    """A dataset sample is a single sample from a dataset."""
+    """Deprecated VeroTask identity for one dataset case."""
 
     dataset_id: str
     split: str
@@ -12,7 +12,7 @@ class DatasetSample(BaseModel):
 
 
 class DatasetSubset(BaseModel):
-    """A dataset subset is a subset of a dataset."""
+    """Deprecated VeroTask selection; use ``EvaluationSet``."""
 
     dataset_id: str
     split: str

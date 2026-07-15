@@ -491,14 +491,14 @@ class EvaluationDatabase:
     @classmethod
     def from_evaluations_dir(
         cls,
-        experiments_dir: Path,
+        evaluations_dir: Path,
         *,
         db_id: str | None = None,
     ) -> EvaluationDatabase:
-        database = cls(id=db_id or experiments_dir.parent.name)
-        if not experiments_dir.exists():
+        database = cls(id=db_id or evaluations_dir.parent.name)
+        if not evaluations_dir.exists():
             return database
-        for result_dir in sorted(experiments_dir.iterdir()):
+        for result_dir in sorted(evaluations_dir.iterdir()):
             if not result_dir.is_dir():
                 continue
             manifest_path = result_dir / EvaluationStore.manifest_basename
@@ -516,7 +516,7 @@ class EvaluationDatabase:
 
         legacy_result_dirs = [
             result_dir
-            for result_dir in sorted(experiments_dir.iterdir())
+            for result_dir in sorted(evaluations_dir.iterdir())
             if result_dir.is_dir()
             and (result_dir / evaluation_parameters_basename).exists()
         ]

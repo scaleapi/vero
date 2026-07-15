@@ -81,7 +81,10 @@ class TaskResult(BaseModel):
 
 
 class SampleResult(TaskResult):
-    """Evaluation result for a single sample.
+    """Deprecated VeroTask result for one dataset sample.
+
+    General evaluation code should use ``CaseResult``. This model remains in
+    the Python task subprocess protocol and compatibility views.
 
     Attributes:
         id: Unique identifier for this sample result.
@@ -142,7 +145,9 @@ class ExperimentResultStatus(str, Enum):
 
 
 class ExperimentResult(BaseModel):
-    """The result of an experiment run, including evaluation results and the pytest report.
+    """Deprecated VeroTask aggregate result; use ``EvaluationReport``.
+
+    The result includes evaluation results and the pytest report.
 
     Attributes:
         id: Unique identifier for this experiment result.

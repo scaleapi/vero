@@ -124,7 +124,7 @@ class PhaseAnalysis(BaseModel):
 
 DEFAULT_PHASE_ANALYSIS_PROMPT = """You are analyzing a single phase of an LLM coding agent that is tasked with optimizing another LLM agent to perform a specific task.
 
-The agent makes code changes (shown as git diffs) and then evaluates the results through experiments.
+The optimizer makes code changes (shown as git diffs) and evaluates each resulting program version.
 
 ## Commit History
 
@@ -134,7 +134,7 @@ The agent makes code changes (shown as git diffs) and then evaluates the results
 
 {trace_items}
 
-## Experiment Results
+## Evaluation Results
 
 {experiment_info}
 
@@ -197,7 +197,7 @@ def format_experiment_info(phase_info: dict[str, Any]) -> str:
     return (
         "\n".join(experiment_info_parts)
         if experiment_info_parts
-        else "No experiments in this phase"
+        else "No evaluations in this phase"
     )
 
 

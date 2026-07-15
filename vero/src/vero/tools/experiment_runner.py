@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, NoReturn
+from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from vero.core.db.database import Experiment, ExperimentDatabase
-from vero.core.evaluation import BaseEvaluationParameters
+from vero.evaluation.vero_task_protocol import BaseEvaluationParameters
 from vero.evaluator import Evaluator
 from vero.exceptions import (
     ExperimentBudgetExceeded,
@@ -16,6 +16,10 @@ from vero.tools.utils import is_tool
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from vero.evaluation import BudgetLedger
+    from vero.policy import Policy
+
 
 def _default_on_fatal(msg: str) -> NoReturn:
     raise RuntimeError(msg)
@@ -23,7 +27,7 @@ def _default_on_fatal(msg: str) -> NoReturn:
 
 @dataclass
 class SplitBudget:
-    """A stateful object that tracks the remaining budget for running experiments."""
+    """Deprecated dataset budget configuration and standalone compatibility ledger."""
 
     split: str
     dataset_id: str = ""
@@ -104,8 +108,9 @@ class ExperimentRunnerTool:
     _budget_map: dict[tuple[str, str], SplitBudget] = field(
         default_factory=dict, repr=False
     )
-    _canonical_ledger: Any = field(default=None, repr=False)
+    _canonical_ledger: BudgetLedger | None = field(default=None, repr=False)
     _canonical_backend_id: str | None = field(default=None, repr=False)
+    _policy: Policy | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.split_budgets:
@@ -116,23 +121,19 @@ class ExperimentRunnerTool:
     def bind(self, session) -> None:
         from copy import deepcopy
 
-        self.evaluator = session.evaluator
-        self.split_budgets = deepcopy(session.budget)
-        self.db = session.db
+        self._policy = session.policy
+        if self._policy is None:
+            raise ValueError("ExperimentRunnerTool requires a Policy-backed session")
+        self.evaluator = None
+        self.split_budgets = deepcopy(self._policy.budget or [])
+        self.db = None
         self._session_id = session.session_id
         self._vero_home = session.vero_home
-        self.run_constraints = session.evaluation_parameters
+        self.run_constraints = self._policy.evaluation_parameters
         self._task = session.task
         self._budget_map = {(sb.split, sb.dataset_id): sb for sb in self.split_budgets}
-        engine = getattr(session, "evaluation_engine", None)
-        self._canonical_ledger = (
-            engine.budget_ledger if engine is not None else None
-        )
-        self._canonical_backend_id = getattr(
-            session,
-            "evaluation_backend_id",
-            None,
-        )
+        self._canonical_ledger = session.budget_ledger
+        self._canonical_backend_id = session.backend_id
 
     def _canonical_budget(self, dataset_id: str, split: str):
         if self._canonical_ledger is None or self._canonical_backend_id is None:
@@ -174,7 +175,14 @@ class ExperimentRunnerTool:
         from vero.workspace.git import GitWorkspace
 
         try:
-            workspace = self.evaluator.workspace
+            if self._policy is not None:
+                if self._policy.session is None:
+                    raise ValueError("Policy is not initialized")
+                workspace = self._policy.session.workspace
+            elif self.evaluator is not None:
+                workspace = self.evaluator.workspace
+            else:
+                raise ValueError("ExperimentRunnerTool is not bound to an evaluator")
             if isinstance(workspace, GitWorkspace):
                 return await workspace.resolve_ref(commit)
             return commit
@@ -336,6 +344,21 @@ class ExperimentRunnerTool:
         """Evaluate a version of the codebase specified by a Git commit on a subset of a dataset."""
 
         try:
+            if self._policy is not None:
+                from vero.evaluation import evaluation_record_to_experiment
+
+                evaluation_set = self._policy._dataset_evaluation_set(
+                    dataset_id=dataset_id,
+                    split=split,
+                    sample_ids=sample_ids,
+                )
+                record = await self._policy.evaluate_candidate(
+                    commit,
+                    evaluation_set=evaluation_set,
+                )
+                return evaluation_record_to_experiment(record)
+            if self.evaluator is None:
+                raise ValueError("ExperimentRunnerTool is not bound to an evaluator")
             kwargs = {}
             if self._canonical_ledger is not None:
                 kwargs["meter_budget"] = True
@@ -497,13 +520,21 @@ class ExperimentRunnerTool:
         for split in accessible_splits:
             full_split_size = self._validate_and_count_samples(dataset_id, split)
             budget = self._budget_map.get((split, dataset_id))
+            canonical = self._canonical_budget(dataset_id, split)
 
             # Cap samples to remaining budget if needed
             requested_num_samples = full_split_size
             sample_ids = None
-            if budget and budget.remaining_sample_budget is not None:
+            remaining_cases = (
+                canonical.remaining_cases
+                if self._canonical_ledger is not None and canonical is not None
+                else budget.remaining_sample_budget
+                if budget is not None
+                else None
+            )
+            if remaining_cases is not None:
                 requested_num_samples = min(
-                    full_split_size, budget.remaining_sample_budget
+                    full_split_size, remaining_cases
                 )
                 sample_ids = self._get_samples_from_split(
                     dataset_id, split, requested_num_samples

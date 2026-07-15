@@ -30,6 +30,18 @@ from vero.evaluation import (
 )
 
 
+def test_canonical_evaluation_types_are_exported_from_package_root():
+    from vero import (
+        BudgetLedger,
+        EvaluationDatabase,
+        EvaluationRecord as RootEvaluationRecord,
+    )
+
+    assert EvaluationDatabase.__name__ == "EvaluationDatabase"
+    assert BudgetLedger.__name__ == "BudgetLedger"
+    assert RootEvaluationRecord is EvaluationRecord
+
+
 @pytest.mark.parametrize(
     "selection",
     [

@@ -42,8 +42,14 @@ class Evaluator:
         self.use_copy = use_copy
 
     @property
-    def experiments_dir(self) -> Path:
+    def evaluations_dir(self) -> Path:
+        """Canonical records, stored under the stable historical directory name."""
         return self.sessions_dir / self.session_id / "experiments"
+
+    @property
+    def experiments_dir(self) -> Path:
+        """Deprecated alias for callers written during schema-v2 development."""
+        return self.evaluations_dir
 
     @asynccontextmanager
     async def _candidate_workspace(
@@ -118,7 +124,7 @@ class Evaluator:
     ) -> EvaluationRecord:
         evaluation_id = str(uuid4())
         created_at = datetime.now()
-        result_dir = self.experiments_dir / evaluation_id
+        result_dir = self.evaluations_dir / evaluation_id
         store = EvaluationStore(result_dir)
         result_dir.mkdir(parents=True, exist_ok=False)
         store.artifact_dir.mkdir(parents=True, exist_ok=True)

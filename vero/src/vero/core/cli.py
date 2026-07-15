@@ -137,7 +137,7 @@ def session_list():
 @session.command(name="inspect")
 @click.argument("session_id")
 def session_inspect(session_id: str):
-    """Inspect a session: config, experiments, and scores."""
+    """Inspect a session: config, evaluations, and objective values."""
     from vero.core.sessions import get_vero_home_dir
 
     session_dir = get_vero_home_dir() / "sessions" / session_id
@@ -167,11 +167,12 @@ def session_inspect(session_id: str):
     else:
         click.echo("Config: (not found)")
 
-    # Experiments
+    # Schema-v2 evaluations and schema-v1 compatibility records share the
+    # stable historical directory name.
     experiments_dir = session_dir / "experiments"
     if experiments_dir.exists():
         experiment_ids = sorted(d.name for d in experiments_dir.iterdir() if d.is_dir())
-        click.echo(f"\nExperiments ({len(experiment_ids)}):")
+        click.echo(f"\nEvaluations ({len(experiment_ids)}):")
 
         for exp_id in experiment_ids:
             exp_dir = experiments_dir / exp_id
@@ -806,7 +807,7 @@ def evaluate(
 
         async def _evaluate_program():
             runtime = await build_program_runtime(load_config(config_path))
-            record = await runtime.policy.evaluate_version(runtime.policy.base_version)
+            record = await runtime.policy.evaluate_candidate(runtime.policy.base_version)
             click.echo(f"Session ID: {runtime.session_id}")
             click.echo(f"Evaluation ID: {record.id}")
             click.echo(f"Commit: {record.request.candidate.commit}")

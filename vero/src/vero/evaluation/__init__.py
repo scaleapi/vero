@@ -41,7 +41,6 @@ from vero.evaluation.backend import (
 from vero.evaluation.budget import BudgetLedger
 from vero.evaluation.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.compatibility import (
-    VeroTaskEvaluatorAdapter,
     evaluation_database_to_experiment_database,
     evaluation_record_to_experiment,
 )
@@ -123,7 +122,6 @@ __all__ = [
     "UnknownBackendError",
     "VeroTaskBackend",
     "VeroTaskBackendConfig",
-    "VeroTaskEvaluatorAdapter",
     "compare_evaluation_records",
     "compatibility_objective",
     "convert_experiment_database",

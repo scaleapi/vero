@@ -174,7 +174,7 @@ async def test_evaluation_only_config_requires_no_optimizer_or_dataset(tmp_path:
     )
     runtime = await build_program_runtime(load_config(config_path))
 
-    record = await runtime.policy.evaluate_version(baseline_commit)
+    record = await runtime.policy.evaluate_candidate(baseline_commit)
 
     assert record.report.metrics["latency_ms"] == 10.0
     assert record.objective.value == 10.0
@@ -222,6 +222,17 @@ async def test_policy_constructor_supports_dataset_free_program_optimization(
     assert best.score == 1.0
     assert policy.dataset is None
     assert policy.program_run.baseline.objective.value == 10.0
+    assert policy.session.policy is policy
+    assert policy.session.engine is policy.program_policy.engine
+    assert policy.session.database is policy.program_policy.engine.database
+    assert policy.session.budget_ledger is policy.program_policy.engine.budget_ledger
+    assert {
+        "evaluator",
+        "db",
+        "program_policy",
+        "evaluation_engine",
+        "evaluation_database",
+    }.isdisjoint(vars(policy.session))
 
 
 @pytest.mark.asyncio
@@ -231,8 +242,7 @@ async def test_evaluation_runner_tool_uses_canonical_program_policy(tmp_path: Pa
         with_optimizer=False,
     )
     runtime = await build_program_runtime(load_config(config_path))
-    tool = EvaluationRunnerTool()
-    tool.bind(type("Session", (), {"program_policy": runtime.policy})())
+    tool = EvaluationRunnerTool(policy=runtime.policy)
 
     payload = json.loads(await tool.evaluate_candidate(baseline_commit))
 
@@ -249,14 +259,14 @@ async def test_evaluation_viewer_exposes_summary_report_and_artifacts(tmp_path: 
         with_optimizer=False,
     )
     runtime = await build_program_runtime(load_config(config_path))
-    record = await runtime.policy.evaluate_version(baseline_commit)
+    record = await runtime.policy.evaluate_candidate(baseline_commit)
     viewer = EvaluationViewer()
     viewer.bind(
         type(
             "Session",
             (),
             {
-                "evaluation_database": runtime.policy.engine.database,
+                "database": runtime.policy.engine.database,
                 "split_accesses": None,
             },
         )()

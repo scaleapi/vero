@@ -21,7 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class Experiment(BaseModel):
-    """An experiment is a run of a candidate system on a dataset subset."""
+    """Deprecated dataset view of a canonical ``EvaluationRecord``.
+
+    New evaluation and optimization code should use ``vero.EvaluationRecord``.
+    This model remains for VeroTask extensions and existing callers.
+    """
 
     run: ExperimentRun
     result: ExperimentResult
@@ -69,7 +73,11 @@ class Experiment(BaseModel):
 
 @dataclass
 class ExperimentDatabase:
-    """A database of experiments."""
+    """Deprecated schema-v1 dataset database.
+
+    Runtime state is held in ``vero.EvaluationDatabase``. This class remains a
+    compatibility serialization and projection target.
+    """
 
     id: str
     candidates: dict[tuple[str, ...], Candidate] = field(default_factory=dict)

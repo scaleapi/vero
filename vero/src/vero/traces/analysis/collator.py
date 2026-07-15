@@ -21,8 +21,8 @@ from openai.types.responses.response_input_item import FunctionCallOutput
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, TypeAdapter
 
 from vero.core.db.candidate import Candidate
-from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.sessions import get_vero_home_dir
+from vero.evaluation import EvaluationDatabase, EvaluationRecord
 from vero.workspace.git import GitWorkspace
 
 # =============================================================================
@@ -491,15 +491,16 @@ class TraceUtils:
 
 
 class OptimizationPhase(BaseModel):
-    """Represents a single optimization phase ending with at least one experiment evaluation."""
+    """An optimization phase ending with at least one evaluation."""
 
     commits: GitCommitHistory = Field(
         description="Commits made during this phase", repr=False
     )
     final_commit: Candidate = Field(description="Final commit that was evaluated")
-    experiments: list[Experiment] = Field(
+    evaluations: list[EvaluationRecord] = Field(
         default_factory=list,
-        description="Experiments run during this phase",
+        validation_alias=AliasChoices("evaluations", "experiments"),
+        description="Evaluations run during this phase",
         repr=False,
     )
     trace_segments: list[TraceSegment] = Field(
@@ -546,22 +547,29 @@ class OptimizationPhase(BaseModel):
         return self.latest_span_idx - self.earliest_span_idx
 
     def get_experiment_scores(self) -> list[dict[str, Any]]:
-        """Get experiment scores for this phase."""
+        """Return the legacy trace-analysis score export."""
         scores = []
-        for exp in self.experiments:
-            stats = exp.result.sample_results_statistics(as_dict=True)
+        for evaluation in self.evaluations:
+            evaluation_set = evaluation.request.evaluation_set
             scores.append(
                 {
-                    "experiment_id": exp.id,
-                    "commit": exp.run.candidate.commit,
-                    "dataset": exp.run.dataset_subset.dataset_id,
-                    "split": exp.run.dataset_subset.split,
-                    "mean_score": stats.get("mean_score") if stats else None,
-                    "error_rate": stats.get("error_rate") if stats else None,
-                    "num_samples": stats.get("num_results") if stats else None,
+                    "experiment_id": evaluation.id,
+                    "commit": evaluation.request.candidate.commit,
+                    "dataset": evaluation_set.name,
+                    "split": evaluation_set.partition,
+                    "mean_score": evaluation.objective.value
+                    if evaluation.objective is not None
+                    else evaluation.report.metrics.get("score"),
+                    "error_rate": evaluation.report.metrics.get("error_rate"),
+                    "num_samples": len(evaluation.report.cases),
                 }
             )
         return scores
+
+    @property
+    def experiments(self) -> list[EvaluationRecord]:
+        """Deprecated trace-analysis alias for ``evaluations``."""
+        return self.evaluations
 
 
 class SubAgentInfo(BaseModel):
@@ -639,7 +647,10 @@ class TraceAnalysisPayload(BaseModel):
     session_id: str
     config: SessionConfig
     phases: list[OptimizationPhase] = Field(default_factory=list)
-    experiments: list[Experiment] = Field(default_factory=list)
+    evaluations: list[EvaluationRecord] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("evaluations", "experiments"),
+    )
     agent_trace: Trace = Field(default_factory=list)
     sub_agents_trace: dict[str, SubAgentTrace] = Field(default_factory=dict)
 
@@ -681,10 +692,10 @@ class TraceAnalysisPayload(BaseModel):
         agent_trace = parse_trace(raw_trace)
 
         # Load database.json
-        database: ExperimentDatabase | None = None
+        database: EvaluationDatabase | None = None
         db_path = session_path / "database.json"
         if db_path.exists():
-            database = ExperimentDatabase.load_from_file(db_path)
+            database = EvaluationDatabase.load_from_file(db_path)
 
         if not database:
             raise ValueError("database.json is required to build phases")
@@ -710,9 +721,9 @@ class TraceAnalysisPayload(BaseModel):
         # then git branch tip. config.current_commit may equal base_commit if saved early.
         final_commit = config.final_commit
         if final_commit == config.base_commit and database:
-            experiments = database.get_experiments()
-            if experiments:
-                final_commit = experiments[-1].run.candidate.commit
+            evaluations = database.get_evaluations()
+            if evaluations:
+                final_commit = evaluations[-1].request.candidate.commit
         if final_commit == config.base_commit:
             # Last resort: use the branch tip
             try:
@@ -733,7 +744,7 @@ class TraceAnalysisPayload(BaseModel):
             session_id=session_id,
             config=config,
             phases=phases,
-            experiments=database.get_experiments(),
+            evaluations=database.get_evaluations(),
             agent_trace=agent_trace,
             sub_agents_trace=sub_agents_trace,
         )
@@ -742,7 +753,7 @@ class TraceAnalysisPayload(BaseModel):
     async def _build_phases(
         cls,
         workspace: GitWorkspace,
-        database: ExperimentDatabase,
+        database: EvaluationDatabase,
         base_commit: str,
         final_commit: str,
         agent_trace: Trace,
@@ -751,7 +762,7 @@ class TraceAnalysisPayload(BaseModel):
 
         Algorithm:
         1. Get full commit history from base_commit to final_commit
-        2. Build experiments_by_commit dict from database
+        2. Build evaluations_by_commit dict from database
         3. Cut commit history at evaluated commits to define phases
         4. Correlate trace spans to phases using two-pointer algorithm
         """
@@ -760,13 +771,13 @@ class TraceAnalysisPayload(BaseModel):
         if not commit_history:
             return []
 
-        # Step 2: Build experiments by commit
-        experiments_by_commit: dict[str, list[Experiment]] = {}
-        for experiment in database.get_experiments():
-            commit = experiment.run.candidate.commit
-            if commit not in experiments_by_commit:
-                experiments_by_commit[commit] = []
-            experiments_by_commit[commit].append(experiment)
+        # Step 2: Build evaluations by commit
+        evaluations_by_commit: dict[str, list[EvaluationRecord]] = {}
+        for evaluation in database.get_evaluations():
+            commit = evaluation.request.candidate.commit
+            if commit not in evaluations_by_commit:
+                evaluations_by_commit[commit] = []
+            evaluations_by_commit[commit].append(evaluation)
 
         # Step 3: Build trace segments and correlate to phases
         trace_segments = TraceUtils.build_trace_segments(agent_trace)
@@ -779,7 +790,7 @@ class TraceAnalysisPayload(BaseModel):
 
         for candidate in commit_history:
             current_phase_commits.append(candidate)
-            if candidate.commit in experiments_by_commit:
+            if candidate.commit in evaluations_by_commit:
                 # End of phase - this commit was evaluated
 
                 # Check if the base commit is in the current phase commits
@@ -800,17 +811,17 @@ class TraceAnalysisPayload(BaseModel):
                     phase_trace_segments.append(trace_segments.pop(0))
                 phase.trace_segments = phase_trace_segments
 
-                phase_experiments = []
+                phase_evaluations = []
                 for candidate in phase.commits:
-                    phase_experiments.extend(
-                        experiments_by_commit.get(candidate.commit, [])
+                    phase_evaluations.extend(
+                        evaluations_by_commit.get(candidate.commit, [])
                     )
-                phase.experiments = phase_experiments
+                phase.evaluations = phase_evaluations
 
                 phases.append(phase)
                 current_phase_commits = []
 
-        # Handle remaining commits (no experiments at the end)
+        # Handle remaining commits (no evaluations at the end)
         if current_phase_commits:
             is_initial = base_commit in [
                 commit.commit for commit in current_phase_commits
@@ -833,7 +844,7 @@ class TraceAnalysisPayload(BaseModel):
             "base_commit": self.config.base_commit,
             "final_commit": self.config.final_commit,
             "num_phases": len(self.phases),
-            "num_experiments": len(self.experiments),
+            "num_experiments": len(self.evaluations),
             "total_trace_items": len(self.agent_trace),
             "num_sub_agents": len(self.sub_agents_trace),
             "sub_agent_names": list(self.sub_agents_trace.keys()),
@@ -841,7 +852,7 @@ class TraceAnalysisPayload(BaseModel):
                 {
                     "phase": i + 1,
                     "commit": phase.final_commit.commit,
-                    "num_experiments": len(phase.experiments),
+                    "num_experiments": len(phase.evaluations),
                     "num_trace_items": phase.num_trace_items,
                 }
                 for i, phase in enumerate(self.phases)
@@ -887,20 +898,27 @@ class TraceAnalysisPayload(BaseModel):
         """Get a summary of all experiment scores."""
 
         scores = []
-        for experiment in self.experiments:
-            stats = experiment.result.sample_results_statistics(as_dict=True)
+        for evaluation in self.evaluations:
+            evaluation_set = evaluation.request.evaluation_set
             scores.append(
                 {
-                    "experiment_id": experiment.id,
-                    "commit": experiment.run.candidate.commit,
-                    "dataset": experiment.run.dataset_subset.dataset_id,
-                    "split": experiment.run.dataset_subset.split,
-                    "mean_score": stats.get("mean_score") if stats else None,
-                    "error_rate": stats.get("error_rate") if stats else None,
-                    "num_samples": stats.get("num_results") if stats else None,
+                    "experiment_id": evaluation.id,
+                    "commit": evaluation.request.candidate.commit,
+                    "dataset": evaluation_set.name,
+                    "split": evaluation_set.partition,
+                    "mean_score": evaluation.objective.value
+                    if evaluation.objective is not None
+                    else evaluation.report.metrics.get("score"),
+                    "error_rate": evaluation.report.metrics.get("error_rate"),
+                    "num_samples": len(evaluation.report.cases),
                 }
             )
         return scores
+
+    @property
+    def experiments(self) -> list[EvaluationRecord]:
+        """Deprecated trace-analysis alias for ``evaluations``."""
+        return self.evaluations
 
     def get_phase(self, phase_index: int) -> OptimizationPhase | None:
         """Get a specific phase by index (0-based)."""

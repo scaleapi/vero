@@ -2,15 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 from vero.core.dataset import SplitAccess
-from vero.core.db import ExperimentDatabase
-from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluator import Evaluator
-from vero.tools.experiment_runner import SplitBudget  # noqa: E402 — direct import avoids tools/__init__.py
 from vero.workspace import Workspace
+
+if TYPE_CHECKING:
+    from vero.evaluation import (
+        BudgetLedger,
+        EvaluationDatabase,
+        EvaluationEngine,
+        EvaluationLimits,
+        EvaluationSet,
+        ObjectiveSpec,
+    )
+    from vero.core.db import ExperimentDatabase
+    from vero.policy import Policy
 
 
 class BestVersion(BaseModel):
@@ -38,18 +47,26 @@ class Session:
     vero_home: Path | None = None
     instructions: str | None = None
     workspace: Workspace | None = None
+    policy: Policy | None = None
+    engine: EvaluationEngine | None = None
+    database: EvaluationDatabase | None = None
+    budget_ledger: BudgetLedger | None = None
+    backend_id: str | None = None
+    evaluation_set: EvaluationSet | None = None
+    objective: ObjectiveSpec | None = None
+    limits: EvaluationLimits | None = None
     dataset_id: str | None = None
-    evaluator: Evaluator | None = None
-    db: ExperimentDatabase | None = None
     split_accesses: list[SplitAccess] | None = None
-    budget: list[SplitBudget] | None = None
-    evaluation_parameters: BaseEvaluationParameters | None = None
     task: str | None = None
     skills: dict[str, Path] = field(default_factory=dict)
     base_version: str | None = None
     base_branch: str | None = None
-    program_policy: object | None = None
-    evaluation_engine: object | None = None
-    evaluation_database: object | None = None
-    evaluation_backend_id: str | None = None
-    evaluation_objective: object | None = None
+
+    @property
+    def db(self) -> ExperimentDatabase | None:
+        """Return a deprecated schema-v1 view without storing parallel state."""
+        if self.database is None:
+            return None
+        from vero.evaluation import evaluation_database_to_experiment_database
+
+        return evaluation_database_to_experiment_database(self.database)

@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from rich.tree import Tree
 
-    from vero.core.db.database import ExperimentDatabase
+    from vero.evaluation import EvaluationDatabase
 
 
-def render_candidate_graph(db: ExperimentDatabase) -> Tree:
+def render_candidate_graph(db: EvaluationDatabase) -> Tree:
     """Renders a DAG of candidates based on commit-parent commit relationships using Rich Tree.
 
     Args:
@@ -21,7 +21,6 @@ def render_candidate_graph(db: ExperimentDatabase) -> Tree:
     """
     from rich.tree import Tree
 
-    from vero.core.dataset import DefaultSplitNames
     from vero.core.db.candidate import Candidate
 
     if not db.candidates:
@@ -31,13 +30,21 @@ def render_candidate_graph(db: ExperimentDatabase) -> Tree:
     # Build parent-child relationships
     children_map: dict[str, list[Candidate]] = {}
     roots: list[Candidate] = []
+    known_commits = {candidate.commit for candidate in db.candidates.values()}
 
     for candidate in db.candidates.values():
         if candidate.parent_commit is None:
             roots.append(candidate)
         else:
-            # Find parent by commit hash
-            parent_id = candidate.parent_commit[:10]
+            # Historical sessions sometimes stored abbreviated hashes. Resolve
+            # an unambiguous prefix while keeping full canonical hashes intact.
+            matches = [
+                commit
+                for commit in known_commits
+                if commit.startswith(candidate.parent_commit)
+                or candidate.parent_commit.startswith(commit)
+            ]
+            parent_id = matches[0] if len(matches) == 1 else candidate.parent_commit
             if parent_id not in children_map:
                 children_map[parent_id] = []
             children_map[parent_id].append(candidate)
@@ -54,26 +61,44 @@ def render_candidate_graph(db: ExperimentDatabase) -> Tree:
 
     def render_node(parent_tree: Tree, candidate: Candidate):
         """Recursively render a node and its children."""
-        # Get training split experiments for this candidate
-        candidate_experiments = [
-            experiment
-            for experiment in db.get_experiments()
-            if experiment.run.candidate == candidate
-            and experiment.run.dataset_subset.split == DefaultSplitNames.train
+        candidate_evaluations = [
+            evaluation
+            for evaluation in db.get_evaluations()
+            if evaluation.request.candidate == candidate
         ]
 
         # Build node info with rich formatting
         node_info = f"[yellow]{candidate.commit}[/yellow]"
-        if candidate_experiments:
-            scores = [exp.result.score() for exp in candidate_experiments]
-            scores = [score for score in scores if score is not None]
-            error_rates = [exp.result.error_rate() for exp in candidate_experiments]
-            if scores:
-                avg_score = sum(scores) / len(scores)
-                avg_error = sum(error_rates) / len(error_rates)
-                node_info += f" [dim]([/dim][green]score: {avg_score:.3f}[/green][dim],[/dim] [red]error: {avg_error:.3f}[/red]"
-                if len(candidate_experiments) > 1:
-                    node_info += f"[dim], n={len(candidate_experiments)}[/dim]"
+        if candidate_evaluations:
+            scored = [
+                evaluation
+                for evaluation in candidate_evaluations
+                if evaluation.objective is not None
+                and evaluation.objective.value is not None
+            ]
+            error_rates = [
+                evaluation.report.metrics["error_rate"]
+                for evaluation in candidate_evaluations
+                if "error_rate" in evaluation.report.metrics
+            ]
+            if scored:
+                latest = max(scored, key=lambda evaluation: evaluation.completed_at)
+                assert latest.objective is not None
+                assert latest.objective.value is not None
+                metric = (
+                    latest.objective_spec.selector.metric
+                    if latest.objective_spec is not None
+                    else "objective"
+                )
+                node_info += (
+                    f" [dim]([/dim][green]{metric}: "
+                    f"{latest.objective.value:.3f}[/green]"
+                )
+                if error_rates:
+                    avg_error = sum(error_rates) / len(error_rates)
+                    node_info += f"[dim],[/dim] [red]error: {avg_error:.3f}[/red]"
+                if len(candidate_evaluations) > 1:
+                    node_info += f"[dim], n={len(candidate_evaluations)}[/dim]"
                 node_info += "[dim])[/dim]"
 
         # Add the current node

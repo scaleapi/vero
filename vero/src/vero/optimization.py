@@ -244,7 +244,7 @@ class ProgramPolicy:
             created_at=datetime.now(),
         )
 
-    async def evaluate_version(
+    async def evaluate_candidate(
         self,
         commit: str,
         *,
@@ -294,7 +294,7 @@ class ProgramPolicy:
                 )
             baseline = existing_baseline[-1]
         else:
-            baseline = await self.evaluate_version(base_version)
+            baseline = await self.evaluate_candidate(base_version)
 
         evaluations: list[EvaluationRecord] = [baseline]
         if self.optimizer is None:
@@ -324,7 +324,7 @@ class ProgramPolicy:
                 commit = await self.workspace.current_version()
             if commit == previous_version:
                 break
-            record = await self.evaluate_version(
+            record = await self.evaluate_candidate(
                 commit,
                 parent_commit=previous_version,
                 message=message,

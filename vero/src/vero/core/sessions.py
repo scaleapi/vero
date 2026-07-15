@@ -85,7 +85,7 @@ def get_session_state_path(sessions_dir: Path, session_id: str) -> Path:
 
 
 def get_session_experiments_dir(sessions_dir: Path, session_id: str) -> Path:
-    """Returns the path to the experiments directory within a session."""
+    """Return the durable evaluation directory (historical name retained)."""
     return get_session_dir(sessions_dir, session_id) / "experiments"
 
 

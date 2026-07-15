@@ -205,7 +205,7 @@ async def test_policy_evaluation_uses_canonical_vero_task_backend(workspace):
     kernel_dir, task_dir, dataset_path, vero_home = workspace
 
     from vero.agents.base import BaseAgent
-    from vero.evaluation import VeroTaskEvaluatorAdapter
+    from vero.evaluation import EvaluationDatabase, EvaluationEngine
     from vero.policy import Policy
 
     class NoOpAgent(BaseAgent):
@@ -244,17 +244,21 @@ async def test_policy_evaluation_uses_canonical_vero_task_backend(workspace):
         sample_ids=[0],
     )
 
-    assert isinstance(policy.session.evaluator, VeroTaskEvaluatorAdapter)
+    assert isinstance(policy.session.engine, EvaluationEngine)
+    assert isinstance(policy.session.database, EvaluationDatabase)
+    assert policy.session.engine is policy.evaluation_engine
+    assert policy.session.database is policy.evaluation_db
+    assert "evaluator" not in vars(policy.session)
+    assert "evaluation_database" not in vars(policy.session)
     assert len(policy.evaluation_db.evaluations) == 1
     record = next(iter(policy.evaluation_db.evaluations.values()))
     assert record.schema_version == 2
     assert record.backend_id == "vero-task"
     assert record.objective.value == experiment.result.score()
-    experiments_dir = (
-        vero_home / "sessions" / policy.session_id / "experiments"
-    )
-    result_dirs = [path for path in experiments_dir.iterdir() if path.is_dir()]
-    assert result_dirs == [experiments_dir / record.id]
+    # Keep the historical directory name while writing only schema-v2 records.
+    evaluations_dir = vero_home / "sessions" / policy.session_id / "experiments"
+    result_dirs = [path for path in evaluations_dir.iterdir() if path.is_dir()]
+    assert result_dirs == [evaluations_dir / record.id]
     assert (result_dirs[0] / "evaluation.json").exists()
     assert not (result_dirs[0] / "evaluation_parameters.json").exists()
 
@@ -375,5 +379,6 @@ async def test_policy_run_with_artifacts(workspace):
     summary_path = trace_dirs[0] / "summary.json"
     assert summary_path.exists(), "Trace should have summary.json"
     summary = json.loads(summary_path.read_text())
-    assert "score" in summary
+    assert "evaluation_id" in summary
+    assert "objective" in summary
     assert "status" in summary

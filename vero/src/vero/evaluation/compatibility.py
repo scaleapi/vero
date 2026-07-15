@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import warnings
-from datetime import datetime
+from typing import TYPE_CHECKING
 
-from vero.core.db.candidate import Candidate
 from vero.core.db.database import Experiment, ExperimentDatabase
 from vero.core.db.dataset import DatasetSample, DatasetSubset
 from vero.core.db.result import (
@@ -14,22 +12,18 @@ from vero.core.db.result import (
     SampleResult,
 )
 from vero.core.db.run import ExperimentRun
-from vero.core.evaluation import BaseEvaluationParameters
-from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.models import (
     AllCases,
     CaseIds,
     CaseRange,
     CaseStatus,
-    EvaluationAuthorization,
-    EvaluationLimits,
     EvaluationRecord,
-    EvaluationRequest,
     EvaluationSet,
     EvaluationStatus,
-    ObjectiveSpec,
 )
-from vero.workspace import GitWorkspace, Workspace
+
+if TYPE_CHECKING:
+    from vero.evaluation.persistence import EvaluationDatabase
 
 
 def _legacy_sample_ids(evaluation_set: EvaluationSet) -> list[int] | None:
@@ -121,7 +115,7 @@ def evaluation_record_to_experiment(record: EvaluationRecord) -> Experiment:
 
 
 def evaluation_database_to_experiment_database(
-    database,
+    database: EvaluationDatabase,
     *,
     backend_id: str = "vero-task",
 ) -> ExperimentDatabase:
@@ -135,98 +129,3 @@ def evaluation_database_to_experiment_database(
         except ValueError:
             continue
     return converted
-
-
-class VeroTaskEvaluatorAdapter:
-    """Preserve ``Evaluator.evaluate`` while routing work through the engine."""
-
-    def __init__(
-        self,
-        *,
-        engine: EvaluationEngine,
-        workspace: Workspace,
-        backend_id: str,
-        objective: ObjectiveSpec,
-        task: str | None,
-        compatibility_db: ExperimentDatabase,
-    ):
-        self.engine = engine
-        self.workspace = workspace
-        self.backend_id = backend_id
-        self.objective = objective
-        self.task = task
-        self.compatibility_db = compatibility_db
-
-    async def evaluate(
-        self,
-        commit: str,
-        dataset_id: str,
-        split: str,
-        task: str | None = None,
-        sample_ids: list[int] | None = None,
-        db: ExperimentDatabase | None = None,
-        evaluation_parameters: BaseEvaluationParameters | None = None,
-        use_copy: bool | None = None,
-        *,
-        meter_budget: bool = False,
-        add_to_compatibility_db: bool = True,
-    ) -> Experiment:
-        warnings.warn(
-            "Evaluator.evaluate(dataset_id=..., split=...) is deprecated; use "
-            "EvaluationEngine.evaluate_record()",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        if task is not None and self.task is not None and task != self.task:
-            raise ValueError(
-                f"approved VeroTask backend is configured for {self.task!r}, not {task!r}"
-            )
-        if use_copy is not None and use_copy != self.engine.evaluator.use_copy:
-            raise ValueError(
-                "per-call use_copy overrides are unsupported by the canonical evaluator"
-            )
-        if isinstance(self.workspace, GitWorkspace):
-            commit = await self.workspace.resolve_ref(commit)
-        parameters = evaluation_parameters or BaseEvaluationParameters()
-        candidate = self.engine.database.candidates.get((self.workspace.name, commit))
-        if candidate is None:
-            candidate = Candidate(
-                commit=commit,
-                repo_name=self.workspace.name,
-                created_at=datetime.now(),
-            )
-        selection = (
-            CaseIds(ids=[str(sample_id) for sample_id in sample_ids])
-            if sample_ids is not None
-            else AllCases()
-        )
-        request = EvaluationRequest(
-            candidate=candidate,
-            evaluation_set=EvaluationSet(
-                name=dataset_id,
-                partition=split,
-                selection=selection,
-            ),
-            parameters=parameters.task_params,
-            limits=EvaluationLimits(
-                timeout_seconds=parameters.timeout,
-                case_timeout_seconds=parameters.sample_timeout,
-                max_concurrency=parameters.max_concurrency,
-                retry_config=parameters.retry_config,
-            ),
-        )
-        record = await self.engine.evaluate_record(
-            backend_id=self.backend_id,
-            request=request,
-            objective_spec=self.objective,
-            authorization=EvaluationAuthorization(
-                may_evaluate=True,
-                meter_budget=meter_budget,
-            ),
-        )
-        experiment = evaluation_record_to_experiment(record)
-        if db is not None:
-            db.add_experiment(experiment)
-        elif add_to_compatibility_db and self.compatibility_db is not None:
-            self.compatibility_db.add_experiment(experiment)
-        return experiment

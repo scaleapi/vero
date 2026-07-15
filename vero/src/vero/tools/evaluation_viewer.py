@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from vero.evaluation import DisclosureLevel, project_evaluation
+from vero.evaluation import (
+    DisclosureLevel,
+    EvaluationDatabase,
+    EvaluationRecord,
+    project_evaluation,
+)
 from vero.tools.utils import is_tool
 
 
@@ -14,18 +19,18 @@ class EvaluationViewer:
     """Inspect canonical evaluation summaries, cases, and artifacts."""
 
     exclude_tools: list[str] = field(default_factory=list)
-    database: object | None = None
+    database: EvaluationDatabase | None = None
     excluded_partitions: set[str] = field(default_factory=set)
 
     def bind(self, session) -> None:
-        self.database = getattr(session, "evaluation_database", None)
+        self.database = session.database
         split_accesses = getattr(session, "split_accesses", None)
         if split_accesses:
             from vero.core.dataset import get_non_viewable_splits
 
             self.excluded_partitions = set(get_non_viewable_splits(split_accesses))
 
-    def _record(self, evaluation_id: str):
+    def _record(self, evaluation_id: str) -> EvaluationRecord:
         if self.database is None:
             raise ValueError("EvaluationViewer requires a canonical evaluation database")
         record = self.database.get_evaluation(evaluation_id)
