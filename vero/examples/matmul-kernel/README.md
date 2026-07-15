@@ -20,6 +20,11 @@ uv run python examples/matmul-kernel/run.py --agent vero
 uv run python examples/matmul-kernel/run.py --agent claude
 ```
 
+`--max-candidates` limits completed optimization attempts. Agent-requested
+checkpoints are evaluations too, so use the independent `--max-evaluations`
+option when you also want a hard evaluation budget. That budget includes the
+baseline, checkpoints, and completed candidates.
+
 Every candidate is edited and evaluated in an isolated Git worktree. The
 original target template is unchanged, while reports, agent state, events, and
 the best candidate identity are preserved in the printed session directory.

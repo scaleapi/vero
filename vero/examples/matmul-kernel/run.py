@@ -135,6 +135,7 @@ async def run_example(
     work_dir: Path,
     agent_name: str | None,
     max_candidates: int,
+    max_evaluations: int | None,
 ) -> None:
     target = create_target(work_dir)
     cases = create_cases(work_dir / "cases.json")
@@ -170,14 +171,17 @@ async def run_example(
         strategy=SequentialStrategy(instruction=INSTRUCTION),
         producers=producers,
         parameters={"n_repeats": 100},
-        budgets=[
-            EvaluationBudget(
-                backend_id="python-task",
-                evaluation_set_key=evaluation_set.budget_key("python-task"),
-                total_runs=max_candidates + 1,
-                remaining_runs=max_candidates + 1,
-            )
-        ],
+        budgets=(
+            [
+                EvaluationBudget(
+                    backend_id="python-task",
+                    evaluation_set_key=evaluation_set.budget_key("python-task"),
+                    total_runs=max_evaluations,
+                )
+            ]
+            if max_evaluations is not None
+            else None
+        ),
         max_candidates=max_candidates,
     )
     result = await session.run()
@@ -202,10 +206,21 @@ def main() -> None:
         help="Coding-agent adapter used for optimization.",
     )
     parser.add_argument("--max-candidates", type=int, default=5)
+    parser.add_argument(
+        "--max-evaluations",
+        type=int,
+        help=(
+            "Optional evaluation-run budget, including the baseline, agent "
+            "checkpoints, and completed candidates. By default evaluations are "
+            "not separately capped."
+        ),
+    )
     parser.add_argument("--work-dir", type=Path)
     arguments = parser.parse_args()
     if arguments.max_candidates < 0:
         parser.error("--max-candidates must be non-negative")
+    if arguments.max_evaluations is not None and arguments.max_evaluations < 1:
+        parser.error("--max-evaluations must be positive")
 
     work_dir = arguments.work_dir or Path(tempfile.mkdtemp(prefix="vero-matmul-"))
     work_dir = work_dir.expanduser().resolve()
@@ -216,6 +231,7 @@ def main() -> None:
             work_dir=work_dir,
             agent_name=None if arguments.eval_only else arguments.agent,
             max_candidates=0 if arguments.eval_only else arguments.max_candidates,
+            max_evaluations=arguments.max_evaluations,
         )
     )
 
