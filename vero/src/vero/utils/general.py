@@ -4,9 +4,6 @@ import re
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
     Protocol,
     TypeVar,
     overload,
@@ -15,33 +12,12 @@ from typing import (
 
 from pydantic import BaseModel, JsonValue
 
-if TYPE_CHECKING:
-    import pandas as pd
-
 JsonT = TypeVar("JsonT", bound=JsonValue)
 
 
 @runtime_checkable
 class IsDataclass(Protocol):
     __dataclass_fields__: dict  # all dataclasses have this attribute
-
-
-def normalize_dash_underscore(s: str) -> str:
-    """Just to make things look nice."""
-    underscore_count = s.count("_")
-    dash_count = s.count("-")
-    if underscore_count > dash_count:
-        return s.replace("_", "-")
-    else:
-        return s.replace("-", "_")
-
-
-def random_readable_id(token_length: int = 0) -> str:
-    """Generates a random readable ID, e.g. fragrant-bread"""
-    from haikunator import Haikunator
-
-    haikunator = Haikunator()
-    return haikunator.haikunate(token_length=token_length)
 
 
 @overload
@@ -80,102 +56,6 @@ def recursively_serialize(
         return str(data)
 
     return data  # type: ignore
-
-
-def df_to_format(
-    df: pd.DataFrame,
-    fmt: str
-    | Literal[
-        "csv", "json", "jsonl", "html", "markdown", "yaml", "ini", "pipe", "kv_markdown"
-    ],
-    **kwargs: Any,
-) -> str | None:
-    """
-    Convert a Pandas DataFrame to a string in the given format.
-
-    Args:
-        df: The DataFrame to convert
-        fmt: The format to convert to
-        kwargs: Format-specific options (e.g. indent, table_name, etc.)
-
-    Returns:
-        A string in the given format
-    """
-
-    fmt = str(fmt).lower()
-
-    if fmt == "csv":
-        import io
-
-        buf = io.StringIO()
-        df.to_csv(buf, index=False, **kwargs)
-        return buf.getvalue()
-
-    elif fmt == "json":
-        return df.to_json(orient="records", force_ascii=False, date_format="iso", **kwargs)
-
-    elif fmt == "jsonl":
-        import json
-
-        records = df.to_dict(orient="records")
-        lines = [json.dumps(rec, ensure_ascii=False, **kwargs) for rec in records]
-        return "\n".join(lines)
-
-    elif fmt == "html":
-        return df.to_html(index=False, **kwargs)
-
-    elif fmt == "markdown":
-        return df.to_markdown(index=False, **kwargs)
-
-    elif fmt == "yaml":
-        import yaml
-
-        records = df.to_dict(orient="records")
-        wrapper = kwargs.get("top_key", "records")
-        return yaml.dump({wrapper: records}, sort_keys=False, allow_unicode=True)
-
-    elif fmt == "ini":
-        import io
-        from configparser import ConfigParser
-
-        table_name = kwargs.get("record_prefix", "record")
-        cfg = ConfigParser()
-        records = df.to_dict(orient="records")
-        for i, rec in enumerate(records, start=0):
-            section = f"{table_name}_{i}"
-            cfg[section] = {str(k): str(v) for k, v in rec.items()}
-        s = io.StringIO()
-        cfg.write(s)
-        return s.getvalue()
-
-    elif fmt == "pipe":
-        recs = df.to_dict(orient="records")
-        lines = []
-        for rec in recs:
-            parts = [f"{k}: {v}" for k, v in rec.items()]
-            lines.append(" | ".join(parts))
-        return "\n".join(lines)
-
-    elif fmt == "kv_markdown":
-        recs = df.to_dict(orient="records")
-        lines = []
-
-        title = kwargs.get("title")
-        record_prefix = kwargs.get("record_prefix", "Record")
-
-        if title is not None:
-            lines.append(f"# {title}")
-
-        for i, rec in enumerate(recs, start=0):
-            lines.append(f"\n## {record_prefix} {i}")
-            lines.append("```markdown")
-            for k, v in rec.items():
-                lines.append(f"{k}: {v}")
-            lines.append("```\n")
-        return "\n".join(lines)
-
-    else:
-        raise ValueError(f"Unsupported format: {fmt}")
 
 
 def camel_to_snake(s: str) -> str:

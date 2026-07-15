@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 from async_lru import alru_cache
 
+from vero.tools.registry import ToolRegistry
+
 SCRAPING_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
 
 
@@ -294,3 +296,9 @@ class WebSearch:
                 "results": [],
             }
         )
+
+
+# These tools have optional scraping dependencies, so register them only when
+# the web module is imported.
+ToolRegistry.register(WebFetch)
+ToolRegistry.register(WebSearch)

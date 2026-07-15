@@ -1,34 +1,6 @@
 import asyncio
 
 
-class EvaluatorException(Exception):
-    """Base exception for evaluator errors."""
-
-    pass
-
-
-class ExperimentRunFailedError(EvaluatorException):
-    """Error raised when an experiment run fails."""
-
-    def __init__(self, message: str, stdout: str = "", stderr: str = "", returncode: int = 0):
-        super().__init__(message)
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
-
-
-class ExperimentBudgetExceeded(EvaluatorException):
-    """Exception raised when the experiment budget is exceeded."""
-
-    pass
-
-
-class InvalidSplitError(EvaluatorException):
-    """Exception raised when a split is invalid due to budget constraints or non-existence."""
-
-    pass
-
-
 class FileEditException(Exception):
     """Base exception for file edit errors."""
 

@@ -9,27 +9,16 @@ authors = [
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-    "boto3>=1.41.5",
+    "datasets>=4.3.0",
     "gdown>=5.2.0",
-    "jupyter>=1.1.1",
     "kagglehub>=0.3.13",
-    "kaleido>=1.2.0",
-    "matplotlib>=3.10.7",
-    "plotly>=6.5.2",
-    "retry2>=0.9.5",
-    "scale-vero[claude,jupyter,optimize,sgp,wandb,docker]",
+    "pandas>=2.3.3",
+    "scale-vero[claude,optimize]",
     "scale-vero-tasks>=0.1.0",
-    "tiktoken>=0.12.0",
-    "umap-learn>=0.5.11",
 ]
 
 [project.scripts]
 vero-benchmarking = "vero_benchmarking.runner:main"
-
-[project.optional-dependencies]
-gepa = [
-    "gepa>=0.0.22",
-]
 
 [dependency-groups]
 dev = [
