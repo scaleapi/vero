@@ -173,6 +173,39 @@ backend = PythonTaskBackend(PythonTaskBackendConfig(
 ))
 ```
 
+### Harbor tasks
+
+Harbor is also an evaluation backend, rather than a separate optimization
+runtime. Map each `EvaluationSet` case to one Harbor task and pin the Harbor
+package used to orchestrate the nested run:
+
+```json
+{"id": "task-1", "task_name": "org/terminal-task-1"}
+{"id": "task-2", "task_name": "org/terminal-task-2"}
+```
+
+```python
+from vero.harbor import HarborBackend, HarborBackendConfig
+
+backend = HarborBackend(HarborBackendConfig(
+    task_source="org/terminal-benchmark@1.0",
+    agent_import_path="my_program.agent:Agent",
+    cases_path=str(Path("../harbor-cases.jsonl").resolve()),
+    harbor_requirement="harbor==0.1.17",
+    evaluation_set_name="terminal-benchmark",
+    partition="test",
+    passthrough_environment=["ANTHROPIC_API_KEY"],
+))
+```
+
+VeRO invokes `harbor run` without importing Harbor into the core library,
+collates verifier rewards into schema-v1 case results, zero-fills dead attempts
+for mean aggregation, and preserves Harbor output as evaluation artifacts. The
+pinned Harbor overlay protects against a candidate changing its dependency pin;
+it is not a process isolation boundary because candidate code still runs inside
+the nested Harbor process. Use Harbor's external verifier/sidecar deployment
+when the candidate itself is adversarial.
+
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
 a non-Git version store, an evolutionary search algorithm, or an orchestrator
