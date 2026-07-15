@@ -12,14 +12,68 @@ not Sandbox — the sandbox is a dumb I/O layer.
 from __future__ import annotations
 
 import asyncio
+import os
 import posixpath
+import signal
 import shutil
 import tempfile
+import uuid
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, NamedTuple
+from typing import AsyncIterator, Awaitable, Callable, NamedTuple
+
+
+async def _terminate_host_process_tree(
+    process: asyncio.subprocess.Process,
+    *,
+    grace_seconds: float = 5,
+) -> None:
+    """Terminate a host subprocess and every descendant in its process group."""
+
+    if process.returncode is not None and os.name != "posix":
+        return
+
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGTERM)
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        return
+
+    if process.returncode is None:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+        except asyncio.TimeoutError:
+            pass
+
+    # The group leader may exit before descendants that ignore SIGTERM. Always
+    # sweep the original process group with SIGKILL before returning.
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        elif process.returncode is None:
+            process.kill()
+    except ProcessLookupError:
+        pass
+    if process.returncode is None:
+        await process.wait()
+
+
+async def _cleanup_host_process(
+    process: asyncio.subprocess.Process,
+    before_terminate: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    """Run backend cleanup, then unconditionally reap the host process group."""
+
+    try:
+        if before_terminate is not None:
+            await before_terminate()
+    finally:
+        await _terminate_host_process_tree(process)
+
 
 # =============================================================================
 # Data types
@@ -168,12 +222,16 @@ class Sandbox(ABC):
         """Create and clean up a temporary directory inside the sandbox."""
 
         safe_prefix = "".join(
-            character for character in prefix if character.isalnum() or character in "-_"
+            character
+            for character in prefix
+            if character.isalnum() or character in "-_"
         )
         template = f"/tmp/{safe_prefix or 'vero-'}XXXXXX"
         result = await self.run(["mktemp", "-d", template])
         if result.returncode != 0:
-            raise RuntimeError(result.stderr or "failed to create sandbox temporary directory")
+            raise RuntimeError(
+                result.stderr or "failed to create sandbox temporary directory"
+            )
         path = result.stdout.strip()
         try:
             yield path
@@ -322,15 +380,8 @@ class LocalSandbox(Sandbox):
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd),
             env=env,
+            start_new_session=os.name == "posix",
         )
-
-        async def terminate():
-            proc.terminate()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
 
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -340,7 +391,7 @@ class LocalSandbox(Sandbox):
                 returncode=proc.returncode or 0,
             )
         except asyncio.TimeoutError:
-            await asyncio.shield(terminate())
+            await asyncio.shield(_cleanup_host_process(proc))
             cmd_str = " ".join(command)
             return CommandResult(
                 stdout="",
@@ -348,7 +399,7 @@ class LocalSandbox(Sandbox):
                 returncode=-1,
             )
         except (KeyboardInterrupt, asyncio.CancelledError):
-            await asyncio.shield(terminate())
+            await asyncio.shield(_cleanup_host_process(proc))
             raise
 
     # ── Host ↔ Sandbox file transfer ───────────────────────────────────
@@ -422,9 +473,7 @@ class DockerSandbox(Sandbox):
         ]
         if name is not None:
             command.extend(["--name", name])
-        command.extend(
-            [image, "sh", "-c", "while :; do sleep 3600; done"]
-        )
+        command.extend([image, "sh", "-c", "while :; do sleep 3600; done"])
         result = await cls._host_command(command, timeout=60)
         if result.returncode != 0:
             raise RuntimeError(result.stderr or "failed to create Docker sandbox")
@@ -459,7 +508,9 @@ class DockerSandbox(Sandbox):
         )
         result = await sandbox.run(["mkdir", "-p", root])
         if result.returncode != 0:
-            raise RuntimeError(result.stderr or f"cannot access Docker container {container_id}")
+            raise RuntimeError(
+                result.stderr or f"cannot access Docker container {container_id}"
+            )
         return sandbox
 
     @staticmethod
@@ -467,25 +518,33 @@ class DockerSandbox(Sandbox):
         command: list[str],
         *,
         timeout: int | float | None = 30,
+        before_terminate: Callable[[], Awaitable[None]] | None = None,
     ) -> CommandResult:
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=os.name == "posix",
         )
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=timeout
+            )
         except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
+            await asyncio.shield(_cleanup_host_process(process, before_terminate))
             return CommandResult("", f"Command timed out after {timeout} seconds", -1)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            await asyncio.shield(_cleanup_host_process(process, before_terminate))
+            raise
         return CommandResult(
             stdout.decode(errors="replace").strip(),
             stderr.decode(errors="replace").strip(),
             process.returncode or 0,
         )
 
-    async def _docker(self, *arguments: str, timeout: int | float | None = 30) -> CommandResult:
+    async def _docker(
+        self, *arguments: str, timeout: int | float | None = 30
+    ) -> CommandResult:
         return await self._host_command(
             [self.docker_executable, *arguments],
             timeout=timeout,
@@ -568,17 +627,58 @@ class DockerSandbox(Sandbox):
         timeout: int | None = 30,
         env: dict[str, str] | None = None,
     ) -> CommandResult:
+        pid_file = f"/tmp/vero-exec-{uuid.uuid4().hex}.pid"
         arguments = ["exec"]
         if cwd is not None:
             arguments.extend(["--workdir", self.resolve_path(cwd)])
         for name, value in (env or {}).items():
             arguments.extend(["--env", f"{name}={value}"])
         arguments.append(self.container_id)
-        if isinstance(command, str):
-            arguments.extend(["sh", "-c", command])
-        else:
-            arguments.extend(command)
-        return await self._docker(*arguments, timeout=timeout)
+        payload = ["sh", "-c", command] if isinstance(command, str) else command
+        wrapper = (
+            'pid_file="$1"; shift; '
+            'printf \'%s\\n\' "$$" > "$pid_file"; '
+            "trap 'rm -f \"$pid_file\"' EXIT; "
+            '"$@"'
+        )
+        arguments.extend(["setsid", "sh", "-c", wrapper, "sh", pid_file, *payload])
+
+        async def terminate_container_group() -> None:
+            script = """
+pid_file=$1
+attempt=0
+while [ ! -s "$pid_file" ] && [ "$attempt" -lt 20 ]; do
+    sleep 0.05
+    attempt=$((attempt + 1))
+done
+if [ -s "$pid_file" ]; then
+    pgid=$(cat "$pid_file")
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+    attempt=0
+    while kill -0 -- "-$pgid" 2>/dev/null && [ "$attempt" -lt 10 ]; do
+        sleep 0.5
+        attempt=$((attempt + 1))
+    done
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+fi
+rm -f "$pid_file"
+"""
+            await self._docker(
+                "exec",
+                self.container_id,
+                "sh",
+                "-c",
+                script,
+                "sh",
+                pid_file,
+                timeout=10,
+            )
+
+        return await self._host_command(
+            [self.docker_executable, *arguments],
+            timeout=timeout,
+            before_terminate=terminate_container_group,
+        )
 
     async def canonicalize(self, path: str) -> str:
         result = await self.run(["readlink", "-f", self.resolve_path(path)])

@@ -126,15 +126,13 @@ class HarborDeploymentConfig(EvaluationModel):
                 path == repository or path.is_relative_to(repository)
                 for repository in (agent, trusted)
             ):
-                raise ValueError(
-                    f"{name} must live outside candidate repositories"
-                )
+                raise ValueError(f"{name} must live outside candidate repositories")
         if self.submit_enabled != (self.selection.mode == "submit"):
             raise ValueError("submit_enabled must match selection mode")
         known = set(self.backends)
-        referenced = {
-            policy.backend_id for policy in self.access_policies
-        } | {target.backend_id for target in self.targets}
+        referenced = {policy.backend_id for policy in self.access_policies} | {
+            target.backend_id for target in self.targets
+        }
         if self.selection.backend_id is not None:
             referenced.add(self.selection.backend_id)
         unknown = sorted(referenced - known)
@@ -145,18 +143,11 @@ class HarborDeploymentConfig(EvaluationModel):
 
 def _database(session_dir: Path, session_id: str) -> EvaluationDatabase:
     database_path = session_dir / "database.json"
-    if database_path.exists():
-        database = EvaluationDatabase.load_from_file(database_path)
-    else:
-        database = EvaluationDatabase.from_evaluations_dir(
-            session_dir / "evaluations",
-            database_id=session_id,
-        )
-    if database.id != session_id:
-        raise ValueError(
-            f"evaluation database belongs to {database.id!r}, not {session_id!r}"
-        )
-    return database
+    return EvaluationDatabase.load_reconciled(
+        database_path=database_path,
+        evaluations_dir=session_dir / "evaluations",
+        database_id=session_id,
+    )
 
 
 def _ledger(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -153,8 +154,9 @@ class OptimizationSession:
             metadata=self.metadata,
         )
 
-    def _save_manifest(self, manifest: SessionManifest) -> None:
-        _atomic_write_json(
+    async def _save_manifest(self, manifest: SessionManifest) -> None:
+        await asyncio.to_thread(
+            _atomic_write_json,
             self.manifest_path,
             manifest.model_dump(mode="json"),
         )
@@ -250,7 +252,7 @@ class OptimizationSession:
                 "failure": None,
             }
         )
-        self._save_manifest(manifest)
+        await self._save_manifest(manifest)
         assert self.events is not None
         await self.events.emit(
             session_id=self.id,
@@ -268,7 +270,7 @@ class OptimizationSession:
                 type=f"{type(error).__module__}.{type(error).__name__}",
                 message=str(error) or type(error).__name__,
             )
-            self._save_manifest(
+            await self._save_manifest(
                 manifest.model_copy(
                     update={
                         "status": SessionStatus.FAILED,
@@ -295,7 +297,7 @@ class OptimizationSession:
                 "best_evaluation_id": best.id if best is not None else None,
             }
         )
-        self._save_manifest(completed)
+        await self._save_manifest(completed)
         for step, evaluation in enumerate(result.evaluations):
             await self.events.emit(
                 session_id=self.id,

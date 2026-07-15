@@ -8,7 +8,11 @@ from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from vero.evaluation import EvaluationBudgetExceeded, EvaluationDeniedError
+from vero.evaluation import (
+    EvaluationBudgetExceeded,
+    EvaluationDeniedError,
+    EvaluationRequestError,
+)
 from vero.evaluation.exceptions import EvaluationExecutionError
 from vero.harbor.auth import check_admin_token
 from vero.harbor.sidecar import (
@@ -53,6 +57,9 @@ def create_app(
     )
     app.add_exception_handler(EvaluationDeniedError, _error(403, "evaluation denied"))
     app.add_exception_handler(EvaluationAccessError, _error(403, "evaluation denied"))
+    app.add_exception_handler(
+        EvaluationRequestError, _error(400, "invalid evaluation request")
+    )
     app.add_exception_handler(
         CandidateTransferError,
         _error(400, "candidate version could not be imported"),

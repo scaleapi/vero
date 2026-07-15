@@ -411,6 +411,16 @@ the sidecar image; the optimizer container receives the editable baseline, the
 agent-facing CLI, and approved result projections. Exact Harbor and registry
 task-source versions are required so the measurement substrate is reproducible.
 
+Evaluation budgets meter attempts, not only successful reports: a failed,
+timed-out, or cancelled backend run remains charged. Aggregate disclosure is a
+feedback-control mechanism, not a privacy guarantee; allowing arbitrary,
+overlapping subsets can reveal individual scores through differencing, so use
+canonical selections and finite budgets when validation data is sensitive.
+The generated shared-container topology protects the admin credential with
+Unix ownership and permissions. It assumes candidate code cannot gain root in
+that container; higher-assurance deployments should keep finalization
+credentials outside the candidate workbench entirely.
+
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
 a non-Git version store, an evolutionary search algorithm, or an orchestrator

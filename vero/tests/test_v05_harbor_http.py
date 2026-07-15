@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import stat
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 
 from click.testing import CliRunner
@@ -15,6 +14,7 @@ from vero.evaluation import (
     DisclosureLevel,
     EvaluationAcknowledgement,
     EvaluationDatabase,
+    EvaluationRequestError,
 )
 from vero.harbor.app import create_app
 from vero.harbor.auth import (
@@ -35,11 +35,14 @@ class FakeSidecar:
     def __init__(self):
         self.requests = []
         self.raise_access_error = False
+        self.raise_request_error = False
         self.engine = SimpleNamespace(database=EvaluationDatabase(id="session"))
 
     async def evaluate(self, request):
         if self.raise_access_error:
             raise EvaluationAccessError("private details")
+        if self.raise_request_error:
+            raise EvaluationRequestError("unknown case")
         self.requests.append(request)
         return SidecarEvaluationResult(
             disclosure=DisclosureLevel.NONE,
@@ -141,6 +144,29 @@ def test_http_app_redacts_access_denial_details():
     assert response.json() == {"error": "evaluation denied"}
 
 
+def test_http_app_maps_backend_request_rejection_to_400():
+    sidecar = FakeSidecar()
+    sidecar.raise_request_error = True
+    client = TestClient(
+        create_app(
+            sidecar=sidecar,
+            verifier=FakeVerifier(),
+            admin_token="admin-secret",
+        )
+    )
+
+    response = client.post(
+        "/eval",
+        json={
+            "backend_id": "backend",
+            "evaluation_set": {"name": "hidden"},
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid evaluation request"}
+
+
 def test_harbor_cli_builds_canonical_selection(monkeypatch):
     captured = {}
 
@@ -165,7 +191,7 @@ def test_harbor_cli_builds_canonical_selection(monkeypatch):
             "--case-id",
             "b",
             "--parameter",
-            'temperature=0.2',
+            "temperature=0.2",
         ],
     )
 

@@ -13,7 +13,11 @@ from vero.evaluation.persistence import _atomic_write_json
 
 
 class BudgetLedger:
-    """Atomically reserve run and case costs against configured budgets."""
+    """Atomically meter attempted runs and cases against configured budgets.
+
+    A reservation is charged before backend execution and remains charged for
+    successful, failed, timed-out, and cancelled attempts.
+    """
 
     schema_version = 1
 
@@ -96,11 +100,24 @@ class BudgetLedger:
             snapshot = dict(self._budgets)
             snapshot[key] = updated
             if self.path is not None:
-                await asyncio.to_thread(
-                    _atomic_write_json,
-                    self.path,
-                    self._serialize(snapshot),
+                write = asyncio.create_task(
+                    asyncio.to_thread(
+                        _atomic_write_json,
+                        self.path,
+                        self._serialize(snapshot),
+                    )
                 )
+                cancellation: asyncio.CancelledError | None = None
+                while not write.done():
+                    try:
+                        await asyncio.shield(write)
+                    except asyncio.CancelledError as error:
+                        cancellation = error
+                write.result()
+                self._budgets = snapshot
+                if cancellation is not None:
+                    raise cancellation
+                return updated
             self._budgets = snapshot
             return updated
 
@@ -112,8 +129,7 @@ class BudgetLedger:
         return {
             "schema_version": self.schema_version,
             "budgets": [
-                budget.model_dump(mode="json")
-                for _, budget in sorted(values.items())
+                budget.model_dump(mode="json") for _, budget in sorted(values.items())
             ],
         }
 
@@ -135,5 +151,7 @@ class BudgetLedger:
                 for value in payload.get("budgets", [])
             ]
         except Exception as error:
-            raise ValueError(f"invalid durable budget ledger {path}: {error}") from error
+            raise ValueError(
+                f"invalid durable budget ledger {path}: {error}"
+            ) from error
         return cls(budgets, path=path)

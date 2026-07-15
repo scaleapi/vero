@@ -66,7 +66,9 @@ class Workspace(ABC):
     # ── History inspection ──────────────────────────────────────────
 
     @abstractmethod
-    async def diff(self, from_version: str | None = None, to_version: str | None = None) -> str:
+    async def diff(
+        self, from_version: str | None = None, to_version: str | None = None
+    ) -> str:
         """Diff between two versions."""
         ...
 
@@ -83,12 +85,16 @@ class Workspace(ABC):
     # ── Copies ──────────────────────────────────────────────────────
 
     @abstractmethod
-    async def copy(self, name: str | None = None, from_version: str | None = None) -> Workspace:
+    async def copy(
+        self, name: str | None = None, from_version: str | None = None
+    ) -> Workspace:
         """Create a persistent isolated copy of this workspace."""
         ...
 
     @asynccontextmanager
-    async def temp_copy(self, from_version: str | None = None) -> AsyncGenerator[Workspace, None]:
+    async def temp_copy(
+        self, from_version: str | None = None
+    ) -> AsyncGenerator[Workspace, None]:
         """Temporary isolated copy, cleaned up on exit."""
         yield self  # pragma: no cover
 
@@ -110,6 +116,14 @@ class Workspace(ABC):
         """Clean up this workspace. Default: no-op."""
         pass
 
+    async def retain_version(self, version_id: str, ref_name: str) -> None:
+        """Keep a produced version reachable after an isolated copy is removed.
+
+        Version stores with intrinsic durability may leave this as a no-op.
+        """
+
+        return None
+
     # ── Access control ─────────────────────────────────────────────
 
     @property
@@ -122,7 +136,9 @@ class Workspace(ABC):
         """Default access when no rules match."""
         return self._fs.default_access
 
-    def set_access(self, accesses: list[AccessRule], default_access: AccessType = AccessType.WRITE) -> None:
+    def set_access(
+        self, accesses: list[AccessRule], default_access: AccessType = AccessType.WRITE
+    ) -> None:
         """Configure access rules for this workspace.
 
         Rules are glob patterns relative to ``project_path``, matching
@@ -186,9 +202,7 @@ class Workspace(ABC):
                 raise FileNotFoundError(resolved)
             missing.append(current.name)
             current = current.parent
-        canonical = PurePosixPath(
-            await self.sandbox.canonicalize(current.as_posix())
-        )
+        canonical = PurePosixPath(await self.sandbox.canonicalize(current.as_posix()))
         for component in reversed(missing):
             canonical /= component
         return self._fs.validate_write(canonical.as_posix())

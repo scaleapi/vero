@@ -189,7 +189,9 @@ class EvaluationArtifact(EvaluationModel):
         if "\\" in value or value.startswith("/") or PurePosixPath(value).is_absolute():
             raise ValueError("artifact paths must be relative POSIX paths")
         if any(part in {"", ".", ".."} for part in value.split("/")):
-            raise ValueError("artifact paths must not contain empty, '.' or '..' segments")
+            raise ValueError(
+                "artifact paths must not contain empty, '.' or '..' segments"
+            )
         return value
 
     @field_validator("media_type", "description")
@@ -265,6 +267,7 @@ class CaseResult(EvaluationModel):
 class EvaluationStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class DiagnosticSeverity(str, Enum):
@@ -338,7 +341,9 @@ class BackendProvenance(EvaluationModel):
         config: BaseModel | Mapping[str, JsonValue],
     ) -> BackendProvenance:
         config_value = (
-            config.model_dump(mode="json") if isinstance(config, BaseModel) else dict(config)
+            config.model_dump(mode="json")
+            if isinstance(config, BaseModel)
+            else dict(config)
         )
         payload = {"name": name, "version": version, "config": config_value}
         digest = hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
@@ -463,7 +468,9 @@ class EvaluationRecord(EvaluationModel):
     @model_validator(mode="after")
     def validate_record(self) -> EvaluationRecord:
         if (self.objective_spec is None) != (self.objective is None):
-            raise ValueError("objective_spec and objective must both be present or absent")
+            raise ValueError(
+                "objective_spec and objective must both be present or absent"
+            )
         if self.completed_at < self.created_at:
             raise ValueError("completed_at must not be before created_at")
         return self

@@ -8,7 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from vero.evaluation import CommandBackend, CommandBackendConfig, MetricSelector, ObjectiveSpec
+from vero.evaluation import (
+    CommandBackend,
+    CommandBackendConfig,
+    MetricSelector,
+    ObjectiveSpec,
+    allow_all_evaluations,
+)
 from vero.optimization import CommandCandidateProducer, CommandCandidateProducerConfig
 from vero.runtime import create_optimization_session
 from vero.sandbox import CommandResult, DockerSandbox
@@ -34,7 +40,7 @@ def _docker_available() -> bool:
 async def test_docker_sandbox_owns_an_unmounted_container(monkeypatch):
     commands: list[list[str]] = []
 
-    async def fake_host_command(command, *, timeout=30):
+    async def fake_host_command(command, *, timeout=30, before_terminate=None):
         commands.append(command)
         if command[1] == "run":
             return CommandResult("container-id", "", 0)
@@ -57,7 +63,46 @@ async def test_docker_sandbox_owns_an_unmounted_container(monkeypatch):
     assert "--volume" not in run_command
     assert "-v" not in run_command
     assert sandbox.host_path("/workspace/project") is None
+    exec_command = next(command for command in commands if command[1] == "exec")
+    assert "setsid" in exec_command
     assert commands[-1] == ["docker", "rm", "--force", "container-id"]
+
+
+@pytest.mark.asyncio
+async def test_docker_timeout_terminates_the_in_container_process_group(monkeypatch):
+    host_commands: list[list[str]] = []
+    cleanup_commands: list[tuple[str, ...]] = []
+
+    async def fake_host_command(
+        command,
+        *,
+        timeout=30,
+        before_terminate=None,
+    ):
+        host_commands.append(command)
+        assert before_terminate is not None
+        await before_terminate()
+        return CommandResult("", "timed out", -1)
+
+    async def fake_docker(*arguments, timeout=30):
+        cleanup_commands.append(arguments)
+        return CommandResult("", "", 0)
+
+    monkeypatch.setattr(
+        DockerSandbox,
+        "_host_command",
+        staticmethod(fake_host_command),
+    )
+    sandbox = DockerSandbox("container-id", docker_executable="docker")
+    monkeypatch.setattr(sandbox, "_docker", fake_docker)
+
+    result = await sandbox.run(["sh", "-c", "sleep 60"], timeout=0.1)
+
+    assert result.returncode == -1
+    assert "setsid" in host_commands[0]
+    assert cleanup_commands
+    assert cleanup_commands[0][:2] == ("exec", "container-id")
+    assert "kill -TERM" in cleanup_commands[0][4]
 
 
 @pytest.mark.skipif(not _docker_available(), reason="Docker daemon is unavailable")
@@ -144,6 +189,7 @@ printf '{"schema_version":1,"status":"success","metrics":{"score":%s}}' "$score"
             ),
             producers={"default": producer},
             max_candidates=1,
+            authorization_resolver=allow_all_evaluations,
         )
 
         result = await asyncio.wait_for(session.run(), timeout=180)

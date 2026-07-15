@@ -116,6 +116,7 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
                 "trial": self._count,
             },
         )
+        await self.optimizer._retain_candidate(candidate)
         result = await self.optimizer.engine.evaluate(
             backend_id=self.optimizer.backend_id,
             request=self.optimizer._request(candidate),
@@ -174,6 +175,15 @@ class Optimizer:
             parameters=self.parameters,
             limits=self.limits,
             seed=self.seed,
+        )
+
+    async def _retain_candidate(self, candidate: Candidate) -> None:
+        session_id = self.session_id or self.engine.evaluator.session_dir.name
+        session_digest = hashlib.sha256(session_id.encode()).hexdigest()[:16]
+        candidate_digest = hashlib.sha256(candidate.id.encode()).hexdigest()
+        await self.workspace.retain_version(
+            candidate.version,
+            f"sessions/{session_digest}/candidates/{candidate_digest}",
         )
 
     async def evaluate_candidate(self, candidate: Candidate) -> EvaluationRecord:
@@ -262,6 +272,7 @@ class Optimizer:
                 description=change.description,
                 metadata=metadata,
             )
+            await self._retain_candidate(candidate)
             return _ProductionOutcome(
                 candidate=candidate,
                 trial_candidates=evaluation.trial_candidates,

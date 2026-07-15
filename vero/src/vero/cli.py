@@ -310,10 +310,20 @@ def run_config(config_path: Path) -> None:
 )
 @click.option("--max-turns", default=200, type=click.IntRange(min=1), show_default=True)
 @click.option(
+    "--evaluation-timeout",
     "--timeout",
+    "evaluation_timeout",
     default=600.0,
     type=click.FloatRange(min=0, min_open=True),
     show_default=True,
+    help="Overall timeout for one evaluation. --timeout is a deprecated alias.",
+)
+@click.option(
+    "--producer-timeout",
+    default=600.0,
+    type=click.FloatRange(min=0, min_open=True),
+    show_default=True,
+    help="Timeout for one external command-producer attempt.",
 )
 @click.option(
     "--case-timeout",
@@ -368,7 +378,8 @@ def optimize(
     max_rounds: int,
     max_concurrency: int,
     max_turns: int,
-    timeout: float,
+    evaluation_timeout: float,
+    producer_timeout: float,
     case_timeout: float,
     evaluation_concurrency: int,
     evaluation_copy: bool,
@@ -441,7 +452,7 @@ def optimize(
                         producer_variable, option="--producer-variable"
                     ),
                     passthrough_environment=list(producer_env),
-                    timeout_seconds=timeout,
+                    timeout_seconds=producer_timeout,
                 )
             )
         elif agent is not None:
@@ -487,7 +498,7 @@ def optimize(
             producers={"default": producer} if producer is not None else {},
             parameters=_parse_parameters(parameter),
             limits=EvaluationLimits(
-                timeout_seconds=timeout,
+                timeout_seconds=evaluation_timeout,
                 case_timeout_seconds=case_timeout,
                 max_concurrency=evaluation_concurrency,
             ),

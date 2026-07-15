@@ -8,13 +8,19 @@ from vero.evaluation.backend import (
 )
 from vero.evaluation.budget import BudgetLedger
 from vero.evaluation.command import CommandBackend, CommandBackendConfig
-from vero.evaluation.engine import AuthorizationResolver, EvaluationEngine
+from vero.evaluation.engine import (
+    AuthorizationResolver,
+    EvaluationEngine,
+    allow_all_evaluations,
+)
 from vero.evaluation.evaluator import Evaluator
 from vero.evaluation.exceptions import (
+    EvaluationCancelledError,
     EvaluationBudgetExceeded,
     EvaluationDeniedError,
     EvaluationError,
     EvaluationExecutionError,
+    EvaluationRequestError,
     UnknownBackendError,
 )
 from vero.evaluation.models import (
@@ -94,6 +100,7 @@ __all__ = [
     "EvaluationBackend",
     "EvaluationBudget",
     "EvaluationBudgetExceeded",
+    "EvaluationCancelledError",
     "EvaluationContext",
     "EvaluationCost",
     "EvaluationDeniedError",
@@ -106,6 +113,7 @@ __all__ = [
     "EvaluationManifest",
     "EvaluationModel",
     "EvaluationRecord",
+    "EvaluationRequestError",
     "EvaluationReport",
     "EvaluationRequest",
     "EvaluationSet",
@@ -125,6 +133,7 @@ __all__ = [
     "UnknownBackendError",
     "AuthorizationResolver",
     "compare_evaluation_records",
+    "allow_all_evaluations",
     "evaluate_objective",
     "project_evaluation",
     "resolve_metric",

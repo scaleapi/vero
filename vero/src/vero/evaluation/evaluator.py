@@ -10,7 +10,10 @@ from typing import AsyncIterator
 from uuid import uuid4
 
 from vero.evaluation.backend import EvaluationBackend, EvaluationContext
-from vero.evaluation.exceptions import EvaluationExecutionError
+from vero.evaluation.exceptions import (
+    EvaluationCancelledError,
+    EvaluationExecutionError,
+)
 from vero.evaluation.models import (
     DiagnosticSeverity,
     EvaluationDiagnostic,
@@ -73,9 +76,10 @@ class Evaluator:
         created_at: datetime,
         code: str,
         message: str,
+        status: EvaluationStatus = EvaluationStatus.FAILED,
     ) -> EvaluationRecord:
         report = EvaluationReport(
-            status=EvaluationStatus.FAILED,
+            status=status,
             diagnostics=[
                 EvaluationDiagnostic(
                     code=code,
@@ -140,7 +144,9 @@ class Evaluator:
                         f"{request.candidate.version!r}"
                     )
                 if await candidate_workspace.is_dirty():
-                    raise ValueError("candidate workspace must be clean before evaluation")
+                    raise ValueError(
+                        "candidate workspace must be clean before evaluation"
+                    )
                 context = EvaluationContext(
                     workspace=candidate_workspace,
                     session_id=self.session_id,
@@ -174,6 +180,23 @@ class Evaluator:
             )
             await store.save(record)
             return record
+        except asyncio.CancelledError as error:
+            message = "evaluation was cancelled"
+            await asyncio.shield(
+                self._persist_failure(
+                    store=store,
+                    evaluation_id=evaluation_id,
+                    backend_id=backend_id,
+                    backend=backend,
+                    request=request,
+                    objective_spec=objective_spec,
+                    created_at=created_at,
+                    code="evaluation_cancelled",
+                    message=message,
+                    status=EvaluationStatus.CANCELLED,
+                )
+            )
+            raise EvaluationCancelledError(evaluation_id, message) from error
         except TimeoutError as error:
             message = f"evaluation exceeded {request.limits.timeout_seconds} seconds"
             await self._persist_failure(

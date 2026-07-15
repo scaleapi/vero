@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,7 +14,6 @@ from vero.evaluation import (
     BackendProvenance,
     BackendRegistry,
     BudgetLedger,
-    CaseError,
     CaseResult,
     CaseStatus,
     DisclosureLevel,
@@ -34,8 +35,10 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveResult,
     ObjectiveSpec,
+    allow_all_evaluations,
 )
 from vero.evaluation import persistence
+import vero.evaluation.budget as budget_module
 from vero.filesystem import AccessType, Filesystem
 from vero.workspace import Workspace
 
@@ -277,6 +280,49 @@ def test_database_round_trips_schema_one_and_distinguishes_empty_filter(tmp_path
     assert json.loads(path.read_text())["schema_version"] == 1
 
 
+@pytest.mark.asyncio
+async def test_database_repairs_crash_window_from_completed_evaluations(
+    tmp_path: Path,
+):
+    database_path = tmp_path / "database.json"
+    EvaluationDatabase(id="session").save_to_file(database_path)
+    value = record()
+    await EvaluationStore(tmp_path / "evaluations" / value.id).save(value)
+
+    restored = EvaluationDatabase.load_reconciled(
+        database_path=database_path,
+        evaluations_dir=tmp_path / "evaluations",
+        database_id="session",
+    )
+
+    assert restored.get_evaluation(value.id) == value
+    assert (
+        EvaluationDatabase.load_from_file(database_path).get_evaluation(value.id)
+        == value
+    )
+
+
+def test_database_reconciliation_ignores_running_evaluations(tmp_path: Path):
+    value = record()
+    store = EvaluationStore(tmp_path / "evaluations" / value.id)
+    store.write_running(
+        evaluation_id=value.id,
+        request=value.request,
+        backend_id=value.backend_id,
+        backend=value.backend,
+        objective_spec=value.objective_spec,
+        created_at=value.created_at,
+    )
+
+    restored = EvaluationDatabase.load_reconciled(
+        database_path=tmp_path / "database.json",
+        evaluations_dir=tmp_path / "evaluations",
+        database_id="session",
+    )
+
+    assert restored.evaluations == {}
+
+
 def test_database_rejects_conflicting_candidate_identity():
     database = EvaluationDatabase(id="session")
     database.add_evaluation(record("same"))
@@ -369,6 +415,7 @@ async def test_engine_indexes_a_durable_backend_exception(tmp_path: Path):
         backends=BackendRegistry({"default": backend}),
         database=database,
         database_path=tmp_path / "database.json",
+        authorization_resolver=allow_all_evaluations,
     )
 
     with pytest.raises(EvaluationExecutionError) as captured:
@@ -380,9 +427,12 @@ async def test_engine_indexes_a_durable_backend_exception(tmp_path: Path):
     failure = database.get_evaluation(captured.value.evaluation_id)
     assert failure is not None
     assert failure.report.status == EvaluationStatus.FAILED
-    assert EvaluationDatabase.load_from_file(
-        tmp_path / "database.json"
-    ).get_evaluation(failure.id) == failure
+    assert (
+        EvaluationDatabase.load_from_file(tmp_path / "database.json").get_evaluation(
+            failure.id
+        )
+        == failure
+    )
 
 
 @pytest.mark.asyncio
@@ -411,9 +461,110 @@ async def test_budget_ledger_reserves_and_restores(tmp_path: Path):
     assert BudgetLedger.load(path).get("command", evaluation_set) == remaining
 
     with pytest.raises(EvaluationBudgetExceeded):
-        await ledger.reserve(
-            "command", evaluation_set, EvaluationCost(runs=1, cases=7)
+        await ledger.reserve("command", evaluation_set, EvaluationCost(runs=1, cases=7))
+
+
+@pytest.mark.asyncio
+async def test_budget_reservation_stays_consistent_when_write_is_cancelled(
+    tmp_path: Path,
+    monkeypatch,
+):
+    evaluation_set = EvaluationSet(name="performance")
+    path = tmp_path / "budget.json"
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="command",
+                evaluation_set_key=evaluation_set.budget_key("command"),
+                total_runs=2,
+            )
+        ],
+        path=path,
+    )
+    ledger.save()
+    started = threading.Event()
+    release = threading.Event()
+    real_write = budget_module._atomic_write_json
+
+    def delayed_write(write_path, value):
+        started.set()
+        assert release.wait(timeout=5)
+        real_write(write_path, value)
+
+    monkeypatch.setattr(budget_module, "_atomic_write_json", delayed_write)
+    reservation = asyncio.create_task(
+        ledger.reserve("command", evaluation_set, EvaluationCost())
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    reservation.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await reservation
+
+    in_memory = ledger.get("command", evaluation_set)
+    on_disk = BudgetLedger.load(path).get("command", evaluation_set)
+    assert in_memory is not None
+    assert in_memory.remaining_runs == 1
+    assert on_disk == in_memory
+
+
+@pytest.mark.asyncio
+async def test_cancelled_evaluation_is_terminal_indexed_and_charged(tmp_path: Path):
+    class BlockingBackend(StubBackend):
+        async def evaluate(self, *, context, request):
+            self.evaluate_calls += 1
+            await asyncio.Event().wait()
+
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = BlockingBackend()
+    evaluation_set = request().evaluation_set
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="default",
+                evaluation_set_key=evaluation_set.budget_key("default"),
+                total_runs=1,
+            )
+        ],
+        path=tmp_path / "budgets.json",
+    )
+    ledger.save()
+    database = EvaluationDatabase(id="session")
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=database,
+        database_path=tmp_path / "database.json",
+        budget_ledger=ledger,
+        authorization_resolver=allow_all_evaluations,
+    )
+    evaluation = asyncio.create_task(
+        engine.evaluate_record(
+            backend_id="default",
+            request=request(),
         )
+    )
+    while backend.evaluate_calls == 0:
+        await asyncio.sleep(0)
+    evaluation.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await evaluation
+
+    assert len(database.evaluations) == 1
+    cancelled = next(iter(database.evaluations.values()))
+    assert cancelled.report.status == EvaluationStatus.CANCELLED
+    assert cancelled.report.diagnostics[0].code == "evaluation_cancelled"
+    assert (
+        EvaluationStore(
+            evaluator(tmp_path, workspace).evaluations_dir / cancelled.id
+        ).load()
+        == cancelled
+    )
+    remaining = ledger.get("default", evaluation_set)
+    assert remaining is not None
+    assert remaining.remaining_runs == 0
 
 
 @pytest.mark.asyncio
@@ -440,6 +591,25 @@ async def test_engine_denial_stops_before_cost_and_evaluation(tmp_path: Path):
     assert backend.resolve_calls == 0
     assert backend.evaluate_calls == 0
     assert database.evaluations == {}
+
+
+@pytest.mark.asyncio
+async def test_engine_denies_by_default_without_authorization(tmp_path: Path):
+    backend = StubBackend()
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, StubWorkspace(tmp_path / "repo")),
+        backends=BackendRegistry({"default": backend}),
+        database=EvaluationDatabase(id="session"),
+    )
+
+    with pytest.raises(
+        EvaluationDeniedError,
+        match="authorization was not configured",
+    ):
+        await engine.evaluate_record(backend_id="default", request=request())
+
+    assert backend.resolve_calls == 0
+    assert backend.evaluate_calls == 0
 
 
 @pytest.mark.asyncio

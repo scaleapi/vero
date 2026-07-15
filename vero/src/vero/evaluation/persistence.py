@@ -103,7 +103,9 @@ class EvaluationManifest(EvaluationModel):
         if len(ids) != len(set(ids)):
             raise ValueError("case file references must be unique")
         if (self.objective_spec is None) != (self.objective is None):
-            raise ValueError("objective_spec and objective must both be present or absent")
+            raise ValueError(
+                "objective_spec and objective must both be present or absent"
+            )
         return self
 
     @classmethod
@@ -153,7 +155,8 @@ class CaseCheckpointStore:
         if not isinstance(result, CaseResult):
             raise TypeError("result must be a CaseResult")
         async with self._lock:
-            _atomic_write_json(
+            await asyncio.to_thread(
+                _atomic_write_json,
                 self.path_for(result.case_id),
                 result.model_dump(mode="json"),
             )
@@ -164,7 +167,9 @@ class CaseCheckpointStore:
             if not path.exists():
                 return None
             try:
-                result = CaseResult.model_validate_json(path.read_text(encoding="utf-8"))
+                result = CaseResult.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
             except Exception as error:
                 raise ValueError(f"invalid case checkpoint {path}: {error}") from error
         if result.case_id != case_id:
@@ -175,7 +180,9 @@ class CaseCheckpointStore:
 
     async def load_all(self) -> list[CaseResult]:
         async with self._lock:
-            paths = sorted(self.cases_dir.glob("*.json")) if self.cases_dir.exists() else []
+            paths = (
+                sorted(self.cases_dir.glob("*.json")) if self.cases_dir.exists() else []
+            )
             results: list[CaseResult] = []
             for path in paths:
                 try:
@@ -183,7 +190,9 @@ class CaseCheckpointStore:
                         CaseResult.model_validate_json(path.read_text(encoding="utf-8"))
                     )
                 except Exception as error:
-                    raise ValueError(f"invalid case checkpoint {path}: {error}") from error
+                    raise ValueError(
+                        f"invalid case checkpoint {path}: {error}"
+                    ) from error
             return results
 
 
@@ -251,15 +260,21 @@ class EvaluationStore:
                 self.manifest_path.read_text(encoding="utf-8")
             )
         except Exception as error:
-            raise ValueError(f"invalid evaluation manifest {self.manifest_path}: {error}") from error
+            raise ValueError(
+                f"invalid evaluation manifest {self.manifest_path}: {error}"
+            ) from error
 
         cases: list[CaseResult] = []
         for reference in manifest.case_files:
             case_path = self.result_dir / reference.path
             try:
-                case = CaseResult.model_validate_json(case_path.read_text(encoding="utf-8"))
+                case = CaseResult.model_validate_json(
+                    case_path.read_text(encoding="utf-8")
+                )
             except Exception as error:
-                raise ValueError(f"invalid evaluation case file {case_path}: {error}") from error
+                raise ValueError(
+                    f"invalid evaluation case file {case_path}: {error}"
+                ) from error
             if case.case_id != reference.case_id:
                 raise ValueError(
                     f"evaluation case file {case_path} contains ID {case.case_id!r}, "
@@ -293,26 +308,33 @@ class EvaluationDatabase:
         default_factory=list,
         repr=False,
     )
-    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+    _lock: threading.RLock = field(
+        default_factory=threading.RLock, init=False, repr=False
+    )
 
     def add_evaluation(self, record: EvaluationRecord) -> None:
         with self._lock:
             existing_record = self.evaluations.get(record.id)
             if existing_record is not None:
                 if existing_record != record:
-                    raise ValueError(f"evaluation ID {record.id!r} already has a different record")
+                    raise ValueError(
+                        f"evaluation ID {record.id!r} already has a different record"
+                    )
                 return
             candidate = record.request.candidate
             existing_candidate = self.candidates.get(candidate.id)
             if existing_candidate is not None and existing_candidate != candidate:
-                raise ValueError(f"candidate ID {candidate.id!r} already has a different identity")
+                raise ValueError(
+                    f"candidate ID {candidate.id!r} already has a different identity"
+                )
             self.candidates[candidate.id] = candidate
             self.evaluations[record.id] = record
             for listener in self.listeners:
                 listener(record)
 
     def get_evaluation(self, evaluation_id: str) -> EvaluationRecord | None:
-        return self.evaluations.get(evaluation_id)
+        with self._lock:
+            return self.evaluations.get(evaluation_id)
 
     def get_evaluations(
         self,
@@ -323,8 +345,9 @@ class EvaluationDatabase:
         reverse: bool = False,
         filter_fn: Callable[[EvaluationRecord], bool] | None = None,
     ) -> list[EvaluationRecord]:
-        ids = list(self.evaluations) if evaluation_ids is None else evaluation_ids
-        records = [self.evaluations[evaluation_id] for evaluation_id in ids]
+        with self._lock:
+            ids = list(self.evaluations) if evaluation_ids is None else evaluation_ids
+            records = [self.evaluations[evaluation_id] for evaluation_id in ids]
         if filter_fn is not None:
             records = [record for record in records if filter_fn(record)]
         if reverse:
@@ -340,17 +363,18 @@ class EvaluationDatabase:
         evaluation_sets: list[EvaluationSet] | None = None,
         exclude_candidate_id: str | None = None,
     ) -> EvaluationRecord | None:
-        records = [
-            record
-            for record in self.evaluations.values()
-            if record.objective_spec == objective_spec
-            and (backend_ids is None or record.backend_id in backend_ids)
-            and (
-                evaluation_sets is None
-                or record.request.evaluation_set in evaluation_sets
-            )
-            and record.request.candidate.id != exclude_candidate_id
-        ]
+        with self._lock:
+            records = [
+                record
+                for record in self.evaluations.values()
+                if record.objective_spec == objective_spec
+                and (backend_ids is None or record.backend_id in backend_ids)
+                and (
+                    evaluation_sets is None
+                    or record.request.evaluation_set in evaluation_sets
+                )
+                and record.request.candidate.id != exclude_candidate_id
+            ]
         return select_best_evaluation(records)
 
     def serialize(self) -> dict[str, Any]:
@@ -405,6 +429,36 @@ class EvaluationDatabase:
         return cls.from_json(path.read_text(encoding="utf-8"))
 
     @classmethod
+    def load_reconciled(
+        cls,
+        *,
+        database_path: Path,
+        evaluations_dir: Path,
+        database_id: str,
+    ) -> EvaluationDatabase:
+        """Load the index and repair it from canonical completed evaluations."""
+
+        existed = database_path.exists()
+        database = cls.load_from_file(database_path) if existed else cls(id=database_id)
+        if database.id != database_id:
+            raise ValueError(
+                f"evaluation database belongs to {database.id!r}, not {database_id!r}"
+            )
+
+        completed = cls.from_evaluations_dir(
+            evaluations_dir,
+            database_id=database_id,
+        )
+        changed = not existed
+        for evaluation_id, record in completed.evaluations.items():
+            if evaluation_id not in database.evaluations:
+                changed = True
+            database.add_evaluation(record)
+        if changed:
+            database.save_to_file(database_path)
+        return database
+
+    @classmethod
     def from_evaluations_dir(
         cls,
         evaluations_dir: Path,
@@ -420,6 +474,13 @@ class EvaluationDatabase:
             if not (result_dir / EvaluationStore.manifest_basename).exists():
                 continue
             try:
+                manifest = json.loads(
+                    (result_dir / EvaluationStore.manifest_basename).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                if manifest.get("lifecycle", "complete") != "complete":
+                    continue
                 database.add_evaluation(EvaluationStore(result_dir).load())
             except Exception as error:
                 logger.warning("Skipping corrupt evaluation %s: %s", result_dir, error)

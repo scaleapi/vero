@@ -20,6 +20,7 @@ from vero.evaluation import (
     EvaluationSet,
     Evaluator,
     ObjectiveSpec,
+    allow_all_evaluations,
 )
 from vero.optimization import (
     CandidateProducer,
@@ -36,19 +37,11 @@ from vero.workspace import GitWorkspace, Workspace
 
 def _load_database(session_dir: Path, session_id: str) -> EvaluationDatabase:
     database_path = session_dir / "database.json"
-    if database_path.exists():
-        database = EvaluationDatabase.load_from_file(database_path)
-    else:
-        database = EvaluationDatabase.from_evaluations_dir(
-            session_dir / "evaluations",
-            database_id=session_id,
-        )
-    if database.id != session_id:
-        raise ValueError(
-            f"evaluation database belongs to session {database.id!r}, "
-            f"not {session_id!r}"
-        )
-    return database
+    return EvaluationDatabase.load_reconciled(
+        database_path=database_path,
+        evaluations_dir=session_dir / "evaluations",
+        database_id=session_id,
+    )
 
 
 def _load_budget_ledger(
@@ -93,6 +86,7 @@ async def create_optimization_session(
 
     ``session_dir`` is durable control-plane state on the host.  The workspace
     may live in any sandbox and is never interpreted as a host filesystem path.
+    Generic runtimes fail closed unless ``authorization_resolver`` is supplied.
     """
 
     session_dir = Path(session_dir).expanduser().resolve()
@@ -215,7 +209,7 @@ async def create_local_optimization_session(
         parameters=parameters,
         limits=limits,
         budgets=budgets,
-        authorization_resolver=authorization_resolver,
+        authorization_resolver=authorization_resolver or allow_all_evaluations,
         metadata=metadata,
         seed=seed,
         max_candidates=max_candidates,

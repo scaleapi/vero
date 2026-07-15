@@ -6,7 +6,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import uuid4
 
 from pydantic import Field, JsonValue, model_validator
@@ -65,7 +65,9 @@ class EvaluationConfig(EvaluationModel):
 
     @model_validator(mode="after")
     def validate_selection(self) -> EvaluationConfig:
-        if self.case_ids is not None and self.case_stop is not None:
+        if self.case_ids is not None and (
+            self.case_start != 0 or self.case_stop is not None
+        ):
             raise ValueError("case_ids and case range cannot both be configured")
         if self.case_ids is None and self.case_stop is None and self.case_start != 0:
             raise ValueError("case_start requires case_stop")
@@ -130,28 +132,39 @@ class ObjectiveConfig(EvaluationModel):
         )
 
 
-class OptimizerConfig(EvaluationModel):
-    kind: Literal["command", "vero", "claude"] = "command"
+class BaseOptimizerConfig(EvaluationModel):
+    instruction: str | None = None
+    max_candidates: int = Field(default=1, ge=0)
+    max_rounds: int = Field(default=100, ge=1)
+    max_concurrency: int = Field(default=1, ge=1)
+
+
+class CommandOptimizerConfig(BaseOptimizerConfig):
+    kind: Literal["command"] = "command"
     root: str = "."
-    command: list[str] | None = None
+    command: list[str]
     working_directory: str = "."
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
     timeout_seconds: float = Field(default=600.0, gt=0)
     description: str = "Optimize candidate"
-    instruction: str | None = None
-    max_turns: int = Field(default=200, ge=1)
-    max_candidates: int = Field(default=1, ge=0)
-    max_rounds: int = Field(default=100, ge=1)
-    max_concurrency: int = Field(default=1, ge=1)
 
     @model_validator(mode="after")
-    def validate_kind(self) -> OptimizerConfig:
-        if self.kind == "command" and not self.command:
+    def validate_command(self) -> CommandOptimizerConfig:
+        if not self.command:
             raise ValueError("command optimizer requires a non-empty command")
-        if self.kind != "command" and self.command is not None:
-            raise ValueError("built-in agent optimizers cannot configure command")
         return self
+
+
+class AgentOptimizerConfig(BaseOptimizerConfig):
+    kind: Literal["vero", "claude"]
+    max_turns: int = Field(default=200, ge=1)
+
+
+OptimizerConfig = Annotated[
+    CommandOptimizerConfig | AgentOptimizerConfig,
+    Field(discriminator="kind"),
+]
 
 
 class SessionConfig(EvaluationModel):
@@ -197,7 +210,7 @@ def load_config(path: Path | str = Path("vero.toml")) -> VeroConfig:
             }
         ),
     }
-    if config.optimizer is not None:
+    if isinstance(config.optimizer, CommandOptimizerConfig):
         updates["optimizer"] = config.optimizer.model_copy(
             update={"root": str((base / config.optimizer.root).resolve())}
         )
@@ -232,9 +245,8 @@ def _session_identity(config: VeroConfig) -> tuple[str, Path]:
     return session_id, home / "sessions" / session_id
 
 
-def _producer(config: OptimizerConfig):
-    if config.kind == "command":
-        assert config.command is not None
+def _producer(config: CommandOptimizerConfig | AgentOptimizerConfig):
+    if isinstance(config, CommandOptimizerConfig):
         return CommandCandidateProducer(
             CommandCandidateProducerConfig(
                 root=config.root,

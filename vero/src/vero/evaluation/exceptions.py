@@ -1,5 +1,7 @@
 """Exceptions raised by canonical evaluation components."""
 
+import asyncio
+
 
 class EvaluationError(Exception):
     """Base exception for evaluation failures."""
@@ -17,9 +19,21 @@ class EvaluationBudgetExceeded(EvaluationError):
     """Raised when an evaluation budget cannot reserve a cost."""
 
 
+class EvaluationRequestError(EvaluationError, ValueError):
+    """Raised when a backend rejects caller-controlled request fields."""
+
+
 class EvaluationExecutionError(EvaluationError):
     """Raised after an evaluation failure has been recorded."""
 
     def __init__(self, evaluation_id: str, message: str):
         self.evaluation_id = evaluation_id
         super().__init__(f"Evaluation {evaluation_id} failed: {message}")
+
+
+class EvaluationCancelledError(asyncio.CancelledError):
+    """Cancellation propagated after its terminal evaluation record is stored."""
+
+    def __init__(self, evaluation_id: str, message: str = "evaluation was cancelled"):
+        self.evaluation_id = evaluation_id
+        super().__init__(message)

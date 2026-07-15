@@ -17,6 +17,7 @@ from vero.evaluation import (
     Evaluator,
     MetricSelector,
     ObjectiveSpec,
+    allow_all_evaluations,
 )
 from vero.optimization import (
     CandidateChange,
@@ -136,6 +137,7 @@ workspace = Path(sys.argv[1])
         ),
         database=database,
         database_path=session_dir / "database.json",
+        authorization_resolver=allow_all_evaluations,
     )
     optimizer = Optimizer(
         workspace=workspace,
@@ -184,6 +186,32 @@ workspace = Path(sys.argv[1])
         text=True,
     ).stdout
     assert worktrees.count("worktree ") == 1
+    candidate_branches = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads/vero-candidate-",
+        ],
+        cwd=target,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    retained = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/vero/sessions",
+        ],
+        cwd=target,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert candidate_branches == ""
+    assert retained.strip()
 
 
 class ReusedIdStrategy:
@@ -271,6 +299,7 @@ Path(sys.argv[1]).write_text(json.dumps({
             }
         ),
         database=EvaluationDatabase(id="session"),
+        authorization_resolver=allow_all_evaluations,
     )
     optimizer = Optimizer(
         workspace=workspace,
@@ -337,6 +366,7 @@ Path(sys.argv[1]).write_text(json.dumps({
             }
         ),
         database=EvaluationDatabase(id="session"),
+        authorization_resolver=allow_all_evaluations,
     )
     cancelled = CancelledBatchProducer()
     optimizer = Optimizer(

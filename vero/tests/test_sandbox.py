@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import sys
 from pathlib import Path
 
 import pytest
 
 from vero.sandbox import CommandResult, FileStat, LocalSandbox, Sandbox
+import vero.sandbox as sandbox_module
 
 
 @pytest.fixture
@@ -19,6 +22,20 @@ def sandbox(tmp_path):
     (tmp_path / "private" / "secret.txt").write_text("top secret\n")
 
     return LocalSandbox(root=tmp_path)
+
+
+@pytest.fixture
+def fast_process_group_termination(monkeypatch):
+    terminate = sandbox_module._terminate_host_process_tree
+
+    async def terminate_quickly(process):
+        await terminate(process, grace_seconds=0.1)
+
+    monkeypatch.setattr(
+        sandbox_module,
+        "_terminate_host_process_tree",
+        terminate_quickly,
+    )
 
 
 class TestSandboxABC:
@@ -155,6 +172,82 @@ class TestShellExecution:
         assert "timed out" in result.stderr
 
     @pytest.mark.asyncio
+    async def test_timeout_terminates_descendant_processes(
+        self,
+        sandbox,
+        tmp_path,
+        fast_process_group_termination,
+    ):
+        marker = tmp_path / "timeout-descendant-survived"
+        descendant = (
+            "import signal, time; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"time.sleep(0.8); Path({str(marker)!r}).write_text('leaked')"
+        )
+        parent = (
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}]); "
+            "time.sleep(60)"
+        )
+
+        result = await sandbox.run([sys.executable, "-c", parent], timeout=0.1)
+        assert result.returncode == -1
+        await asyncio.sleep(1)
+        assert not marker.exists()
+
+    @pytest.mark.asyncio
+    async def test_cancellation_terminates_descendant_processes(
+        self,
+        sandbox,
+        tmp_path,
+        fast_process_group_termination,
+    ):
+        marker = tmp_path / "cancelled-descendant-survived"
+        descendant = (
+            "import signal, time; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"time.sleep(0.8); Path({str(marker)!r}).write_text('leaked')"
+        )
+        parent = (
+            "import subprocess, sys, time; "
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}]); "
+            "time.sleep(60)"
+        )
+        task = asyncio.create_task(
+            sandbox.run([sys.executable, "-c", parent], timeout=None)
+        )
+        await asyncio.sleep(0.1)
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(1)
+        assert not marker.exists()
+
+    @pytest.mark.asyncio
+    async def test_timeout_cleans_descendants_after_group_leader_exits(
+        self,
+        sandbox,
+        tmp_path,
+        fast_process_group_termination,
+    ):
+        marker = tmp_path / "detached-descendant-survived"
+        descendant = (
+            "import signal, time; from pathlib import Path; "
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            f"time.sleep(0.8); Path({str(marker)!r}).write_text('leaked')"
+        )
+        parent = (
+            "import subprocess, sys; "
+            f"subprocess.Popen([sys.executable, '-c', {descendant!r}])"
+        )
+
+        result = await sandbox.run([sys.executable, "-c", parent], timeout=0.1)
+        assert result.returncode == -1
+        await asyncio.sleep(1)
+        assert not marker.exists()
+
+    @pytest.mark.asyncio
     async def test_run_env(self, sandbox):
         import os
 
@@ -203,7 +296,9 @@ class TestFileTransfer:
     @pytest.mark.asyncio
     async def test_download_directory(self, sandbox, tmp_path):
         await sandbox.mkdir("export_dir")
-        await sandbox.write_file(str(Path(sandbox.resolve_path("export_dir")) / "x.txt"), "xxx\n")
+        await sandbox.write_file(
+            str(Path(sandbox.resolve_path("export_dir")) / "x.txt"), "xxx\n"
+        )
 
         local_dest = tmp_path / "exported"
         await sandbox.download(sandbox.resolve_path("export_dir"), str(local_dest))
@@ -226,4 +321,3 @@ class TestFileTransfer:
         await sandbox.download(path, path)
         content = await sandbox.read_file("hello.txt")
         assert content == "hello world\n"
-

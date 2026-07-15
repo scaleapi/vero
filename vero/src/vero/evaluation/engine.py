@@ -11,7 +11,12 @@ from typing import Awaitable, Callable
 from vero.evaluation.backend import BackendRegistry
 from vero.evaluation.budget import BudgetLedger
 from vero.evaluation.evaluator import Evaluator
-from vero.evaluation.exceptions import EvaluationDeniedError, EvaluationExecutionError
+from vero.evaluation.exceptions import (
+    EvaluationCancelledError,
+    EvaluationDeniedError,
+    EvaluationExecutionError,
+    EvaluationRequestError,
+)
 from vero.evaluation.models import (
     EvaluationAcknowledgement,
     EvaluationAuthorization,
@@ -29,6 +34,15 @@ AuthorizationResolver = Callable[
     [str, EvaluationRequest],
     EvaluationAuthorization | Awaitable[EvaluationAuthorization],
 ]
+
+
+def allow_all_evaluations(
+    _backend_id: str,
+    _request: EvaluationRequest,
+) -> EvaluationAuthorization:
+    """Explicit resolver for trusted runtimes without an evaluation boundary."""
+
+    return EvaluationAuthorization(may_evaluate=True)
 
 
 class EvaluationEngine:
@@ -62,7 +76,10 @@ class EvaluationEngine:
         if supplied is not None:
             return supplied
         if self.authorization_resolver is None:
-            return EvaluationAuthorization(may_evaluate=True)
+            return EvaluationAuthorization(
+                may_evaluate=False,
+                reason="evaluation authorization was not configured",
+            )
         resolved = self.authorization_resolver(backend_id, request)
         if inspect.isawaitable(resolved):
             resolved = await resolved
@@ -79,12 +96,20 @@ class EvaluationEngine:
         backend = self.backends.resolve(backend_id)
         decision = await self._authorization(backend_id, request, authorization)
         if not decision.may_evaluate:
-            raise EvaluationDeniedError(decision.reason or "evaluation is not authorized")
+            raise EvaluationDeniedError(
+                decision.reason or "evaluation is not authorized"
+            )
 
         validate_request = getattr(backend, "validate_request", None)
         if callable(validate_request):
-            validate_request(request)
-        cost = await backend.resolve_cost(request.evaluation_set)
+            try:
+                validate_request(request)
+            except ValueError as error:
+                raise EvaluationRequestError(str(error)) from error
+        try:
+            cost = await backend.resolve_cost(request.evaluation_set)
+        except ValueError as error:
+            raise EvaluationRequestError(str(error)) from error
         if decision.meter_budget and self.budget_ledger is not None:
             await self.budget_ledger.reserve(
                 backend_id,
@@ -99,6 +124,12 @@ class EvaluationEngine:
                 request=request,
                 objective_spec=objective_spec,
             )
+        except EvaluationCancelledError as error:
+            cancelled = EvaluationStore(
+                self.evaluator.evaluations_dir / error.evaluation_id
+            ).load()
+            await asyncio.shield(self._record(cancelled))
+            raise
         except EvaluationExecutionError as error:
             failure = EvaluationStore(
                 self.evaluator.evaluations_dir / error.evaluation_id

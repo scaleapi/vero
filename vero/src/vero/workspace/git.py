@@ -43,11 +43,13 @@ class GitWorkspace(Workspace):
         root: str,
         project_path: str | None = None,
         name: str | None = None,
+        worktree_owner_root: str | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._root = root
         self._project_path = project_path or root
         self._name = name or _basename(root)
+        self._worktree_owner_root = worktree_owner_root
         self._lock = asyncio.Lock()
         # Default: fully open access. Policy.init() narrows via set_access().
         self._fs = WorkspaceAccessPolicy(
@@ -95,7 +97,9 @@ class GitWorkspace(Workspace):
         """
         project_path = await sandbox.canonicalize(str(project_path))
 
-        result = await sandbox.run(["git", "rev-parse", "--show-toplevel"], cwd=project_path)
+        result = await sandbox.run(
+            ["git", "rev-parse", "--show-toplevel"], cwd=project_path
+        )
         if result.returncode != 0:
             raise RuntimeError(f"Not a git repository: {project_path}")
         repo_root = await sandbox.canonicalize(result.stdout.strip())
@@ -103,7 +107,9 @@ class GitWorkspace(Workspace):
         # Find the main repo name (handles worktrees whose common dir differs)
         repo_name = _basename(repo_root)
         try:
-            result = await sandbox.run(["git", "rev-parse", "--git-common-dir"], cwd=project_path)
+            result = await sandbox.run(
+                ["git", "rev-parse", "--git-common-dir"], cwd=project_path
+            )
             if result.returncode == 0:
                 git_common_dir = result.stdout.strip()
                 # Only use common-dir if it's an absolute path (worktree case).
@@ -152,9 +158,14 @@ class GitWorkspace(Workspace):
 
             # Commit (skip hooks for automated commits)
             await self._git(
-                "-c", "user.name=vero",
-                "-c", "user.email=vero@localhost",
-                "commit", "-m", message, "--no-verify",
+                "-c",
+                "user.name=vero",
+                "-c",
+                "user.email=vero@localhost",
+                "commit",
+                "-m",
+                message,
+                "--no-verify",
             )
 
             return await self.current_version()
@@ -176,16 +187,23 @@ class GitWorkspace(Workspace):
             except RuntimeError:
                 # There are staged changes — commit them
                 await self._git(
-                    "-c", "user.name=vero",
-                    "-c", "user.email=vero@localhost",
-                    "commit", "-m", message, "--no-verify",
+                    "-c",
+                    "user.name=vero",
+                    "-c",
+                    "user.email=vero@localhost",
+                    "commit",
+                    "-m",
+                    message,
+                    "--no-verify",
                 )
 
             return await self.current_version()
 
     # ── History inspection ──────────────────────────────────────────
 
-    async def diff(self, from_version: str | None = None, to_version: str | None = None) -> str:
+    async def diff(
+        self, from_version: str | None = None, to_version: str | None = None
+    ) -> str:
         args = ["diff"]
         if from_version:
             args.append(from_version)
@@ -214,63 +232,83 @@ class GitWorkspace(Workspace):
 
     # ── Copies ──────────────────────────────────────────────────────
 
-    async def copy(self, name: str | None = None, from_version: str | None = None) -> GitWorkspace:
+    async def _remove_worktree(self, target_path: str) -> None:
+        result = await self._sandbox.run(
+            ["git", "worktree", "remove", "--force", target_path],
+            cwd=self._root,
+        )
+        if result.returncode != 0 and await self._sandbox.exists(target_path):
+            await self._sandbox.remove(target_path, recursive=True)
+        await self._sandbox.run(
+            ["git", "worktree", "prune"],
+            cwd=self._root,
+        )
+
+    async def _add_worktree(self, target_path: str, from_version: str | None) -> None:
+        if await self._sandbox.exists(target_path):
+            raise FileExistsError(target_path)
+        arguments = ["worktree", "add", "--detach", target_path]
+        if from_version is not None:
+            arguments.append(from_version)
+        try:
+            await self._git(*arguments)
+        except BaseException:
+            await asyncio.shield(self._remove_worktree(target_path))
+            raise
+
+    async def copy(
+        self, name: str | None = None, from_version: str | None = None
+    ) -> GitWorkspace:
         """Create a new git worktree as an isolated copy."""
         async with self._lock:
             if name is None:
                 name = f"worktree-{uuid.uuid4().hex[:8]}"
 
             target_path = _join(_parent(self._root), name)
-
-            args = ["worktree", "add", target_path]
-            if from_version:
-                args.extend(["-b", name, from_version])
-            else:
-                args.extend(["-b", name])
-
-            await self._git(*args)
+            await self._add_worktree(target_path, from_version)
 
             return GitWorkspace(
                 sandbox=self._sandbox,
                 root=target_path,
                 project_path=self._copied_project_path(target_path),
                 name=self._name,
+                worktree_owner_root=self._root,
             )
 
     @asynccontextmanager
-    async def temp_copy(self, from_version: str | None = None) -> AsyncGenerator[GitWorkspace, None]:
+    async def temp_copy(
+        self, from_version: str | None = None
+    ) -> AsyncGenerator[GitWorkspace, None]:
         """Create a temporary worktree, cleaned up on exit."""
-        branch_name = f"tmp-{uuid.uuid4().hex[:8]}"
+        copy_name = f"tmp-{uuid.uuid4().hex[:8]}"
 
         # Ask the sandbox for a temp directory
         result = await self._sandbox.run(["mktemp", "-d"])
         if result.returncode != 0:
             raise RuntimeError(f"Failed to create temp dir: {result.stderr}")
-        target_path = _join(result.stdout.strip(), branch_name)
-
-        async with self._lock:
-            args = ["worktree", "add", target_path]
-            if from_version:
-                args.extend(["-b", branch_name, from_version])
-            else:
-                args.extend(["-b", branch_name])
-
-            await self._git(*args)
+        temporary_root = result.stdout.strip()
+        target_path = _join(temporary_root, copy_name)
 
         try:
-            yield GitWorkspace(
-                sandbox=self._sandbox,
-                root=target_path,
-                project_path=self._copied_project_path(target_path),
-                name=self._name,
-            )
-        finally:
             async with self._lock:
-                await self._git("worktree", "remove", "--force", target_path)
-                try:
-                    await self._git("branch", "-D", branch_name)
-                except RuntimeError:
-                    pass
+                await self._add_worktree(target_path, from_version)
+        except BaseException:
+            await asyncio.shield(self._sandbox.remove(temporary_root, recursive=True))
+            raise
+
+        copied = GitWorkspace(
+            sandbox=self._sandbox,
+            root=target_path,
+            project_path=self._copied_project_path(target_path),
+            name=self._name,
+            worktree_owner_root=self._root,
+        )
+
+        try:
+            yield copied
+        finally:
+            await asyncio.shield(copied.destroy())
+            await asyncio.shield(self._sandbox.remove(temporary_root, recursive=True))
 
     # ── Execution at a version ──────────────────────────────────────
 
@@ -302,22 +340,22 @@ class GitWorkspace(Workspace):
 
     async def destroy(self) -> None:
         """Remove this worktree."""
+        if self._worktree_owner_root is None:
+            return
         async with self._lock:
-            try:
-                result = await self._sandbox.run(
-                    ["git", "rev-parse", "--git-common-dir"], cwd=self._root
-                )
-                if result.returncode == 0:
-                    git_common_dir = result.stdout.strip()
-                    if git_common_dir.startswith("/"):
-                        main_root = _parent(git_common_dir)
-                        if main_root != self._root:
-                            await self._sandbox.run(
-                                ["git", "worktree", "remove", "--force", self._root],
-                                cwd=main_root,
-                            )
-            except RuntimeError:
-                pass
+            owner = GitWorkspace(
+                sandbox=self._sandbox,
+                root=self._worktree_owner_root,
+            )
+            await owner._remove_worktree(self._root)
+            self._worktree_owner_root = None
+
+    async def retain_version(self, version_id: str, ref_name: str) -> None:
+        """Keep a candidate commit under VeRO's hidden ref namespace."""
+
+        ref = f"refs/vero/{ref_name}"
+        await self._git("check-ref-format", ref)
+        await self._git("update-ref", ref, version_id)
 
     # ── Git-specific helpers (used by Policy and git tools) ─────────
 
@@ -342,7 +380,9 @@ class GitWorkspace(Workspace):
     async def get_head_commit(self, branch_name: str) -> str:
         return await self._git("rev-parse", f"refs/heads/{branch_name}")
 
-    async def checkout_branch(self, branch_name: str, create: bool = False, from_ref: str | None = None) -> None:
+    async def checkout_branch(
+        self, branch_name: str, create: bool = False, from_ref: str | None = None
+    ) -> None:
         async with self._lock:
             args = ["checkout"]
             if create:

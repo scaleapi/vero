@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 from pathlib import Path
 
@@ -18,8 +19,19 @@ def _init_git_repo(path: Path) -> None:
     (path / "main.py").write_text("x = 1\n")
     subprocess.run(["git", "add", "."], cwd=path, capture_output=True, check=True)
     subprocess.run(
-        ["git", "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-m", "init"],
-        cwd=path, capture_output=True, check=True,
+        [
+            "git",
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@test",
+            "commit",
+            "-m",
+            "init",
+        ],
+        cwd=path,
+        capture_output=True,
+        check=True,
     )
 
 
@@ -120,10 +132,23 @@ class TestSubdirProject:
         subdir.mkdir(parents=True)
         (subdir / "agent.py").write_text("v1\n")
         # Commit the subdir
-        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True, check=True)
         subprocess.run(
-            ["git", "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-m", "add agent"],
-            cwd=tmp_path, capture_output=True, check=True,
+            ["git", "add", "."], cwd=tmp_path, capture_output=True, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=test",
+                "-c",
+                "user.email=test@test",
+                "commit",
+                "-m",
+                "add agent",
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            check=True,
         )
         sandbox = LocalSandbox(root=tmp_path)
         return await GitWorkspace.from_path(sandbox, subdir)
@@ -150,7 +175,9 @@ class TestSubdirProject:
         assert v1 != v2
 
         # The outside file should still be untracked
-        result = await ws.sandbox.run(["git", "status", "--porcelain", "outside.txt"], cwd=repo_root)
+        result = await ws.sandbox.run(
+            ["git", "status", "--porcelain", "outside.txt"], cwd=repo_root
+        )
         assert "??" in result.stdout  # untracked
 
     @pytest.mark.asyncio
@@ -161,7 +188,9 @@ class TestSubdirProject:
 
         # Modify file OUTSIDE project — should NOT be dirty
         await ws.sandbox.write_file(str(Path(ws.root) / "outside.txt"), "unrelated\n")
-        assert not await ws.is_dirty(), "Changes outside project_path should not make workspace dirty"
+        assert not await ws.is_dirty(), (
+            "Changes outside project_path should not make workspace dirty"
+        )
 
         # Modify file INSIDE project — should be dirty
         await ws.sandbox.write_file(str(Path(ws.project_path) / "agent.py"), "v2\n")
@@ -282,9 +311,7 @@ class TestCopies:
             capture_output=True,
             check=True,
         )
-        workspace = await GitWorkspace.from_path(
-            LocalSandbox(root=tmp_path), subdir
-        )
+        workspace = await GitWorkspace.from_path(LocalSandbox(root=tmp_path), subdir)
 
         async with workspace.temp_copy() as copy_workspace:
             relative = Path(copy_workspace.project_path).relative_to(
@@ -299,6 +326,62 @@ class TestCopies:
             assert relative == Path("packages/target")
         finally:
             await persistent.destroy()
+
+    @pytest.mark.asyncio
+    async def test_persistent_copy_uses_hidden_ref_without_branch_leak(
+        self,
+        workspace,
+    ):
+        branches_before = await workspace._git(
+            "for-each-ref", "--format=%(refname)", "refs/heads"
+        )
+        copied = await workspace.copy(name="candidate-copy")
+        await copied.sandbox.write_file(
+            str(Path(copied.root) / "candidate.txt"),
+            "candidate\n",
+        )
+        version = await copied.save("candidate")
+        await workspace.retain_version(
+            version,
+            "sessions/test/candidates/candidate",
+        )
+        await copied.destroy()
+
+        branches_after = await workspace._git(
+            "for-each-ref", "--format=%(refname)", "refs/heads"
+        )
+        retained = await workspace._git(
+            "for-each-ref", "--format=%(objectname)", "refs/vero/sessions"
+        )
+        assert branches_after == branches_before
+        assert version in retained.splitlines()
+        assert not Path(copied.root).exists()
+
+    @pytest.mark.asyncio
+    async def test_copy_rolls_back_if_cancelled_after_git_creates_worktree(
+        self,
+        workspace,
+        monkeypatch,
+    ):
+        original_run = workspace.sandbox.run
+        injected = False
+
+        async def cancel_after_add(command, **kwargs):
+            nonlocal injected
+            result = await original_run(command, **kwargs)
+            if command[:3] == ["git", "worktree", "add"] and not injected:
+                injected = True
+                raise asyncio.CancelledError
+            return result
+
+        monkeypatch.setattr(workspace.sandbox, "run", cancel_after_add)
+
+        with pytest.raises(asyncio.CancelledError):
+            await workspace.copy(name="cancelled-copy")
+
+        worktrees = await workspace._git("worktree", "list", "--porcelain")
+        assert worktrees.count("worktree ") == 1
+        assert not Path(workspace.root).parent.joinpath("cancelled-copy").exists()
 
 
 class TestAtVersion:

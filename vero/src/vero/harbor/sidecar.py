@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -108,9 +109,7 @@ class SidecarEvaluationRequest(EvaluationModel):
         return value
 
 
-EvaluationProjection = (
-    EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement
-)
+EvaluationProjection = EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement
 
 
 class SidecarEvaluationResult(EvaluationModel):
@@ -175,12 +174,12 @@ class EvaluationSidecar:
         self.agent_volume = Path(agent_volume) if agent_volume is not None else None
         self.admin_volume = Path(admin_volume) if admin_volume is not None else None
         self.submit_enabled = submit_enabled
-        self._policies: dict[
-            tuple[str, str, str | None], EvaluationAccessPolicy
-        ] = {}
+        self._policies: dict[tuple[str, str, str | None], EvaluationAccessPolicy] = {}
         for policy in access_policies:
             if policy.key in self._policies:
-                raise ValueError(f"duplicate evaluation access policy for {policy.key!r}")
+                raise ValueError(
+                    f"duplicate evaluation access policy for {policy.key!r}"
+                )
             if policy.backend_id not in engine.backends:
                 raise ValueError(
                     f"access policy references unknown backend {policy.backend_id!r}"
@@ -221,7 +220,7 @@ class EvaluationSidecar:
                 f"{policy.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
-    def _write_projection(
+    async def _write_projection(
         self,
         result: EvaluationProjection,
     ) -> str | None:
@@ -231,7 +230,11 @@ class EvaluationSidecar:
             result.id if isinstance(result, EvaluationRecord) else result.evaluation_id
         )
         destination = self.agent_volume / "results" / f"{evaluation_id}.json"
-        _atomic_write_json(destination, result.model_dump(mode="json"))
+        await asyncio.to_thread(
+            _atomic_write_json,
+            destination,
+            result.model_dump(mode="json"),
+        )
         return str(destination)
 
     async def evaluate(
@@ -270,7 +273,7 @@ class EvaluationSidecar:
         return SidecarEvaluationResult(
             disclosure=policy.disclosure,
             result=result,
-            result_path=self._write_projection(result),
+            result_path=await self._write_projection(result),
         )
 
     async def submit(self, version: str | None = None) -> Submission:
@@ -279,7 +282,8 @@ class EvaluationSidecar:
         candidate = await self.candidate_transport.import_candidate(version)
         submission = Submission(candidate=candidate)
         if self.admin_volume is not None:
-            _atomic_write_json(
+            await asyncio.to_thread(
+                _atomic_write_json,
                 self.admin_volume / "submission.json",
                 submission.model_dump(mode="json"),
             )

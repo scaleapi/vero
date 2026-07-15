@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from vero.evaluation import (
     EvaluationSet,
     MetricSelector,
     ObjectiveSpec,
+    allow_all_evaluations,
 )
 from vero.optimization import (
     CommandCandidateProducer,
@@ -142,6 +144,7 @@ async def test_generic_factory_accepts_a_provisioned_workspace(tmp_path: Path):
         ),
         producers={},
         max_candidates=0,
+        authorization_resolver=allow_all_evaluations,
     )
     result = await session.run()
 
@@ -180,6 +183,14 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
     assert (target / "program.txt").read_text(encoding="utf-8") == "baseline\n"
     assert session.load_manifest().status == SessionStatus.COMPLETED
     assert len(session.database.evaluations) == 2
+
+    # Simulate a crash after the canonical evaluation directory was committed
+    # but before database.json was updated.
+    database_path = session_dir / "database.json"
+    stale_database = json.loads(database_path.read_text(encoding="utf-8"))
+    stale_database["evaluations"].pop(result.best.id)
+    stale_database["candidates"].pop(result.best.request.candidate.id)
+    database_path.write_text(json.dumps(stale_database), encoding="utf-8")
 
     resumed = await create_local_optimization_session(
         project_path=target,
