@@ -7,6 +7,7 @@ from pathlib import Path
 
 from pydantic import JsonValue
 
+from vero.candidate import Candidate
 from vero.evaluation import (
     AuthorizationResolver,
     BackendRegistry,
@@ -86,6 +87,7 @@ async def create_local_optimization_session(
     max_rounds: int = 100,
     max_concurrency: int = 1,
     use_evaluation_copies: bool = True,
+    base_ref: str | None = None,
 ) -> OptimizationSession:
     """Build a durable local session around any backend and producer set.
 
@@ -114,6 +116,11 @@ async def create_local_optimization_session(
         raise ValueError("session directory must live outside the target repository")
     if await workspace.is_dirty():
         raise ValueError("target workspace must be clean before optimization")
+    baseline_version = (
+        await workspace.resolve_ref(base_ref)
+        if base_ref is not None
+        else await workspace.current_version()
+    )
 
     session_dir.mkdir(parents=True, exist_ok=True)
     database_path = session_dir / "database.json"
@@ -150,9 +157,15 @@ async def create_local_optimization_session(
         max_concurrency=max_concurrency,
         session_id=session_id,
     )
-    return OptimizationSession(
+    session = OptimizationSession(
         id=session_id,
         session_dir=session_dir,
         optimizer=optimizer,
+        baseline=Candidate.from_version(baseline_version),
         metadata=metadata or {},
     )
+    for producer_id, producer in producers.items():
+        bind_artifacts = getattr(producer, "bind_artifacts", None)
+        if callable(bind_artifacts):
+            bind_artifacts(session.artifacts, producer_id=producer_id)
+    return session

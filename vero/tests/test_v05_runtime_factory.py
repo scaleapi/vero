@@ -69,7 +69,7 @@ from pathlib import Path
 
 workspace, report_path = map(Path, sys.argv[1:])
 value = (workspace / "program.txt").read_text().strip()
-score = 1.0 if value == "improved" else 0.0
+score = {"improved": 1.0, "improved-again": 2.0}.get(value, 0.0)
 report_path.write_text(json.dumps({
     "schema_version": 1,
     "status": "success",
@@ -85,7 +85,8 @@ report_path.write_text(json.dumps({
         """
 import sys
 from pathlib import Path
-Path(sys.argv[1], "program.txt").write_text("improved\\n")
+value = "improved" if sys.argv[2] == "0" else "improved-again"
+Path(sys.argv[1], "program.txt").write_text(value + "\\n")
 """,
         encoding="utf-8",
     )
@@ -103,7 +104,12 @@ Path(sys.argv[1], "program.txt").write_text("improved\\n")
     producer = CommandCandidateProducer(
         CommandCandidateProducerConfig(
             root=str(producer_root),
-            command=[sys.executable, str(producer_script), "{workspace}"],
+            command=[
+                sys.executable,
+                str(producer_script),
+                "{workspace}",
+                "{round}",
+            ],
             description="Improve the program",
         )
     )
@@ -159,6 +165,106 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
     assert len(resumed.database.evaluations) == 2
     assert resumed.id == "stable-id"
     assert resumed_result.baseline.id == result.baseline.id
+    assert len(resumed_result.evaluations) == 2
+    assert resumed_result.best.id == result.best.id
+
+
+@pytest.mark.asyncio
+async def test_local_factory_continues_candidate_rounds_after_resume(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    backend, producer = command_components(tmp_path)
+    session_dir = tmp_path / "sessions" / "resume"
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="maximize",
+    )
+    kwargs = {
+        "project_path": target,
+        "session_dir": session_dir,
+        "session_id": "resume",
+        "backend_id": "command",
+        "backend": backend,
+        "objective": objective,
+        "evaluation_set": EvaluationSet(name="quality"),
+        "producers": {"default": producer},
+    }
+
+    first = await create_local_optimization_session(max_candidates=1, **kwargs)
+    first_result = await first.run()
+    resumed = await create_local_optimization_session(max_candidates=2, **kwargs)
+    resumed_result = await resumed.run(skip_baseline_evaluation=True)
+
+    assert len(first_result.evaluations) == 2
+    assert len(resumed_result.evaluations) == 3
+    assert len(resumed_result.candidates) == 3
+    assert resumed_result.best.objective.value == 2.0
+    assert resumed_result.best.request.candidate.metadata["round"] == 1
+
+
+@pytest.mark.asyncio
+async def test_local_factory_can_evaluate_an_older_target_ref(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    baseline_version = initialize_repository(target)
+    (target / "program.txt").write_text("improved\n", encoding="utf-8")
+    subprocess.run(["git", "add", "--all"], cwd=target, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=vero",
+            "-c",
+            "user.email=vero@localhost",
+            "commit",
+            "-m",
+            "new head",
+        ],
+        cwd=target,
+        check=True,
+        capture_output=True,
+    )
+    head_version = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=target,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    backend, _ = command_components(tmp_path)
+
+    session = await create_local_optimization_session(
+        project_path=target,
+        session_dir=tmp_path / "sessions" / "old-ref",
+        session_id="old-ref",
+        backend_id="command",
+        backend=backend,
+        objective=ObjectiveSpec(
+            selector=MetricSelector(metric="score"),
+            direction="maximize",
+        ),
+        producers={},
+        max_candidates=0,
+        base_ref=baseline_version,
+    )
+    result = await session.run()
+
+    assert result.baseline.request.candidate.version == baseline_version
+    assert result.baseline.objective.value == 0.0
+    assert head_version != baseline_version
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=target,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        == head_version
+    )
 
 
 @pytest.mark.asyncio

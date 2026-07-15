@@ -194,6 +194,19 @@ report_path.write_text(json.dumps({
     assert len(database.evaluations) == 3
 
     agent_artifacts = list((session_dir / "artifacts" / "agents").iterdir())
-    assert len(agent_artifacts) == 1
-    assert (agent_artifacts[0] / "state.json").exists()
-    assert (agent_artifacts[0] / "trace.json").exists()
+    proposal_artifacts = [path for path in agent_artifacts if path.name != "producers"]
+    assert len(proposal_artifacts) == 1
+    assert (proposal_artifacts[0] / "state.json").exists()
+    assert (proposal_artifacts[0] / "trace.json").exists()
+
+    class ResumedAgent:
+        def __init__(self):
+            self.state = None
+
+        def deserialize_state(self, state):
+            self.state = state
+
+    resumed_agent = ResumedAgent()
+    resumed_producer = AgentCandidateProducer(resumed_agent)
+    resumed_producer.bind_artifacts(artifacts)
+    assert resumed_agent.state == {"turn": 2}

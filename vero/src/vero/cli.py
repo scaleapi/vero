@@ -12,19 +12,32 @@ from uuid import uuid4
 import click
 
 from vero.evaluation import (
+    AllCases,
+    CaseIds,
+    CaseRange,
     CommandBackend,
     CommandBackendConfig,
+    ConstraintOperator,
+    DisclosureLevel,
+    EvaluationDatabase,
     EvaluationLimits,
     EvaluationSet,
+    MetricAggregation,
+    MetricConstraint,
     MetricSelector,
     ObjectiveSpec,
+    project_evaluation,
 )
 from vero.optimization import (
     CommandCandidateProducer,
     CommandCandidateProducerConfig,
     SequentialStrategy,
 )
-from vero.runtime import SessionManifest, create_local_optimization_session
+from vero.runtime import (
+    SessionManifest,
+    WandbEventSink,
+    create_local_optimization_session,
+)
 
 
 def _default_home() -> Path:
@@ -65,9 +78,128 @@ def _command(value: str, option: str) -> list[str]:
     return command
 
 
+def _parse_environment(
+    values: tuple[str, ...],
+    *,
+    option: str,
+) -> dict[str, str]:
+    environment: dict[str, str] = {}
+    for value in values:
+        name, separator, content = value.partition("=")
+        if not separator or not name or "=" in name:
+            raise click.BadParameter(
+                "values must use NAME=VALUE syntax", param_hint=option
+            )
+        if name in environment:
+            raise click.BadParameter(
+                f"duplicate environment variable {name!r}", param_hint=option
+            )
+        environment[name] = content
+    return environment
+
+
+def _parse_constraints(
+    values: tuple[tuple[str, str, str], ...],
+) -> list[MetricConstraint]:
+    constraints: list[MetricConstraint] = []
+    for metric_value, operator_value, target_value in values:
+        metric, separator, aggregation_value = metric_value.partition(":")
+        if not metric:
+            raise click.BadParameter("constraint metric must not be empty")
+        try:
+            aggregation = (
+                MetricAggregation(aggregation_value)
+                if separator
+                else MetricAggregation.REPORT
+            )
+            operator = ConstraintOperator(operator_value)
+            target = float(target_value)
+            constraints.append(
+                MetricConstraint(
+                    selector=MetricSelector(
+                        metric=metric,
+                        aggregation=aggregation,
+                    ),
+                    operator=operator,
+                    value=target,
+                )
+            )
+        except (ValueError, TypeError) as error:
+            raise click.BadParameter(
+                "constraints use METRIC[:AGGREGATION] OP VALUE; "
+                "OP is one of ==, !=, <, <=, >, >=",
+                param_hint="--constraint",
+            ) from error
+    return constraints
+
+
+def _print_result(session, result) -> None:
+    click.echo(f"Session: {session.session_dir}")
+    click.echo(
+        f"Baseline: {result.baseline.request.candidate.id} "
+        f"({result.baseline.objective.value if result.baseline.objective else 'n/a'})"
+    )
+    if result.best is None:
+        click.echo("Best: no feasible candidate")
+    else:
+        click.echo(
+            f"Best: {result.best.request.candidate.id} "
+            f"({result.best.objective.value if result.best.objective else 'n/a'})"
+        )
+
+
+async def _run_configured(config_path: Path, *, optimize: bool):
+    from vero.config import build_configured_runtime, load_config
+
+    runtime = await build_configured_runtime(
+        load_config(config_path),
+        optimize=optimize,
+    )
+    result = await runtime.session.run(
+        skip_baseline_evaluation=runtime.session.manifest_path.exists()
+    )
+    return runtime.session, result
+
+
 @click.group()
 def main() -> None:
     """VeRO: a harness for agents to optimize programs."""
+
+
+@main.command(name="evaluate")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    default=Path("vero.toml"),
+    show_default=True,
+)
+def evaluate_config(config_path: Path) -> None:
+    """Evaluate the configured baseline without producing candidates."""
+
+    try:
+        session, result = asyncio.run(_run_configured(config_path, optimize=False))
+    except Exception as error:
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    _print_result(session, result)
+
+
+@main.command(name="run")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    default=Path("vero.toml"),
+    show_default=True,
+)
+def run_config(config_path: Path) -> None:
+    """Run the optimization declared in vero.toml."""
+
+    try:
+        session, result = asyncio.run(_run_configured(config_path, optimize=True))
+    except Exception as error:
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    _print_result(session, result)
 
 
 @main.command()
@@ -105,11 +237,29 @@ def main() -> None:
 @click.option("--instruction", help="Instruction given to the candidate producer.")
 @click.option("--metric", required=True, help="Metric to optimize.")
 @click.option(
+    "--aggregation",
+    type=click.Choice([value.value for value in MetricAggregation]),
+    default=MetricAggregation.REPORT.value,
+    show_default=True,
+)
+@click.option(
     "--direction",
     type=click.Choice(["maximize", "minimize"]),
     required=True,
 )
+@click.option("--failure-value", type=float)
+@click.option(
+    "--constraint",
+    type=(str, str, str),
+    multiple=True,
+    metavar="METRIC[:AGGREGATION] OP VALUE",
+    help="Feasibility constraint; repeat for multiple constraints.",
+)
 @click.option("--evaluation-set", default="default", show_default=True)
+@click.option("--partition")
+@click.option("--case-id", multiple=True, help="Evaluate only this case; repeatable.")
+@click.option("--case-start", default=0, type=click.IntRange(min=0), show_default=True)
+@click.option("--case-stop", type=click.IntRange(min=1))
 @click.option(
     "--parameter",
     multiple=True,
@@ -121,9 +271,27 @@ def main() -> None:
     help="Environment variable to pass through to the evaluation harness.",
 )
 @click.option(
+    "--evaluation-variable",
+    multiple=True,
+    help="Fixed harness environment variable as NAME=VALUE; repeatable.",
+)
+@click.option(
     "--producer-env",
     multiple=True,
     help="Environment variable to pass through to an external producer.",
+)
+@click.option(
+    "--producer-variable",
+    multiple=True,
+    help="Fixed producer environment variable as NAME=VALUE; repeatable.",
+)
+@click.option("--evaluation-working-directory", default=".", show_default=True)
+@click.option("--producer-working-directory", default=".", show_default=True)
+@click.option(
+    "--target-ref",
+    default="HEAD",
+    show_default=True,
+    help="Git ref to use as the immutable baseline.",
 )
 @click.option(
     "--session-dir",
@@ -131,12 +299,43 @@ def main() -> None:
     help="Durable output directory; defaults to $VERO_HOME/sessions/<id>.",
 )
 @click.option("--session-id", help="Stable session identity.")
-@click.option("--max-candidates", default=1, type=click.IntRange(min=0), show_default=True)
-@click.option("--max-rounds", default=100, type=click.IntRange(min=1), show_default=True)
-@click.option("--max-concurrency", default=1, type=click.IntRange(min=1), show_default=True)
+@click.option(
+    "--max-candidates", default=1, type=click.IntRange(min=0), show_default=True
+)
+@click.option(
+    "--max-rounds", default=100, type=click.IntRange(min=1), show_default=True
+)
+@click.option(
+    "--max-concurrency", default=1, type=click.IntRange(min=1), show_default=True
+)
 @click.option("--max-turns", default=200, type=click.IntRange(min=1), show_default=True)
-@click.option("--timeout", default=600.0, type=click.FloatRange(min=0, min_open=True), show_default=True)
+@click.option(
+    "--timeout",
+    default=600.0,
+    type=click.FloatRange(min=0, min_open=True),
+    show_default=True,
+)
+@click.option(
+    "--case-timeout",
+    default=180.0,
+    type=click.FloatRange(min=0, min_open=True),
+    show_default=True,
+)
+@click.option(
+    "--evaluation-concurrency",
+    default=100,
+    type=click.IntRange(min=1),
+    show_default=True,
+)
+@click.option("--evaluation-copy/--no-evaluation-copy", default=True, show_default=True)
 @click.option("--seed", type=int)
+@click.option("--wandb-project", help="Log the session to this W&B project.")
+@click.option("--wandb-entity")
+@click.option("--wandb-name")
+@click.option(
+    "--wandb-mode",
+    type=click.Choice(["online", "offline", "disabled"]),
+)
 def optimize(
     project_path: Path,
     harness_root: Path,
@@ -146,11 +345,23 @@ def optimize(
     agent: str | None,
     instruction: str | None,
     metric: str,
+    aggregation: str,
     direction: str,
+    failure_value: float | None,
+    constraint: tuple[tuple[str, str, str], ...],
     evaluation_set: str,
+    partition: str | None,
+    case_id: tuple[str, ...],
+    case_start: int,
+    case_stop: int | None,
     parameter: tuple[str, ...],
     evaluation_env: tuple[str, ...],
+    evaluation_variable: tuple[str, ...],
     producer_env: tuple[str, ...],
+    producer_variable: tuple[str, ...],
+    evaluation_working_directory: str,
+    producer_working_directory: str,
+    target_ref: str,
     session_dir: Path | None,
     session_id: str | None,
     max_candidates: int,
@@ -158,16 +369,39 @@ def optimize(
     max_concurrency: int,
     max_turns: int,
     timeout: float,
+    case_timeout: float,
+    evaluation_concurrency: int,
+    evaluation_copy: bool,
     seed: int | None,
+    wandb_project: str | None,
+    wandb_entity: str | None,
+    wandb_name: str | None,
+    wandb_mode: str | None,
 ) -> None:
     """Optimize the versioned program at PROJECT_PATH."""
 
-    if (producer_command is None) == (agent is None):
-        raise click.UsageError("provide exactly one of --produce or --agent")
+    producer_count = int(producer_command is not None) + int(agent is not None)
+    if producer_count > 1 or (max_candidates > 0 and producer_count != 1):
+        raise click.UsageError(
+            "provide exactly one of --produce or --agent when producing candidates"
+        )
     if producer_command is not None and producer_root is None:
         raise click.UsageError("--producer-root is required with --produce")
     if producer_command is None and producer_root is not None:
         raise click.UsageError("--producer-root is only valid with --produce")
+    if case_id and case_stop is not None:
+        raise click.UsageError("--case-id cannot be combined with --case-stop")
+    if case_stop is None and case_start != 0:
+        raise click.UsageError("--case-start requires --case-stop")
+    if case_stop is not None and case_stop <= case_start:
+        raise click.UsageError("--case-stop must be greater than --case-start")
+
+    if case_id:
+        selection = CaseIds(ids=list(case_id))
+    elif case_stop is not None:
+        selection = CaseRange(start=case_start, stop=case_stop)
+    else:
+        selection = AllCases()
 
     if session_id is None and session_dir is not None:
         manifest_path = session_dir / "manifest.json"
@@ -189,6 +423,10 @@ def optimize(
             CommandBackendConfig(
                 harness_root=str(harness_root.resolve()),
                 command=_command(evaluation_command, "--evaluate"),
+                working_directory=evaluation_working_directory,
+                environment=_parse_environment(
+                    evaluation_variable, option="--evaluation-variable"
+                ),
                 passthrough_environment=list(evaluation_env),
             )
         )
@@ -198,11 +436,15 @@ def optimize(
                 CommandCandidateProducerConfig(
                     root=str(producer_root.resolve()),
                     command=_command(producer_command, "--produce"),
+                    working_directory=producer_working_directory,
+                    environment=_parse_environment(
+                        producer_variable, option="--producer-variable"
+                    ),
                     passthrough_environment=list(producer_env),
                     timeout_seconds=timeout,
                 )
             )
-        else:
+        elif agent is not None:
             from vero.agents import AgentCandidateProducer
 
             if agent == "claude":
@@ -218,6 +460,8 @@ def optimize(
                 prompt=instruction,
                 max_turns=max_turns,
             )
+        else:
+            producer = None
 
         session = await create_local_optimization_session(
             project_path=project_path,
@@ -226,22 +470,53 @@ def optimize(
             backend_id="command",
             backend=backend,
             objective=ObjectiveSpec(
-                selector=MetricSelector(metric=metric),
+                selector=MetricSelector(
+                    metric=metric,
+                    aggregation=MetricAggregation(aggregation),
+                ),
                 direction=direction,
+                failure_value=failure_value,
+                constraints=_parse_constraints(constraint),
             ),
-            evaluation_set=EvaluationSet(name=evaluation_set),
+            evaluation_set=EvaluationSet(
+                name=evaluation_set,
+                partition=partition,
+                selection=selection,
+            ),
             strategy=SequentialStrategy(instruction=instruction),
-            producers={"default": producer},
+            producers={"default": producer} if producer is not None else {},
             parameters=_parse_parameters(parameter),
-            limits=EvaluationLimits(timeout_seconds=timeout),
+            limits=EvaluationLimits(
+                timeout_seconds=timeout,
+                case_timeout_seconds=case_timeout,
+                max_concurrency=evaluation_concurrency,
+            ),
             seed=seed,
             max_candidates=max_candidates,
             max_rounds=max_rounds,
             max_concurrency=max_concurrency,
+            use_evaluation_copies=evaluation_copy,
+            base_ref=target_ref,
             metadata={"project_path": str(project_path.resolve())},
         )
-        if hasattr(producer, "artifacts") and producer.artifacts is None:
-            producer.artifacts = session.artifacts
+        if wandb_project is not None:
+            assert session.events is not None
+            session.events.sinks.append(
+                WandbEventSink(
+                    project=wandb_project,
+                    entity=wandb_entity,
+                    name=wandb_name,
+                    mode=wandb_mode,
+                    session_id=session.id,
+                    session_dir=session.session_dir,
+                    config={
+                        "vero/target": str(project_path.resolve()),
+                        "vero/evaluation_set": evaluation_set,
+                        "vero/objective_metric": metric,
+                        "vero/objective_direction": direction,
+                    },
+                )
+            )
         result = await session.run(
             skip_baseline_evaluation=session.manifest_path.exists()
         )
@@ -254,18 +529,7 @@ def optimize(
     except Exception as error:
         raise click.ClickException(str(error) or type(error).__name__) from error
 
-    click.echo(f"Session: {session.session_dir}")
-    click.echo(
-        f"Baseline: {result.baseline.request.candidate.id} "
-        f"({result.baseline.objective.value if result.baseline.objective else 'n/a'})"
-    )
-    if result.best is None:
-        click.echo("Best: no feasible candidate")
-    else:
-        click.echo(
-            f"Best: {result.best.request.candidate.id} "
-            f"({result.best.objective.value if result.best.objective else 'n/a'})"
-        )
+    _print_result(session, result)
 
 
 @main.group()
@@ -286,7 +550,7 @@ def session_list(root: Path | None) -> None:
     if not root.exists():
         click.echo("No sessions found.")
         return
-    manifests = sorted(root.glob("*/manifest.json"))
+    manifests = sorted(root.rglob("manifest.json"))
     if not manifests:
         click.echo("No sessions found.")
         return
@@ -297,10 +561,10 @@ def session_list(root: Path | None) -> None:
             )
             click.echo(
                 f"{manifest.id}\t{manifest.status.value}\t"
-                f"{manifest.best_candidate_id or '-'}"
+                f"{manifest.best_candidate_id or '-'}\t{path.parent.relative_to(root)}"
             )
         except Exception as error:
-            click.echo(f"{path.parent.name}\tinvalid\t{error}")
+            click.echo(f"{path.parent.relative_to(root)}\tinvalid\t{error}")
 
 
 @session.command(name="inspect")
@@ -309,7 +573,7 @@ def session_list(root: Path | None) -> None:
     type=click.Path(path_type=Path, exists=True, file_okay=False),
 )
 def session_inspect(session_dir: Path) -> None:
-    """Print a canonical session manifest as JSON."""
+    """Print a canonical session manifest and evaluation summaries as JSON."""
 
     manifest_path = session_dir / "manifest.json"
     if not manifest_path.exists():
@@ -320,7 +584,37 @@ def session_inspect(session_dir: Path) -> None:
         )
     except Exception as error:
         raise click.ClickException(f"invalid session manifest: {error}") from error
-    click.echo(manifest.model_dump_json(indent=2))
+    database_path = session_dir / "database.json"
+    try:
+        database = (
+            EvaluationDatabase.load_from_file(database_path)
+            if database_path.exists()
+            else EvaluationDatabase.from_evaluations_dir(
+                session_dir / "evaluations",
+                database_id=manifest.id,
+            )
+        )
+    except Exception as error:
+        raise click.ClickException(f"invalid evaluation database: {error}") from error
+    evaluations = sorted(
+        database.evaluations.values(),
+        key=lambda record: (record.completed_at, record.id),
+    )
+    click.echo(
+        json.dumps(
+            {
+                "manifest": manifest.model_dump(mode="json"),
+                "evaluations": [
+                    project_evaluation(record, DisclosureLevel.AGGREGATE).model_dump(
+                        mode="json"
+                    )
+                    for record in evaluations
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 from vero.harbor.cli import harbor as harbor_command

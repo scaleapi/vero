@@ -86,7 +86,7 @@ latency = 1.0 if (workspace / "program.txt").read_text().strip() == "fast" else 
 report.write_text(json.dumps({
     "schema_version": 1,
     "status": "success",
-    "metrics": {"latency_ms": latency},
+    "metrics": {"latency_ms": latency, "correct": 1.0},
 }))
 """,
         encoding="utf-8",
@@ -102,7 +102,7 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
 """,
         encoding="utf-8",
     )
-    session_dir = tmp_path / "sessions" / "cli-run"
+    session_dir = tmp_path / "sessions" / "nested" / "cli-run"
     runner = CliRunner()
 
     result = runner.invoke(
@@ -129,10 +129,14 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
             "latency_ms",
             "--direction",
             "minimize",
+            "--constraint",
+            "correct",
+            "==",
+            "1",
             "--evaluation-set",
             "performance",
             "--parameter",
-            'threshold=0.5',
+            "threshold=0.5",
             "--session-dir",
             str(session_dir),
             "--session-id",
@@ -149,16 +153,48 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
 
     inspect_result = runner.invoke(main, ["session", "inspect", str(session_dir)])
     assert inspect_result.exit_code == 0, inspect_result.output
-    manifest = json.loads(inspect_result.output)
-    assert manifest["id"] == "cli-session"
-    assert manifest["status"] == "completed"
+    inspection = json.loads(inspect_result.output)
+    assert inspection["manifest"]["id"] == "cli-session"
+    assert inspection["manifest"]["status"] == "completed"
+    assert len(inspection["evaluations"]) == 2
 
     list_result = runner.invoke(
         main,
-        ["session", "list", "--root", str(session_dir.parent)],
+        ["session", "list", "--root", str(tmp_path / "sessions")],
     )
     assert list_result.exit_code == 0, list_result.output
     assert "cli-session\tcompleted" in list_result.output
+    assert "nested/cli-run" in list_result.output
+
+    evaluate_only_dir = tmp_path / "sessions" / "evaluate-only"
+    evaluate_only = runner.invoke(
+        main,
+        [
+            "optimize",
+            str(target),
+            "--harness-root",
+            str(harness),
+            "--evaluate",
+            shlex.join(
+                [
+                    sys.executable,
+                    str(harness_script),
+                    "{workspace}",
+                    "{report}",
+                ]
+            ),
+            "--metric",
+            "latency_ms",
+            "--direction",
+            "minimize",
+            "--max-candidates",
+            "0",
+            "--session-dir",
+            str(evaluate_only_dir),
+        ],
+    )
+    assert evaluate_only.exit_code == 0, evaluate_only.output
+    assert "(9.0)" in evaluate_only.output
 
 
 def test_cli_requires_exactly_one_producer(tmp_path: Path):

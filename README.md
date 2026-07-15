@@ -27,8 +27,10 @@ use the optional, optimizer-independent `scale-vero-tasks` package.
 | [`vero-agents/`](vero-agents/) | Benchmark target programs; not part of the optimizer runtime |
 | [`vero-benchmarking/`](vero-benchmarking/) | Reproducible experiment configurations and drivers |
 
-Start with the [core quickstart](vero/README.md), which shows both a
-language-neutral command evaluator and the Python API.
+Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/)
+or the [core guide](vero/README.md). The C target has no Python or VeRO
+dependency; it is compiled, checked, benchmarked, and optimized through the
+language-neutral command protocol.
 
 ```bash
 cd vero

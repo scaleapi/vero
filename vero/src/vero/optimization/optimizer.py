@@ -59,11 +59,13 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         proposal: CandidateProposal,
         parent: Candidate,
         workspace: Workspace,
+        round_number: int,
     ):
         self.optimizer = optimizer
         self.proposal = proposal
         self.parent = parent
         self.workspace = workspace
+        self.round_number = round_number
         self._count = 0
         self._last_candidate_id = parent.id
         self._trial_candidates: list[Candidate] = []
@@ -109,6 +111,8 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
             metadata={
                 **self.proposal.metadata,
                 "producer_id": self.proposal.producer_id,
+                "proposal_id": self.proposal.id,
+                "round": self.round_number,
                 "trial": self._count,
             },
         )
@@ -202,19 +206,19 @@ class Optimizer:
             name=self._workspace_name(proposal),
             from_version=parent.version,
         )
-        before = await candidate_workspace.current_version()
-        if before != parent.version:
-            await candidate_workspace.destroy()
-            raise ValueError(
-                f"candidate workspace is at {before!r}, expected parent {parent.version!r}"
-            )
-
         try:
+            before = await candidate_workspace.current_version()
+            if before != parent.version:
+                raise ValueError(
+                    f"candidate workspace is at {before!r}, "
+                    f"expected parent {parent.version!r}"
+                )
             evaluation = _ScopedEvaluationGateway(
                 optimizer=self,
                 proposal=proposal,
                 parent=parent,
                 workspace=candidate_workspace,
+                round_number=context.round,
             )
             change = await producer.produce(
                 proposal=proposal,
@@ -223,7 +227,6 @@ class Optimizer:
                 evaluation=evaluation,
             )
             if change is None:
-                await candidate_workspace.destroy()
                 return _ProductionOutcome(
                     candidate=None,
                     trial_candidates=evaluation.trial_candidates,
@@ -235,14 +238,12 @@ class Optimizer:
                 else await candidate_workspace.current_version()
             )
             if version == parent.version and not evaluation.trial_candidates:
-                await candidate_workspace.destroy()
                 return _ProductionOutcome(
                     candidate=None,
                     trial_candidates=(),
                     trial_evaluations=(),
                 )
             if version == evaluation.last_candidate_version:
-                await candidate_workspace.destroy()
                 return _ProductionOutcome(
                     candidate=None,
                     trial_candidates=evaluation.trial_candidates,
@@ -251,21 +252,23 @@ class Optimizer:
             metadata = dict(proposal.metadata)
             metadata.update(change.metadata)
             metadata["producer_id"] = proposal.producer_id
+            metadata["proposal_id"] = proposal.id
+            metadata["round"] = context.round
+            candidate = Candidate(
+                id=proposal.id,
+                version=version,
+                parent_id=evaluation.last_candidate_id,
+                created_at=datetime.now(UTC),
+                description=change.description,
+                metadata=metadata,
+            )
             return _ProductionOutcome(
-                candidate=Candidate(
-                    id=proposal.id,
-                    version=version,
-                    parent_id=evaluation.last_candidate_id,
-                    created_at=datetime.now(UTC),
-                    description=change.description,
-                    metadata=metadata,
-                ),
+                candidate=candidate,
                 trial_candidates=evaluation.trial_candidates,
                 trial_evaluations=evaluation.trial_evaluations,
             )
-        except BaseException:
+        finally:
             await candidate_workspace.destroy()
-            raise
 
     async def run(
         self,
@@ -286,6 +289,7 @@ class Optimizer:
             version = await self.workspace.current_version()
             baseline = Candidate.from_version(version)
 
+        backend_provenance = self.engine.backends.resolve(self.backend_id).provenance
         existing_baselines = [
             record
             for record in self.engine.database.evaluations.values()
@@ -293,6 +297,10 @@ class Optimizer:
             and record.request.candidate.version == baseline.version
             and record.backend_id == self.backend_id
             and record.request.evaluation_set == self.evaluation_set
+            and record.request.parameters == self.parameters
+            and record.request.limits == self.limits
+            and record.request.seed == self.seed
+            and record.backend == backend_provenance
             and record.objective_spec == self.objective
         ]
         if skip_baseline_evaluation:
@@ -304,12 +312,58 @@ class Optimizer:
         else:
             baseline_record = await self.evaluate_candidate(baseline)
 
-        evaluations = [baseline_record]
-        candidates: dict[str, Candidate] = {baseline.id: baseline}
-        generated = 0
+        compatible = [
+            record
+            for record in self.engine.database.evaluations.values()
+            if record.backend_id == self.backend_id
+            and record.request.evaluation_set == self.evaluation_set
+            and record.request.parameters == self.parameters
+            and record.request.limits == self.limits
+            and record.request.seed == self.seed
+            and record.backend == backend_provenance
+            and record.objective_spec == self.objective
+        ]
+        candidate_records = {
+            record.request.candidate.id: record.request.candidate
+            for record in compatible
+        }
+        reachable = {baseline.id}
+        changed = True
+        while changed:
+            changed = False
+            for candidate in candidate_records.values():
+                if candidate.id in reachable:
+                    continue
+                if candidate.parent_id in reachable:
+                    reachable.add(candidate.id)
+                    changed = True
+        evaluations = [
+            record for record in compatible if record.request.candidate.id in reachable
+        ]
+        if baseline_record not in evaluations:
+            evaluations.insert(0, baseline_record)
+        evaluations.sort(key=lambda record: (record.completed_at, record.id))
+        candidates: dict[str, Candidate] = {
+            candidate_id: candidate
+            for candidate_id, candidate in candidate_records.items()
+            if candidate_id in reachable
+        }
+        candidates[baseline.id] = baseline
+        proposal_ids = {
+            str(candidate.metadata.get("proposal_id", candidate.id))
+            for candidate in candidates.values()
+            if candidate.id != baseline.id and "producer_id" in candidate.metadata
+        }
+        generated = len(proposal_ids)
+        completed_rounds = [
+            int(candidate.metadata["round"])
+            for candidate in candidates.values()
+            if isinstance(candidate.metadata.get("round"), int)
+        ]
+        start_round = max(completed_rounds, default=generated - 1) + 1
         semaphore = asyncio.Semaphore(self.max_concurrency)
 
-        for round_number in range(self.max_rounds):
+        for round_number in range(start_round, self.max_rounds):
             if generated >= self.max_candidates:
                 break
             best = self._best(evaluations)
@@ -353,7 +407,9 @@ class Optimizer:
             outcomes = await asyncio.gather(
                 *(produce(proposal) for proposal in proposals)
             )
-            meaningful_outcomes = [outcome for outcome in outcomes if outcome.candidates]
+            meaningful_outcomes = [
+                outcome for outcome in outcomes if outcome.candidates
+            ]
             if not meaningful_outcomes:
                 break
             generated += len(meaningful_outcomes)

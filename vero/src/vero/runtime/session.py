@@ -11,7 +11,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from vero.candidate import Candidate
-from vero.evaluation import EvaluationSet, ObjectiveSpec
+from vero.evaluation import (
+    BackendProvenance,
+    CaseStatus,
+    EvaluationLimits,
+    EvaluationRecord,
+    EvaluationSet,
+    ObjectiveSpec,
+)
 from vero.evaluation.persistence import _atomic_write_json
 from vero.optimization import OptimizationResult, Optimizer
 from vero.runtime.artifacts import ArtifactStore
@@ -46,8 +53,12 @@ class SessionManifest(BaseModel):
     id: str
     status: SessionStatus
     backend_id: str
+    backend: BackendProvenance
     evaluation_set: EvaluationSet
     objective: ObjectiveSpec
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
+    seed: int | None = None
     baseline: Candidate | None = None
     best_candidate_id: str | None = None
     best_evaluation_id: str | None = None
@@ -78,6 +89,7 @@ class OptimizationSession:
     id: str
     session_dir: Path
     optimizer: Optimizer
+    baseline: Candidate | None = None
     metadata: dict[str, JsonValue] = field(default_factory=dict)
     events: EventBus | None = None
 
@@ -94,7 +106,9 @@ class OptimizationSession:
         if optimizer_session_id is not None and optimizer_session_id != self.id:
             raise ValueError("optimizer session ID does not match OptimizationSession")
         self.optimizer.session_id = self.id
-        evaluator_session_id = getattr(self.optimizer.engine.evaluator, "session_id", None)
+        evaluator_session_id = getattr(
+            self.optimizer.engine.evaluator, "session_id", None
+        )
         if evaluator_session_id is not None and evaluator_session_id != self.id:
             raise ValueError("evaluator session ID does not match OptimizationSession")
         self.optimizer.engine.evaluator.session_id = self.id
@@ -125,8 +139,14 @@ class OptimizationSession:
             id=self.id,
             status=SessionStatus.CREATED,
             backend_id=self.optimizer.backend_id,
+            backend=self.optimizer.engine.backends.resolve(
+                self.optimizer.backend_id
+            ).provenance,
             evaluation_set=self.optimizer.evaluation_set,
             objective=self.optimizer.objective,
+            parameters=self.optimizer.parameters,
+            limits=self.optimizer.limits,
+            seed=self.optimizer.seed,
             baseline=baseline,
             created_at=now,
             updated_at=now,
@@ -138,6 +158,34 @@ class OptimizationSession:
             self.manifest_path,
             manifest.model_dump(mode="json"),
         )
+
+    @staticmethod
+    def _evaluation_event_payload(
+        record: EvaluationRecord,
+        *,
+        step: int,
+    ) -> dict[str, JsonValue]:
+        counts = {status: 0 for status in CaseStatus}
+        for case in record.report.cases:
+            counts[case.status] += 1
+        payload: dict[str, JsonValue] = {
+            "step": step,
+            "evaluation_id": record.id,
+            "candidate_id": record.request.candidate.id,
+            "candidate_version": record.request.candidate.version,
+            "status": record.report.status.value,
+            "cases/total": len(record.report.cases),
+            "cases/success": counts[CaseStatus.SUCCESS],
+            "cases/error": counts[CaseStatus.ERROR],
+            "cases/skipped": counts[CaseStatus.SKIPPED],
+        }
+        payload.update(
+            {f"metrics/{name}": value for name, value in record.report.metrics.items()}
+        )
+        if record.objective is not None:
+            payload["objective/value"] = record.objective.value
+            payload["objective/feasible"] = record.objective.feasible
+        return payload
 
     def load_manifest(self) -> SessionManifest:
         return SessionManifest.model_validate_json(
@@ -151,18 +199,44 @@ class OptimizationSession:
         skip_baseline_evaluation: bool = False,
     ) -> OptimizationResult:
         manifest = self.load_manifest() if self.manifest_path.exists() else None
-        current_version = await self.optimizer.workspace.current_version()
         if baseline is None:
             if manifest is not None and manifest.baseline is not None:
                 baseline = manifest.baseline
+            elif self.baseline is not None:
+                baseline = self.baseline
             else:
-                baseline = Candidate.from_version(current_version)
-        if baseline.version != current_version:
-            raise ValueError("session baseline does not match the current workspace version")
+                baseline = Candidate.from_version(
+                    await self.optimizer.workspace.current_version()
+                )
         if manifest is None:
             manifest = self._initial_manifest(baseline)
         if manifest.id != self.id:
             raise ValueError("session manifest ID does not match runtime session")
+        if manifest.backend_id != self.optimizer.backend_id:
+            raise ValueError("session backend does not match the persisted manifest")
+        backend = self.optimizer.engine.backends.resolve(self.optimizer.backend_id)
+        if manifest.backend != backend.provenance:
+            raise ValueError(
+                "session backend configuration does not match the persisted manifest"
+            )
+        if manifest.evaluation_set != self.optimizer.evaluation_set:
+            raise ValueError(
+                "session evaluation set does not match the persisted manifest"
+            )
+        if manifest.objective != self.optimizer.objective:
+            raise ValueError("session objective does not match the persisted manifest")
+        if manifest.parameters != self.optimizer.parameters:
+            raise ValueError(
+                "session evaluation parameters do not match the persisted manifest"
+            )
+        if manifest.limits != self.optimizer.limits:
+            raise ValueError(
+                "session evaluation limits do not match the persisted manifest"
+            )
+        if manifest.seed != self.optimizer.seed:
+            raise ValueError(
+                "session evaluation seed does not match the persisted manifest"
+            )
         if manifest.baseline is None or (
             manifest.baseline.id,
             manifest.baseline.version,
@@ -222,6 +296,12 @@ class OptimizationSession:
             }
         )
         self._save_manifest(completed)
+        for step, evaluation in enumerate(result.evaluations):
+            await self.events.emit(
+                session_id=self.id,
+                kind="evaluation_completed",
+                payload=self._evaluation_event_payload(evaluation, step=step),
+            )
         await self.events.emit(
             session_id=self.id,
             kind="session_completed",
@@ -229,6 +309,18 @@ class OptimizationSession:
                 "best_candidate_id": completed.best_candidate_id,
                 "best_evaluation_id": completed.best_evaluation_id,
                 "evaluation_count": len(result.evaluations),
+                "status": "completed",
+                "baseline_candidate_id": result.baseline.request.candidate.id,
+                "baseline_objective": (
+                    result.baseline.objective.value
+                    if result.baseline.objective is not None
+                    else None
+                ),
+                "best_objective": (
+                    best.objective.value
+                    if best is not None and best.objective is not None
+                    else None
+                ),
             },
         )
         return result

@@ -125,6 +125,7 @@ def create_backend(cases: Path) -> PythonTaskBackend:
             task="matmul",
             cases_path=str(cases),
             evaluation_set_name="matmul",
+            passthrough_environment=["UV_CACHE_DIR"],
         )
     )
 
@@ -179,10 +180,6 @@ async def run_example(
         ],
         max_candidates=max_candidates,
     )
-    producer = producers.get("default")
-    if producer is not None:
-        producer.artifacts = session.artifacts
-
     result = await session.run()
     print(f"Session: {session.session_dir}")
     print(f"Baseline score: {result.baseline.objective.value:.6f} ms")

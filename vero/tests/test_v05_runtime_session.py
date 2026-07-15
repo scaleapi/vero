@@ -9,6 +9,7 @@ from vero.candidate import Candidate
 from vero.evaluation import (
     BackendProvenance,
     EvaluationDatabase,
+    EvaluationLimits,
     EvaluationRecord,
     EvaluationReport,
     EvaluationRequest,
@@ -62,11 +63,23 @@ class StubOptimizer:
             selector=MetricSelector(metric="score"),
             direction="maximize",
         )
+        self.parameters = {}
+        self.limits = EvaluationLimits()
+        self.seed = None
         self.session_id = None
         self.engine = SimpleNamespace(
             evaluator=SimpleNamespace(session_dir=session_dir),
             database=EvaluationDatabase(id=session_dir.name),
             budget_ledger=None,
+            backends=SimpleNamespace(
+                resolve=lambda _: SimpleNamespace(
+                    provenance=BackendProvenance(
+                        name="fake",
+                        version="1",
+                        config_digest="0" * 64,
+                    )
+                )
+            ),
         )
         self.failure = failure
         self.calls: list[tuple[Candidate, bool]] = []
@@ -107,6 +120,7 @@ async def test_session_persists_lifecycle_events_and_best_result(tmp_path: Path)
     events = [json.loads(line) for line in session.events_path.read_text().splitlines()]
     assert [event["kind"] for event in events] == [
         "session_started",
+        "evaluation_completed",
         "session_completed",
     ]
     assert session.database is optimizer.engine.database
@@ -130,6 +144,43 @@ async def test_session_persists_failure_before_reraising(tmp_path: Path):
     assert manifest.failure.message == "producer exploded"
     events = [json.loads(line) for line in session.events_path.read_text().splitlines()]
     assert events[-1]["kind"] == "session_failed"
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_resume_with_changed_objective(tmp_path: Path):
+    session_dir = tmp_path / "sessions" / "changed-objective"
+    optimizer = StubOptimizer(session_dir)
+    session = OptimizationSession(
+        id="changed-objective",
+        session_dir=session_dir,
+        optimizer=optimizer,
+    )
+    await session.run()
+    optimizer.objective = ObjectiveSpec(
+        selector=MetricSelector(metric="different"),
+        direction="minimize",
+    )
+
+    with pytest.raises(ValueError, match="objective does not match"):
+        await session.run(skip_baseline_evaluation=True)
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_resume_with_changed_evaluation_parameters(
+    tmp_path: Path,
+):
+    session_dir = tmp_path / "sessions" / "changed-parameters"
+    optimizer = StubOptimizer(session_dir)
+    session = OptimizationSession(
+        id="changed-parameters",
+        session_dir=session_dir,
+        optimizer=optimizer,
+    )
+    await session.run()
+    optimizer.parameters = {"temperature": 0.5}
+
+    with pytest.raises(ValueError, match="parameters do not match"):
+        await session.run(skip_baseline_evaluation=True)
 
 
 def test_session_rejects_mismatched_evaluator_directory(tmp_path: Path):

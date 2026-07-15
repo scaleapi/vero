@@ -34,6 +34,30 @@ class AgentCandidateProducer:
         self.artifacts = artifacts
         self.on_event = on_event
 
+    def bind_artifacts(
+        self,
+        artifacts: ArtifactStore,
+        *,
+        producer_id: str = "default",
+        restore: bool = True,
+    ) -> None:
+        """Attach durable storage and restore the latest supported agent state."""
+
+        self.artifacts = artifacts
+        if not restore:
+            return
+        state_path = self._producer_state_path(producer_id)
+        if not artifacts.path(state_path).exists():
+            return
+        deserialize = getattr(self.agent, "deserialize_state", None)
+        if callable(deserialize):
+            deserialize(artifacts.read_json(state_path))
+
+    @staticmethod
+    def _producer_state_path(producer_id: str) -> str:
+        digest = hashlib.sha256(producer_id.encode()).hexdigest()[:16]
+        return f"agents/producers/{digest}/state.json"
+
     async def produce(
         self,
         *,
@@ -62,6 +86,9 @@ class AgentCandidateProducer:
             digest = hashlib.sha256(proposal.id.encode()).hexdigest()[:16]
             if result.state is not None:
                 self.artifacts.write_json(f"agents/{digest}/state.json", result.state)
+                self.artifacts.write_json(
+                    self._producer_state_path(proposal.producer_id), result.state
+                )
             if result.trace is not None:
                 self.artifacts.write_json(f"agents/{digest}/trace.json", result.trace)
         return CandidateChange(

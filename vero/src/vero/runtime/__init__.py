@@ -9,6 +9,7 @@ from vero.runtime.session import (
     SessionManifest,
     SessionStatus,
 )
+from vero.runtime.wandb import WandbEventSink
 
 __all__ = [
     "ArtifactStore",
@@ -20,5 +21,6 @@ __all__ = [
     "SessionFailure",
     "SessionManifest",
     "SessionStatus",
+    "WandbEventSink",
     "create_local_optimization_session",
 ]

@@ -22,15 +22,67 @@ selection keeps the best candidate and the next round continues
 
 ## Quickstart
 
-Install VeRO and make sure the target is a clean Git repository:
+Install VeRO, then try the checked-in C matrix multiplication example. Its
+editable target contains only C; a trusted external harness compiles it, checks
+correctness, and measures latency.
 
 ```bash
 uv pip install scale-vero
-git -C ./my-program status --short
+cd examples/c-matmul/target
+git init -b main
+git add .
+git -c user.name=vero -c user.email=vero@localhost commit -m baseline
+cd ..
+
+vero evaluate --config vero.toml
+vero run --config vero.toml
 ```
 
-Write an evaluation harness outside the target repository. VeRO invokes it with
-an isolated candidate workspace and a path where it must write a report:
+The example is deterministic and needs no model credentials. VeRO evaluates the
+baseline, gives an isolated worktree to the configured producer, evaluates its
+commit, selects the faster feasible result, and leaves the original target
+untouched. See [`examples/c-matmul`](examples/c-matmul/) for the complete target,
+harness, optimizer, and config.
+
+## Configure an optimization
+
+`vero.toml` is the shortest path from a program to a repeatable optimization:
+
+```toml
+[target]
+root = "./my-program"
+ref = "HEAD"
+
+[evaluation]
+harness_root = "../my-evaluator"
+command = ["python3", "evaluate.py", "{workspace}", "{report}"]
+evaluation_set = "performance"
+
+[objective]
+metric = "latency_ms"
+direction = "minimize"
+
+[[objective.constraints]]
+metric = "correct"
+operator = "=="
+value = 1.0
+
+[optimizer]
+kind = "claude"
+instruction = "Make the program faster without changing its output"
+max_candidates = 5
+
+[session]
+directory = "../runs/my-program"
+```
+
+Run `vero evaluate` to measure only the baseline or `vero run` to produce and
+evaluate candidates. Paths are resolved relative to the config file. A target
+must be a clean Git repository, while the session directory, evaluation harness,
+and command producer must live outside it.
+
+The evaluator receives an isolated candidate workspace and paths for a
+versioned request and report:
 
 ```python
 # ../my-evaluator/evaluate.py
@@ -87,6 +139,33 @@ Commands are parsed into argument vectors, not executed through a shell. Use
 absolute executable paths when the executable is not on the standard system
 `PATH`. Available evaluation placeholders are `{workspace}`, `{request}`,
 `{report}`, and `{artifacts}`.
+
+The flag-based `vero optimize` command exposes the same objective constraints,
+case selection, target ref, timeouts, environments, and concurrency controls;
+run `vero optimize --help` for the full surface.
+
+## Track runs with Weights & Biases
+
+Install the optional integration and add a section to `vero.toml`:
+
+```bash
+uv pip install 'scale-vero[wandb]'
+```
+
+```toml
+[wandb]
+project = "program-optimization"
+entity = "my-team"       # optional
+name = "matmul-v1"       # optional
+mode = "online"          # online, offline, or disabled
+tags = ["c", "latency"]
+```
+
+Each VeRO session maps to a stable W&B run. It logs canonical report metrics,
+objective value and feasibility, case counts, candidate and evaluation IDs, and
+the final baseline/best summary. Resuming the VeRO session resumes the same W&B
+run. The direct CLI equivalent is `--wandb-project`, with optional entity, name,
+and mode flags.
 
 ## Python API
 
@@ -317,8 +396,11 @@ sessions/<session-id>/
 ```
 
 The evaluation directories are the source of truth; the database can be rebuilt
-from them. Reusing a session directory resumes its compatible baseline and
-evaluation history.
+from them. Reusing a session directory resumes its compatible baseline,
+candidate lineage, evaluation history, completed rounds, and supported coding
+agent state. VeRO rejects a resume if its backend configuration, evaluation set,
+parameters, limits, seed, objective, or baseline is incompatible with the
+manifest.
 
 ```bash
 vero session list

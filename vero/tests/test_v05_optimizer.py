@@ -174,6 +174,14 @@ workspace = Path(sys.argv[1])
     assert len(database.evaluations) == 2
     assert (session_dir / "database.json").exists()
     assert len(list((session_dir / "evaluations").iterdir())) == 2
+    worktrees = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=target,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert worktrees.count("worktree ") == 1
 
 
 class ReusedIdStrategy:

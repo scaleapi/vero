@@ -36,6 +36,9 @@ optimize = [
     "pypdf>=6.2.0",
     "trafilatura>=2.0.0",
 ]
+wandb = [
+    "wandb>=0.19.10",
+]
 
 [build-system]
 requires = ["hatchling"]
