@@ -206,6 +206,16 @@ it is not a process isolation boundary because candidate code still runs inside
 the nested Harbor process. Use Harbor's external verifier/sidecar deployment
 when the candidate itself is adversarial.
 
+For optimization-as-a-Harbor-task, `EvaluationSidecar` exposes the same engine
+across a process boundary. `EvaluationAccessPolicy` maps each backend and
+evaluation-set partition to canonical full, aggregate, or acknowledgement-only
+disclosure; the canonical budget ledger meters agent calls. The sidecar can
+host several backends at once. `GitCandidateTransport` imports agent commits
+under durable trusted refs, and `CanonicalVerifier` selects and re-scores a
+candidate before producing Harbor rewards. Hidden final evaluations use the
+same backend contracts with unmetered admin authorization, so this deployment
+does not introduce a parallel evaluation model.
+
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
 a non-Git version store, an evolutionary search algorithm, or an orchestrator
