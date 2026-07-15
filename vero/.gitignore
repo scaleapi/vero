@@ -12,7 +12,9 @@ __pycache__/
 dist/
 build/
 !src/vero/harbor/build/
-!src/vero/harbor/build/**
+!src/vero/harbor/build/*.py
+!src/vero/harbor/build/templates/
+!src/vero/harbor/build/templates/*
 
 # Testing
 .pytest_cache/
