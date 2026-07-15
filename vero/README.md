@@ -386,6 +386,8 @@ agent_repo: ../my-program
 task_source: example/terminal-benchmark@1.0
 agent_import_path: my_program.agent:Agent
 harbor_requirement: harbor[modal]==0.18.0
+environment_name: modal
+secrets: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]
 
 partitions:
   validation: [example/task-a, example/task-b, example/task-c,
@@ -405,11 +407,20 @@ targets:
     reward_key: reward
 ```
 
-Compile it with `vero harbor build --config build.yaml --output task`, then run
-the generated task with Harbor. The test partition and task source exist only in
-the sidecar image; the optimizer container receives the editable baseline, the
-agent-facing CLI, and approved result projections. Exact Harbor and registry
-task-source versions are required so the measurement substrate is reproducible.
+Compile it with `vero harbor build --config build.yaml --output task`. The
+`environment_name` selects Modal for each nested evaluation; the listed secrets
+are forwarded as environment references, never embedded in the compiled task.
+Run the outer optimization on Modal as well:
+
+```bash
+harbor run --path task --env modal --agent codex --model openai/gpt-5
+```
+
+Configure the outer agent's model credentials through Harbor's agent environment.
+The test partition and task source exist only in the sidecar image; the optimizer
+container receives the editable baseline, the agent-facing CLI, and approved
+result projections. Exact Harbor and registry task-source versions are required
+so the measurement substrate is reproducible.
 
 Evaluation budgets meter attempts, not only successful reports: a failed,
 timed-out, or cancelled backend run remains charged. Aggregate disclosure is a
