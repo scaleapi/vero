@@ -19,31 +19,24 @@ MAX_SANITIZATION_RETRIES = 3
 
 def default_sub_agent_tools() -> set[type | Callable]:
     """Default tools available to sub-agents."""
-    from vero.tools import (
-        BashTool,
-        DatasetViewer,
-        ExperimentViewer,
-        FileRead,
-        FileWrite,
-        GitViewer,
-        Grep,
-        TodoList,
-        WebFetch,
-        WebSearch,
-        think,
-    )
+    from vero.tools.bash import BashTool
+    from vero.tools.evaluation import EvaluationTools
+    from vero.tools.file_read import FileRead
+    from vero.tools.file_write import FileWrite
+    from vero.tools.git_viewer import GitViewer
+    from vero.tools.grep import Grep
+    from vero.tools.planning import TodoList, think
+    from vero.tools.web import WebFetch
 
     return {
         BashTool,
-        DatasetViewer,
-        ExperimentViewer,
+        EvaluationTools,
         FileRead,
         FileWrite,
         GitViewer,
         Grep,
         TodoList,
         WebFetch,
-        WebSearch,
         think,
     }
 

@@ -11,7 +11,7 @@ from vero.workspace import Workspace
 from vero.workspace.git import GitWorkspace
 
 if TYPE_CHECKING:
-    from vero.policy import Session
+    from vero.agents.protocol import AgentContext
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ T = TypeVar("T")
 
 @runtime_checkable
 class ToolSet(Protocol):
-    """Protocol for tool sets that can be bound to a Policy.
+    """Protocol for tool sets that can be bound to an agent context.
 
     ToolSets group related tool methods (decorated with @is_tool).
     They are pre-created instances that self-wire to policy resources
@@ -29,7 +29,7 @@ class ToolSet(Protocol):
 
     exclude_tools: list[str]
 
-    def bind(self, session: Session) -> None: ...
+    def bind(self, context: AgentContext) -> None: ...
 
 
 @dataclass(frozen=True)

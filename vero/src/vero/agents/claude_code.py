@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import typing
 from dataclasses import asdict, dataclass, field
@@ -10,7 +11,6 @@ from typing import Any, Callable
 from claude_agent_sdk import (
     ClaudeAgentOptions,
     ClaudeSDKClient,
-    ClaudeSDKError,
     McpSdkServerConfig,
     ResultMessage,
     SdkMcpTool,
@@ -29,29 +29,20 @@ from claude_agent_sdk.types import (
 )
 from pydantic import BaseModel, create_model
 
-from vero.agents.base import BaseAgent
 from vero.agents.events import AgentEvent
+from vero.agents.protocol import AgentContext, AgentRunResult
 from vero.filesystem import AccessType
-from vero.session import BestVersion, Session
-from vero.tools import (
-    DatasetViewer,
-    ExperimentRunnerTool,
-    ExperimentViewer,
-)
 from vero.tools.base import ToolSet
+from vero.tools.evaluation import EvaluationTools
 from vero.tools.utils import get_tools_from_class
-from vero.utils import recursively_serialize
+from vero.utils.general import recursively_serialize
 
 logger = logging.getLogger(__name__)
 
 
-def _raise_claude_sdk_error(msg: str):
-    raise ClaudeSDKError(msg)
-
-
 def default_tool_sets() -> list:
     """Default tool sets for ClaudeCodeAgent."""
-    return [DatasetViewer(), ExperimentRunnerTool(on_fatal=_raise_claude_sdk_error), ExperimentViewer()]
+    return [EvaluationTools()]
 
 
 class ClaudeCodeHookBuilder:
@@ -82,11 +73,11 @@ class ClaudeCodeHookBuilder:
         commit_message = f"Committing changes from command: {tool_name} to file: {tool_input.get('file_path', '')}"
         logger.info(commit_message)
 
-        if not self.agent._session or not self.agent._session.workspace:
+        if self.agent._context is None:
             return {}
 
         try:
-            await self.agent._session.workspace.save(commit_message)
+            await self.agent._context.workspace.save(commit_message)
         except Exception as e:
             return PostToolUseHookSpecificOutput(
                 hookEventName="PostToolUse",
@@ -138,8 +129,8 @@ def _default_claude_options() -> ClaudeAgentOptions:
 
 
 @dataclass
-class ClaudeCodeAgent(BaseAgent):
-    """Agent backend using the Claude Agent SDK (Claude Code)."""
+class ClaudeCodeAgent:
+    """Claude Agent SDK coding agent for a scoped optimization proposal."""
 
     options: ClaudeAgentOptions = field(default_factory=_default_claude_options)
     tool_sets: list[ToolSet] = field(default_factory=default_tool_sets)
@@ -148,37 +139,48 @@ class ClaudeCodeAgent(BaseAgent):
     trace: list[Message] = field(default_factory=list, repr=False)
     state: dict[str, str] | None = field(default=None, repr=False)
 
-    _session: Session | None = field(default=None, repr=False)
+    _context: AgentContext | None = field(default=None, repr=False)
     _tools: dict[str, McpSdkServerConfig] = field(default_factory=dict, repr=False)
     _allowed_tools: list[str] = field(default_factory=list, repr=False)
 
-    def init(self, session: Session) -> None:
-        """Initialize the agent with a Session context."""
-        self._session = session
-        for tool_set in self.tool_sets:
-            if isinstance(tool_set, ExperimentRunnerTool):
-                tool_set.on_fatal = _raise_claude_sdk_error
-        self._tools, self._allowed_tools = self._create_tools()
+    async def run(
+        self,
+        *,
+        context: AgentContext,
+        prompt: str | None,
+        max_turns: int,
+        on_event: Callable[[Any], Any] | None = None,
+    ) -> AgentRunResult:
+        """Run Claude Code in the candidate workspace."""
 
-    async def step(
-        self, input: str, max_turns: int = 200, on_event: Any | None = None, **kwargs
-    ) -> list[Message]:
-        """Execute optimization steps using the Claude Agent SDK."""
-        assert self._session, "Session is not set! Call init(session) first."
+        self._context = context
+        self._tools, self._allowed_tools = self._create_tools()
+        input = prompt or "Improve the program, using evaluation feedback when useful."
 
         async with self._create_client(max_turns=max_turns) as client:
             await client.query(input)
             async for msg in client.receive_response():
                 self.trace.append(msg)
                 if on_event is not None:
-                    on_event(msg)
+                    event_result = on_event(msg)
+                    if inspect.isawaitable(event_result):
+                        await event_result
 
         # Update state with session ID for resumption
         result = self.latest_result
         if result is not None and hasattr(result, "session_id"):
             self.state = {"session_id": result.session_id}
 
-        return self.trace
+        metadata = {"usage": self.usage()}
+        model = self.options.model
+        if model is not None:
+            metadata["model"] = str(model)
+        return AgentRunResult(
+            description="Apply Claude coding-agent changes",
+            state=recursively_serialize(self.serialize_state()),
+            trace=recursively_serialize(self.serialize_trace()),
+            metadata=metadata,
+        )
 
     def serialize_event(self, event: Any) -> AgentEvent | None:
         """Convert a Claude Agent SDK Message to a normalized AgentEvent."""
@@ -248,7 +250,7 @@ class ClaudeCodeAgent(BaseAgent):
         return {"structured_output": structured_output}
 
     def dict(self) -> dict[str, Any]:
-        """Return ClaudeCodeAgent-specific fields for Policy.as_dict()."""
+        """Return serializable Claude Code configuration."""
         return {
             "claude_agent_options": recursively_serialize(
                 {
@@ -292,17 +294,6 @@ class ClaudeCodeAgent(BaseAgent):
             logger.warning(f"Failed to parse structured output: {e}")
             return result.structured_output
 
-    def get_best_version(self) -> BestVersion:
-        """Extract best commit from structured output if available."""
-
-        output = self.latest_structured_output
-        if output is not None and hasattr(output, "best_commit") and output.best_commit:
-            return BestVersion(
-                commit=output.best_commit,
-                score=getattr(output, "best_score", None),
-            )
-        return BestVersion()
-
     def reset_trace(self) -> None:
         """Resets the trace."""
         self.trace = []
@@ -337,9 +328,8 @@ class ClaudeCodeAgent(BaseAgent):
 
         options = copy(self.options)
 
-        # Set cwd from policy
-        if self._session and self._session.project_path:
-            options.cwd = self._session.project_path
+        if self._context is not None:
+            options.cwd = self._context.project_path
 
         # System prompt
         options.system_prompt = self._build_system_prompt()
@@ -379,9 +369,9 @@ class ClaudeCodeAgent(BaseAgent):
     def _build_system_prompt(self) -> str | SystemPromptPreset:
         """Builds the system prompt from instructions and/or options.system_prompt."""
 
-        assert self._session, "Session not set!"
+        assert self._context is not None, "Agent context is not set"
 
-        instructions = self._session.instructions
+        instructions = self._context.instructions
 
         # If options already has a system_prompt (e.g. SystemPromptPreset), merge with instructions
         if (
@@ -403,14 +393,21 @@ class ClaudeCodeAgent(BaseAgent):
                 )
             return preset
 
+        configured = self.options.system_prompt
+        if isinstance(configured, str) and configured:
+            return (
+                f"{configured}\n\n{instructions}"
+                if instructions
+                else configured
+            )
         return instructions or ""
 
     def _build_disallowed_tools(self) -> list[str]:
         """Builds the list of disallowed tools from filesystem accesses."""
         disallowed_tools = []
-        if not self._session or not self._session.workspace:
+        if self._context is None:
             return disallowed_tools
-        for access in self._session.workspace.accesses:
+        for access in self._context.workspace.accesses:
             if access.access_type == AccessType.EXCLUDE:
                 disallowed_tools.append(f"Read(./{access.pattern})")
                 disallowed_tools.append(f"Write(./{access.pattern})")
@@ -425,13 +422,13 @@ class ClaudeCodeAgent(BaseAgent):
     ) -> tuple[dict[str, McpSdkServerConfig], list[str]]:
         """Creates the tool set instances based on tool_sets."""
 
-        assert self._session, "Session not set!"
+        assert self._context is not None, "Agent context is not set"
         tools: dict[str, McpSdkServerConfig] = {}
         internal_allowed_tools: list[str] = []
 
         for tool_set in self.tool_sets:
             if hasattr(tool_set, "bind"):
-                tool_set.bind(self._session)
+                tool_set.bind(self._context)
 
             tool_names, mcp_config = self._to_claude_sdk_server_config(tool_set)
             key = type(tool_set).__name__
@@ -447,8 +444,6 @@ class ClaudeCodeAgent(BaseAgent):
     ) -> tuple[list[str], McpSdkServerConfig]:
         """Convert a tool instance to a Claude Agent SDK server config."""
         import inspect
-
-        from vero.core.utils import maybe_await
 
         tool_methods = get_tools_from_class(instance)
         sdk_mcp_tools: list[SdkMcpTool] = []
@@ -475,7 +470,9 @@ class ClaudeCodeAgent(BaseAgent):
 
                 async def handler(args: dict) -> dict:
                     try:
-                        content = await maybe_await(m(**args))
+                        content = m(**args)
+                        if inspect.isawaitable(content):
+                            content = await content
                         return {"content": format_content(content)}
                     except Exception as e:
                         return {"content": format_content(e), "is_error": True}

@@ -7,6 +7,7 @@ from .experiment_runner import (
     SplitBudget,
 )
 from .experiment_viewer import ExperimentViewer
+from .evaluation import EvaluationTools
 from .file_read import FileRead
 from .file_write import FileWrite
 from .git_control import GitControl
@@ -26,6 +27,7 @@ ToolRegistry.register(ContextStore)
 ToolRegistry.register(DatasetViewer)
 ToolRegistry.register(ExperimentRunnerTool)
 ToolRegistry.register(ExperimentViewer)
+ToolRegistry.register(EvaluationTools)
 ToolRegistry.register(FileRead)
 ToolRegistry.register(FileWrite)
 ToolRegistry.register(GitControl)
@@ -46,6 +48,7 @@ __all__ = [
     "DatasetViewer",
     "ExperimentRunnerTool",
     "ExperimentViewer",
+    "EvaluationTools",
     "FileWrite",
     "GitControl",
     "GitViewer",

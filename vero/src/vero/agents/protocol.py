@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
@@ -26,6 +27,23 @@ class AgentContext:
     optimization: OptimizationContext
     evaluation: CandidateEvaluationGateway
     artifacts: ArtifactStore | None = None
+
+    @property
+    def project_path(self) -> Path:
+        return Path(self.workspace.project_path)
+
+    @property
+    def instructions(self) -> str | None:
+        return self.proposal.instruction
+
+    @property
+    def base_version(self) -> str:
+        parent_id = self.proposal.parent_id
+        if parent_id is not None:
+            parent = self.optimization.candidates.get(parent_id)
+            if parent is not None:
+                return parent.version
+        return self.optimization.baseline.request.candidate.version
 
 
 class AgentRunResult(BaseModel):

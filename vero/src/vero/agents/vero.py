@@ -25,31 +25,24 @@ from agents.extensions.models.litellm_model import LitellmModel
 from agents.lifecycle import AgentHooks
 from pydantic import BaseModel
 
-from vero.agents.base import BaseAgent
 from vero.agents.events import AgentEvent
-from vero.session import Session
-from vero.tools import (
-    BashTool,
-    DatasetViewer,
-    ExperimentRunnerTool,
-    ExperimentViewer,
-    FileRead,
-    FileWrite,
-    GitControl,
-    GitViewer,
-    Grep,
-    SubAgentTool,
-    TodoList,
-    WebFetch,
-    WebSearch,
-    think,
-)
+from vero.agents.protocol import AgentContext, AgentRunResult
+from vero.tools.bash import BashTool
 from vero.tools.base import ToolSet
+from vero.tools.evaluation import EvaluationTools
+from vero.tools.file_read import FileRead
+from vero.tools.file_write import FileWrite
+from vero.tools.git_control import GitControl
+from vero.tools.git_viewer import GitViewer
+from vero.tools.grep import Grep
+from vero.tools.planning import TodoList, think
+from vero.tools.sub_agent import SubAgentTool
 from vero.tools.utils.openai_agents import (
     callable_to_oai_tool,
     tool_set_instance_to_oai_tools,
 )
-from vero.utils import recursively_serialize
+from vero.tools.web import WebFetch
+from vero.utils.general import recursively_serialize
 from vero.utils.openai_agents import (
     run_agent_with_json_sanitization,
     strict_mode_from_model,
@@ -67,18 +60,12 @@ class MaxTokenCountExceededError(AgentsException):
     pass
 
 
-def _raise_agents_exception(msg: str):
-    raise AgentsException(msg)
-
-
 def default_tool_sets() -> list[ToolSet | object | Callable]:
     """Default tools for the VeroAgent."""
 
     return [
         BashTool(),
-        DatasetViewer(),
-        ExperimentRunnerTool(on_fatal=_raise_agents_exception),
-        ExperimentViewer(),
+        EvaluationTools(),
         FileRead(),
         FileWrite(),
         GitControl(),
@@ -88,7 +75,6 @@ def default_tool_sets() -> list[ToolSet | object | Callable]:
         TodoList(),
         think,
         WebFetch(),
-        WebSearch(),
     ]
 
 
@@ -174,8 +160,8 @@ def _default_oai_agent() -> Agent:
 
 
 @dataclass
-class VeroAgent(BaseAgent):
-    """Agent backend using the OpenAI Agents SDK (Vero's agentic optimizer)."""
+class VeroAgent:
+    """OpenAI Agents SDK coding agent for a scoped optimization proposal."""
 
     oai_agent: Agent = field(default_factory=_default_oai_agent)
     tool_sets: list[ToolSet | object | Callable] = field(
@@ -186,7 +172,7 @@ class VeroAgent(BaseAgent):
     event_timeout: int | None = 60 * 12
     state: list[TResponseInputItem] | None = field(default=None, repr=False)
 
-    _session: Session | None = field(default=None, repr=False)
+    _context: AgentContext | None = field(default=None, repr=False)
     _tools: dict[type | Callable, list[FunctionTool]] = field(
         default_factory=dict, repr=False
     )
@@ -201,43 +187,26 @@ class VeroAgent(BaseAgent):
     def trace(self, value: Any) -> None:
         self.state = value
 
-    def init(self, session: Session) -> None:
-        """Initialize the agent with a Session context."""
-        self._session = session
-        for tool_set in self.tool_sets:
-            if isinstance(tool_set, ExperimentRunnerTool):
-                tool_set.on_fatal = _raise_agents_exception
-        self._tools = self._create_tools(session)
-
-    async def step(
+    async def run(
         self,
-        input: str | list[TResponseInputItem] | None,
-        max_turns: int = 200,
+        *,
+        context: AgentContext,
+        prompt: str | None,
+        max_turns: int,
         on_event: Callable | None = None,
-        **kwargs,
-    ) -> RunResultStreaming | None:
-        """Execute optimization steps using the OpenAI Agents SDK."""
+    ) -> AgentRunResult:
+        """Run the agent in the candidate workspace."""
 
-        assert self._session, "Session is not set! Call init(session) first."
-
+        self._context = context
+        self._tools = self._create_tools(context)
         state = self.state if self.state is not None else []
-
-        if isinstance(input, str):
-            inputs = state + [{"role": "user", "content": input}]
-        elif isinstance(input, list):
-            inputs = state + input
-        elif input is None:
-            inputs = state
-        else:
-            raise ValueError(f"Got unexpected type for inputs: {type(input)}")
-
-        if not inputs:
-            raise ValueError("No input provided and no state to resume from")
+        input = prompt or "Improve the program, using evaluation feedback when useful."
+        inputs = state + [{"role": "user", "content": input}]
 
         agent = self._create_agent()
         run_config = RunConfig(
-            workflow_name=f"vero::{self._session.session_id}",
-            trace_id=self._session.session_id,
+            workflow_name=f"vero::{context.session_id}",
+            trace_id=context.session_id,
         )
 
         self._run_result, error = await run_agent_with_json_sanitization(
@@ -256,7 +225,16 @@ class VeroAgent(BaseAgent):
         if isinstance(error, Exception):
             raise error
 
-        return self._run_result
+        metadata = {"usage": self.usage()}
+        model = self.model_str()
+        if model is not None:
+            metadata["model"] = model
+        return AgentRunResult(
+            description="Apply Vero coding-agent changes",
+            state=recursively_serialize(self.serialize_state()),
+            trace=recursively_serialize(self.serialize_trace()),
+            metadata=metadata,
+        )
 
     def serialize_event(self, event: Any) -> AgentEvent | None:
         """Convert an OpenAI Agents SDK StreamEvent to a normalized AgentEvent.
@@ -345,9 +323,9 @@ class VeroAgent(BaseAgent):
         }
 
     def dict(self) -> dict:
-        """Return VeroAgent-specific fields for Policy.as_dict()."""
+        """Return serializable Vero agent configuration."""
         return {
-            "model": self.model_str,
+            "model": self.model_str(),
             "tool_sets": [
                 type(ts).__name__ if hasattr(ts, "__class__") else ts.__name__
                 for ts in self.tool_sets
@@ -395,9 +373,7 @@ class VeroAgent(BaseAgent):
         """Create the OAI Agent by augmenting the template with vero tools and hooks."""
         tools = self._get_tools() + list(self.oai_agent.tools)
 
-        instructions = None
-        if self._session:
-            instructions = self._session.instructions
+        instructions = self._context.instructions if self._context else None
 
         return Agent(
             name=self.oai_agent.name,
@@ -436,7 +412,7 @@ class VeroAgent(BaseAgent):
         )
 
     def _create_tools(
-        self, session: Session
+        self, context: AgentContext
     ) -> dict[type | Callable, list[FunctionTool]]:
         instances: dict[type | Callable, list[FunctionTool]] = {}
         sub_agent_tool = None
@@ -449,7 +425,7 @@ class VeroAgent(BaseAgent):
 
             # Bind if it's a ToolSet
             if hasattr(ts, "bind"):
-                ts.bind(session)  # type: ignore
+                ts.bind(context)  # type: ignore
 
             # Convert to list of FunctionTools
             if inspect.isfunction(ts):
