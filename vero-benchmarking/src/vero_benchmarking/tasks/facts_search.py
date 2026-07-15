@@ -12,9 +12,7 @@ facts_search_task = OptimizationTask(
     project_path=path_to_vero_agents / "agents/web_search_agent/",
     dataset_path=DEFAULT_DATASETS_DIR / "facts_search",
     score_threshold=0.9,
-    batch_size=512,
-    train_budget=8,
-    validation_budget=8,
+    max_cases_per_evaluation=512,
+    evaluation_budget=8,
     task="facts_search",
-    resource_namespace="default",
 )

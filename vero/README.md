@@ -139,14 +139,15 @@ writing the JSON command contract directly. It provides only task definition
 and execution types; target programs do not depend on the VeRO optimizer.
 
 ```python
-# my_program/benchmark.py
+# ../my-evaluator/benchmark.py
 from vero_tasks import TaskOutput, TaskResult, create_task
+from my_program import run_program
 
 task = create_task("quality")
 
 @task.inference()
 async def run(case, context):
-    return TaskOutput(output=my_program(case["input"]))
+    return TaskOutput(output=run_program(case["input"]))
 
 @task.evaluation()
 async def score(case, output, context):
@@ -156,7 +157,7 @@ async def score(case, output, context):
     )
 ```
 
-Connect it with `PythonTaskBackend`. The task module and cases live in a trusted
+Connect it with `PythonTaskBackend`. Keep the task module and cases in a trusted
 external uv project; VeRO overlays each isolated candidate with
 `uv --with-editable` so the harness imports the exact program version being
 measured without making evaluator code editable.

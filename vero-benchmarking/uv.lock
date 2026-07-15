@@ -3410,7 +3410,7 @@ wheels = [
 
 [[package]]
 name = "pytest"
-version = "9.0.1"
+version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorama", marker = "sys_platform == 'win32'" },
@@ -3419,47 +3419,22 @@ dependencies = [
     { name = "pluggy" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/07/56/f013048ac4bc4c1d9be45afd4ab209ea62822fb1598f40687e6bf45dcea4/pytest-9.0.1.tar.gz", hash = "sha256:3e9c069ea73583e255c3b21cf46b8d3c56f6e3a1a8f6da94ccb0fcf57b9d73c8", size = 1564125, upload-time = "2025-11-12T13:05:09.333Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/47/b9efed96c114afcfa3c9d3fe98a76a1d14c74a9e266d397cf6eb64be5e01/pytest-9.1.1.tar.gz", hash = "sha256:1088fbde8f2b49d95a549a195707afa7a76a3ce9bcadc26b6d71f0ffda5fe313", size = 1636369, upload-time = "2026-06-19T10:58:32.857Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/0b/8b/6300fb80f858cda1c51ffa17075df5d846757081d11ab4aa35cef9e6258b/pytest-9.0.1-py3-none-any.whl", hash = "sha256:67be0030d194df2dfa7b556f2e56fb3c3315bd5c8822c6951162b92b32ce7dad", size = 373668, upload-time = "2025-11-12T13:05:07.379Z" },
+    { url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl", hash = "sha256:37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c", size = 386536, upload-time = "2026-06-19T10:58:31.347Z" },
 ]
 
 [[package]]
 name = "pytest-asyncio"
-version = "1.3.0"
+version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pytest" },
     { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/90/2c/8af215c0f776415f3590cac4f9086ccefd6fd463befeae41cd4d3f193e5a/pytest_asyncio-1.3.0.tar.gz", hash = "sha256:d7f52f36d231b80ee124cd216ffb19369aa168fc10095013c6b014a34d3ee9e5", size = 50087, upload-time = "2025-11-10T16:07:47.256Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e5/35/f8b19922b6a25bc0880171a2f1a003eaeb93657475193ab516fd87cac9da/pytest_asyncio-1.3.0-py3-none-any.whl", hash = "sha256:611e26147c7f77640e6d0a92a38ed17c3e9848063698d5c93d5aa7aa11cebff5", size = 15075, upload-time = "2025-11-10T16:07:45.537Z" },
-]
-
-[[package]]
-name = "pytest-json-report"
-version = "1.5.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-    { name = "pytest-metadata" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/d3/765dae9712fcd68d820338908c1337e077d5fdadccd5cacf95b9b0bea278/pytest-json-report-1.5.0.tar.gz", hash = "sha256:2dde3c647851a19b5f3700729e8310a6e66efb2077d674f27ddea3d34dc615de", size = 21241, upload-time = "2022-03-15T21:03:10.2Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/35/d07400c715bf8a88aa0c1ee9c9eb6050ca7fe5b39981f0eea773feeb0681/pytest_json_report-1.5.0-py3-none-any.whl", hash = "sha256:9897b68c910b12a2e48dd849f9a284b2c79a732a8a9cb398452ddd23d3c8c325", size = 13222, upload-time = "2022-03-15T21:03:08.65Z" },
-]
-
-[[package]]
-name = "pytest-metadata"
-version = "3.1.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/85/8c969f8bec4e559f8f2b958a15229a35495f5b4ce499f6b865eac54b878d/pytest_metadata-3.1.1.tar.gz", hash = "sha256:d2a29b0355fbc03f168aa96d41ff88b1a3b44a3b02acbe491801c98a048017c8", size = 9952, upload-time = "2024-02-12T19:38:44.887Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/43/7e7b2ec865caa92f67b8f0e9231a798d102724ca4c0e1f414316be1c1ef2/pytest_metadata-3.1.1-py3-none-any.whl", hash = "sha256:c8e0844db684ee1c798cfa38908d20d67d0463ecb6137c72e91f418558dd5f4b", size = 11428, upload-time = "2024-02-12T19:38:42.531Z" },
+    { url = "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl", hash = "sha256:933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1", size = 16930, upload-time = "2026-05-26T09:56:02.576Z" },
 ]
 
 [[package]]
@@ -4004,16 +3979,13 @@ wheels = [
 
 [[package]]
 name = "scale-vero"
-version = "0.4.7"
+version = "0.5.0"
 source = { editable = "../vero" }
 dependencies = [
+    { name = "async-lru" },
     { name = "click" },
     { name = "datasets" },
-    { name = "openai-agents" },
     { name = "pydantic" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-json-report" },
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "s3fs" },
@@ -4036,7 +4008,6 @@ optimize = [
     { name = "async-lru" },
     { name = "beautifulsoup4" },
     { name = "datasets" },
-    { name = "gitpython" },
     { name = "haikunator" },
     { name = "jinja2" },
     { name = "nest-asyncio" },
@@ -4058,6 +4029,7 @@ wandb = [
 
 [package.metadata]
 requires-dist = [
+    { name = "async-lru", specifier = ">=2.0.5" },
     { name = "async-lru", marker = "extra == 'optimize'", specifier = ">=2.0.5" },
     { name = "beautifulsoup4", marker = "extra == 'optimize'", specifier = ">=4.14.2" },
     { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = ">=0.1.56" },
@@ -4065,8 +4037,6 @@ requires-dist = [
     { name = "datasets", specifier = ">=4.3.0" },
     { name = "datasets", marker = "extra == 'optimize'", specifier = ">=4.3.0" },
     { name = "docker", marker = "extra == 'docker'", specifier = ">=7.1.0" },
-    { name = "gitpython", marker = "extra == 'evaluate'", specifier = ">=3.1.45" },
-    { name = "gitpython", marker = "extra == 'optimize'", specifier = ">=3.1.45" },
     { name = "haikunator", marker = "extra == 'evaluate'", specifier = ">=2.1.0" },
     { name = "haikunator", marker = "extra == 'optimize'", specifier = ">=2.1.0" },
     { name = "jinja2", marker = "extra == 'optimize'", specifier = ">=3.1.6" },
@@ -4077,13 +4047,9 @@ requires-dist = [
     { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.10.8" },
     { name = "nest-asyncio", marker = "extra == 'optimize'", specifier = ">=1.6.0" },
     { name = "openai", marker = "extra == 'optimize'", specifier = ">=2.6.1" },
-    { name = "openai-agents", specifier = ">=0.10" },
     { name = "openai-agents", extras = ["litellm"], marker = "extra == 'optimize'", specifier = ">=0.4.2" },
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pypdf", marker = "extra == 'optimize'", specifier = ">=6.2.0" },
-    { name = "pytest", specifier = ">=8.4.1" },
-    { name = "pytest-asyncio", specifier = ">=1.2.0" },
-    { name = "pytest-json-report", specifier = ">=1.5.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "rich", marker = "extra == 'evaluate'", specifier = ">=13.9.4" },
@@ -4100,6 +4066,32 @@ requires-dist = [
     { name = "wcmatch", marker = "extra == 'optimize'", specifier = ">=10.1" },
 ]
 provides-extras = ["wandb", "sgp", "docker", "claude", "optimize", "jupyter", "kaggle", "evaluate", "plot", "notebook"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "gitpython", specifier = ">=3.1.46" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+    { name = "pytest-json-report", specifier = ">=1.5.0" },
+    { name = "scale-vero", extras = ["optimize", "evaluate", "claude"] },
+]
+
+[[package]]
+name = "scale-vero-tasks"
+version = "0.1.0"
+source = { editable = "../vero-tasks" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.11.7" }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+]
 
 [[package]]
 name = "scikit-learn"
@@ -4723,6 +4715,7 @@ dependencies = [
     { name = "plotly" },
     { name = "retry2" },
     { name = "scale-vero", extra = ["claude", "docker", "jupyter", "optimize", "sgp", "wandb"] },
+    { name = "scale-vero-tasks" },
     { name = "tiktoken" },
     { name = "umap-learn" },
 ]
@@ -4730,6 +4723,12 @@ dependencies = [
 [package.optional-dependencies]
 gepa = [
     { name = "gepa" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
 ]
 
 [package.metadata]
@@ -4744,10 +4743,17 @@ requires-dist = [
     { name = "plotly", specifier = ">=6.5.2" },
     { name = "retry2", specifier = ">=0.9.5" },
     { name = "scale-vero", extras = ["claude", "jupyter", "optimize", "sgp", "wandb", "docker"], editable = "../vero" },
+    { name = "scale-vero-tasks", editable = "../vero-tasks" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "umap-learn", specifier = ">=0.5.11" },
 ]
 provides-extras = ["gepa"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pytest-asyncio", specifier = ">=1.3.0" },
+]
 
 [[package]]
 name = "wandb"

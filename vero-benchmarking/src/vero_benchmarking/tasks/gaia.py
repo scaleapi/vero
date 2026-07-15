@@ -15,12 +15,10 @@ gaia_task = OptimizationTask(
     project_path=path_to_vero_agents / "agents/generic-agent",
     dataset_path=DEFAULT_DATASETS_DIR / "gaia_pure_language",
     score_threshold=0.95,
-    batch_size=512,
-    train_budget=8,
-    validation_budget=8,
+    max_cases_per_evaluation=512,
+    evaluation_budget=8,
     task="gaia",
-    resource_namespace="gaia",
-    eval_split="validation",
+    partition="validation",
 )
 
 GAIA_TASKS = {

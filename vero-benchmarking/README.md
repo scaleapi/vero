@@ -1,216 +1,150 @@
 # vero-benchmarking
 
-Benchmark Vero on open-source datasets.
+`vero-benchmarking` connects the VeRO program-optimization runtime to the target
+programs and datasets in `vero-agents`. It owns experiment configuration and
+result collection; targets depend only on the narrow `scale-vero-tasks`
+protocol, not on the optimizer.
+
+For exact ICML 2026 paper reproduction, use the repository's `paper/v1` branch
+or `paper-v1` tag. This directory follows the breaking v0.5 architecture.
 
 ## Setup
 
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
-
-### Install uv
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-### Install dependencies
+From this directory:
 
 ```bash
 uv sync --all-extras
+./scripts/build_datasets.sh
 ```
 
-### Environment Variables
+By default, the target repository is the sibling `../vero-agents` directory.
+Set `VERO_AGENTS_PATH` to use another checkout. Evaluation and coding-agent
+credentials are passed through the environment, including `LITELLM_API_KEY`,
+`LITELLM_BASE_URL`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY`.
 
-| Variable | Description |
-| -------- | ----------- |
-| `VERO_AGENTS_PATH` | Path to vero-agents directory (default: `../vero-agents` in monorepo) |
-| `LITELLM_BASE_URL` | LiteLLM proxy base URL |
-| `LITELLM_API_KEY` | LiteLLM API key (also used as fallback for `OPENAI_API_KEY` in agents) |
-| `OPENAI_API_KEY` | OpenAI API key (fallback if `LITELLM_API_KEY` not set) |
-| `WANDB_API_KEY` | Weights & Biases API key (for experiment logging) |
-| `MODAL_TOKEN_ID` | Modal token ID (required for Terminal Bench with modal environment) |
-| `MODAL_TOKEN_SECRET` | Modal token secret (required for Terminal Bench with modal environment) |
+## Run a benchmark
 
-## Project Structure
+Evaluate a baseline without starting a coding agent:
+
+```bash
+uv run python -m vero_benchmarking.runner baseline \
+  --task math \
+  --models gpt
+```
+
+Optimize the same target with either built-in coding-agent adapter:
+
+```bash
+uv run python -m vero_benchmarking.runner optimize \
+  --task math \
+  --agent vero \
+  --model sonnet
+
+uv run python -m vero_benchmarking.runner optimize \
+  --task math \
+  --agent claude \
+  --model sonnet
+```
+
+The baseline consumes one evaluation run. `--max-candidates` controls the
+number of optimization proposals; trial checkpoints requested by an agent use
+the same durable evaluation budget.
+
+For repeatable batches:
+
+```bash
+uv run python scripts/run_benchmark.py --list
+uv run python scripts/run_benchmark.py \
+  --config vero-sonnet \
+  --task math \
+  --batch-id july-benchmarks \
+  -n 3
+```
+
+Batch manifests make reruns resumable. Budget ablations use the same runtime:
+
+```bash
+uv run python scripts/run_budget_ablation.py \
+  --config vero-sonnet \
+  --task math \
+  --budgets 2 4 8 16
+```
+
+## Evaluate historical candidates
+
+`vero_benchmarking.eval` accepts a CSV or Parquet manifest with `task`, `model`,
+`commit`, and `split` columns. Each commit is mounted in a temporary Git
+worktree and evaluated through the canonical backend:
+
+```bash
+uv run python -m vero_benchmarking.eval --input evaluations.csv -n 3
+```
+
+Per-case Parquet results, aggregate summaries, and canonical session state are
+written under the selected output directory.
+
+## Architecture
 
 ```text
-vero-benchmarking/
-├── src/vero_benchmarking/
-│   ├── constants.py        # Default paths (datasets dir, seed)
-│   ├── runner.py           # Policy factories, optimization runner, baseline eval, CLI
-│   ├── eval.py             # Batch evaluation from CSV/manifest
-│   ├── gepa.py             # GEPA adapter for evolutionary optimization
-│   ├── datasets.py         # Dataset building logic
-│   ├── utils.py            # Model helpers, path utilities
-│   ├── tasks/              # Task definitions
-│   │   ├── __init__.py     # ALL_TASKS registry, BENCHMARK_TASKS, load_task()
-│   │   ├── base.py         # OptimizationTask dataclass
-│   │   ├── aflow.py        # AFLOW benchmark tasks (math, gsm8k, etc.)
-│   │   ├── gaia.py         # GAIA task
-│   │   ├── gpqa.py         # GPQA Diamond task
-│   │   ├── simple_qa.py    # SimpleQA task
-│   │   ├── tau_bench.py    # Tau Bench task
-│   │   ├── facts_search.py # Facts Search task
-│   │   └── terminal_bench.py # Terminal Bench 2.0 task
-│   ├── analysis/           # Post-hoc analysis, plotting, W&B extraction
-│   └── static_data/        # Static JSON files for dataset building
-├── datasets/               # Built datasets (default output)
-├── scripts/
-│   ├── run_benchmark.py      # Batch experiment runner (scaffolds, configs)
-│   ├── run_terminal_bench.py # Terminal Bench 2.0 optimization
-│   └── build_datasets.sh    # Build all datasets
-└── notebooks/              # Analysis notebooks
+OptimizationTask
+    ├── target Git project in vero-agents
+    ├── immutable materialized JSONL cases
+    ├── one EvaluationSet and objective
+    └── run and case budgets
+             │
+             ▼
+minimal evaluator project + editable candidate overlay
+             │
+             ▼
+schema-v1 EvaluationRecord + durable OptimizationSession
 ```
+
+The small [`evaluator`](evaluator/) project is the subprocess harness. It
+depends only on `scale-vero-tasks`, so evaluation does not install VeRO's coding
+agents, notebooks, Docker integrations, or analysis stack. Dataset snapshots
+are materialized into the session outside the editable target repository.
+
+Current benchmark task adapters are still imported from the editable target
+packages. This preserves the existing benchmark implementations during the
+v0.5 migration, but it is not an adversarial security boundary: an optimizer
+could edit an adapter along with the target. Scorers should move into the
+external evaluator project before these benchmarks are treated as tamper-proof.
+The matrix-multiplication example in `vero/examples/matmul-kernel` demonstrates
+the fully external scorer layout.
 
 ## Tasks
 
-Tasks define what to optimize. Each task specifies a project path, dataset path, and evaluation budgets.
+The main registry contains `gaia`, `gpqa-nosplit`, `math`, `simpleqa`, and
+`tau-bench`; additional tasks include `drop-single`, `gsm8k`, `hotpotqa`,
+`humaneval-nosplit`, `mbpp`, `facts-search`, and `terminal-bench`.
 
-### Benchmark Tasks
+An `OptimizationTask` specifies:
 
-These are the canonical tasks used for paper results:
+- the target project and Python task module;
+- the dataset and single optimization partition;
+- the objective metric and direction;
+- total evaluation runs and optional case limits; and
+- evaluation parameters passed to the target program.
 
-| Task | Registry Key | Dataset | Agent Project |
-| ---- | ------------ | ------- | ------------- |
-| GAIA | `gaia` | GAIA pure language | generic-agent |
-| GPQA Diamond | `gpqa-nosplit` | GPQA Diamond (no val split) | generic-agent |
-| MATH | `math` | AFLOW MATH | generic-agent |
-| SimpleQA | `simpleqa` | SimpleQA Verified Wiki | web_search_agent |
-| Tau Bench | `tau-bench` | Tau Bench Retail | tau-bench |
-
-### Other Tasks
-
-| Task | Registry Key | Dataset | Agent Project |
-| ---- | ------------ | ------- | ------------- |
-| DROP | `drop-single` | AFLOW DROP (single answer) | generic-agent |
-| GSM8K | `gsm8k` | AFLOW GSM8K | generic-agent |
-| HotpotQA | `hotpotqa` | AFLOW HotpotQA | generic-agent |
-| HumanEval | `humaneval-nosplit` | AFLOW HumanEval | generic-agent |
-| MBPP | `mbpp` | AFLOW MBPP | generic-agent |
-| Facts Search | `facts-search` | Facts Search | web_search_agent |
-| Terminal Bench | `terminal-bench` | Terminal Bench 2.0 | KIRA |
-
-Tasks are defined in `src/vero_benchmarking/tasks/` and registered in `tasks/__init__.py`.
-
-## Datasets
-
-### Building All Datasets
-
-```bash
-./scripts/build_datasets.sh
-```
-
-### Building a Single Dataset
-
-```bash
-uv run python -m vero_benchmarking.datasets --dataset-name <name>
-```
-
-Dataset names correspond to the builder classes in `datasets.py` (e.g. `aflow_math`, `gpqa_diamond_no_split`, `simple_qa_verified_wiki_unanswered`, `tau_bench_retail`, `gaia_pure_language`).
-
-## Scaffolds
-
-Scaffolds define optimizer configurations (agent type + tool sets + instructions):
-
-| Scaffold | Agent | Description |
-| -------- | ----- | ----------- |
-| `vero-default` | VeroAgent | Default settings |
-| `vero-prompts-only` | VeroAgent | Restricted to resource edits only |
-| `vero-cookbook` | VeroAgent | With pre-loaded Agent Cookbook skills |
-| `vero-orchestrator` | VeroAgent | Orchestrator mode (sub-agents only) |
-| `vero-orchestrator-cookbook` | VeroAgent | Orchestrator + cookbook |
-| `claude-code-vmf` | ClaudeCodeAgent | With Vero measurement tools |
-| `claude-code-vmf-cookbook` | ClaudeCodeAgent | VMF + cookbook |
-| `claude-code-pure` | ClaudeCodeAgent | Pure Claude Code (no Vero tools) |
-
-## Models
-
-| Short Name | Full Model |
-| ---------- | ---------- |
-| `sonnet` | `anthropic/claude-sonnet-4-5-20250929` |
-| `opus` | `anthropic/claude-opus-4-5-20251101` |
-| `haiku` | `anthropic/claude-haiku-4-5-20251001` |
-| `gpt` | `gpt-5.2-codex` |
-
-## Running Experiments
-
-### Batch CLI (run_benchmark.py)
-
-```bash
-# List available scaffolds, models, configs, and tasks
-uv run python scripts/run_benchmark.py --list
-
-# Run a specific pre-defined config on a task
-uv run python scripts/run_benchmark.py --config vero-cookbook-sonnet --task math
-
-# Run all default configs on a task
-uv run python scripts/run_benchmark.py --all-configs --task math
-
-# Run a scaffold with a specific model
-uv run python scripts/run_benchmark.py --scaffold vero-orchestrator-cookbook --model haiku --task gpqa-nosplit
-
-# Dry run (preview what would run)
-uv run python scripts/run_benchmark.py --all-configs --task math --dry-run
-
-# Run with multiple iterations
-uv run python scripts/run_benchmark.py --config vero-cookbook-sonnet --task math -n 3
-```
-
-### Low-Level CLI (runner.py)
-
-```bash
-# VeroAgent optimization
-uv run python -m vero_benchmarking.runner vero --task math
-
-# ClaudeCodeAgent optimization
-uv run python -m vero_benchmarking.runner claude-code --task math
-
-# Baseline evaluation (no optimization)
-uv run python -m vero_benchmarking.runner baseline --task math --models openai/gpt-4.1-mini-2025-04-14
-```
-
-### GEPA Optimization
-
-GEPA optimizes `@resource()` decorated functions using evolutionary reflection-mutation.
-
-```bash
-uv run python -m vero_benchmarking.gepa --task math --model sonnet --skip-initial-eval
-```
-
-## Reproducing Paper Results
-
-### 1. Build Datasets
-
-```bash
-./scripts/build_datasets.sh
-```
-
-### 2. Run All Configs on All Benchmark Tasks (3 iterations each)
-
-```bash
-for task in gaia gpqa-nosplit math simpleqa tau-bench; do
-    uv run python scripts/run_benchmark.py \
-        --all-configs \
-        --task "$task" \
-        -n 3 \
-        --batch-id paper-results \
-        --continue-on-error \
-        --push-to-origin
-done
-```
-
-This runs 7 configs x 5 tasks x 3 iterations = 105 experiments. The `--batch-id` flag enables resume support: if a run is interrupted, re-running the same command will skip already-completed experiments.
-
-### 3. Review Results
-
-Results are tracked in:
-- **Wandb**: Experiment metrics logged per run (enabled by default in `run_benchmark.py`)
-- **Session artifacts**: `~/.vero/sessions/{session_id}/` contains experiments DB, config, and run logs
-- **Batch manifest**: `logs/batch_manifests/{batch_id}.jsonl` records completed experiments
-- **Git branches**: Each run creates a worktree branch like `{repo}-{dataset}-{random_id}`
+The old independent train/validation budgets are intentionally gone. A v0.5
+session optimizes one explicit, immutable `EvaluationSet`; a separate set or
+holdout is evaluated in a separate session.
 
 ## Outputs
 
-- **Sessions**: `~/.vero/sessions/{session_id}/` contains experiments, config, and run results
-- **Wandb**: Experiment metrics logged to Weights & Biases (if `--enable-wandb`)
-- **Git branches**: Each optimization run creates a worktree branch like `{repo}-{dataset}-{random_id}`
-- **Batch manifests**: `logs/batch_manifests/{batch_id}.jsonl` tracks completed experiments for resume support
+Canonical sessions default to
+`$VERO_HOME/sessions/benchmarks/<task>/<session-id>` (or
+`~/.vero/sessions/benchmarks/...`). Each session contains:
+
+```text
+manifest.json
+database.json
+budgets.json
+events.jsonl
+inputs/cases.jsonl
+artifacts/
+evaluations/
+```
+
+Candidate commits remain addressable by Git hash. VeRO does not push branches
+or results to external services automatically.

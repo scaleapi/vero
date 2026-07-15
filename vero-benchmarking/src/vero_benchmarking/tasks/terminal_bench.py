@@ -7,8 +7,6 @@ in sandboxed environments. Budget is in samples (not runs) due to high cost per 
 Only a single split ("test") exists — budget and eval both target it.
 """
 
-from vero.tools.experiment_runner import SplitBudget
-
 from vero_benchmarking.tasks.base import OptimizationTask
 from vero_benchmarking.utils import get_path_to_vero_agents
 
@@ -18,8 +16,9 @@ terminal_bench_task = OptimizationTask(
     project_path=path_to_vero_agents / "agents/KIRA",
     dataset_path=path_to_vero_agents / "agents/KIRA/datasets/terminal_bench",
     task="terminal_bench_2.0",
-    budget=[SplitBudget(split="test", total_sample_budget=50)],
-    eval_split="test",
+    evaluation_budget=2,
+    total_case_budget=100,
+    max_cases_per_evaluation=50,
 )
 
 TERMINAL_BENCH_TASKS = {

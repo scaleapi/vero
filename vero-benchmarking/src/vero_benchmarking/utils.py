@@ -1,9 +1,6 @@
 import os
 from pathlib import Path
-
-from agents.extensions.models.litellm_model import LitellmModel
-from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-from openai import AsyncOpenAI
+from typing import Any
 
 
 def get_path_to_vero_agents(env_var: str = "VERO_AGENTS_PATH") -> Path:
@@ -19,10 +16,14 @@ def get_path_to_vero_agents(env_var: str = "VERO_AGENTS_PATH") -> Path:
     return path
 
 
-def get_model(model: str | None) -> str | LitellmModel | OpenAIChatCompletionsModel | None:
+def get_model(model: str | None) -> Any:
     """Gets the input model object for an OpenAI Agents SDK Agent from a model string."""
     if model is None:
         return None
+
+    from agents.extensions.models.litellm_model import LitellmModel
+    from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+    from openai import AsyncOpenAI
 
     if "/" not in model:
         return model

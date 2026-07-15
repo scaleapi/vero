@@ -29,14 +29,21 @@ import argparse
 import asyncio
 import secrets
 import statistics
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
-from vero.evaluator import run_evaluation
+from vero.sandbox import LocalSandbox
+from vero.workspace import GitWorkspace
 
 from vero_benchmarking.constants import DEFAULT_RESULTS_DIR
+from vero_benchmarking.runner import (
+    build_benchmark_session,
+    evaluation_record_dataframe,
+)
 from vero_benchmarking.tasks import load_task
 
 
@@ -191,51 +198,68 @@ async def run_single_evaluation(
     model: str,
     commit: str,
     split: str,
-    hooks: list[str] | None = None,
     extra: dict[str, Any] | None = None,
-    use_copy: bool = True,
+    sessions_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Run a single evaluation and return results."""
+    """Evaluate one historical target version through the canonical runtime."""
     task = load_task(task_name)
+    project_path = Path(task.project_path).expanduser().resolve()
+    sandbox = await LocalSandbox.create(root=project_path.parent)
+    workspace = await GitWorkspace.from_path(sandbox, str(project_path))
+    version = await workspace.resolve_ref(commit)
+    session_id = str(uuid4())
+    session_dir = (sessions_dir or DEFAULT_RESULTS_DIR / "evaluation_sessions") / session_id
 
-    # Build extra dict with model and any additional params
-    eval_extra = {"model": model}
-    if extra:
-        eval_extra.update(extra)
+    async with workspace.temp_copy(from_version=version) as candidate_workspace:
+        historical_task = replace(
+            task,
+            project_path=Path(candidate_workspace.project_path),
+            partition=split,
+            evaluation_budget=1,
+        )
+        session = await build_benchmark_session(
+            task_name=task_name,
+            task_definition=historical_task,
+            model=model,
+            agent_name=None,
+            session_id=session_id,
+            session_dir=session_dir,
+            evaluation_budget=1,
+            max_candidates=0,
+            parameters=extra,
+            metadata={"requested_commit": commit, "resolved_commit": version},
+        )
+        result = await session.run()
 
-    result = await run_evaluation(
-        project_path=str(task.project_path),
-        dataset=str(task.dataset_path),
-        split=split,
-        commit=commit,
-        task=task.task,
-        task_params=eval_extra,
-        create_temporary_copy=use_copy,
-        hooks=hooks,
+    sample_df = evaluation_record_dataframe(
+        result.baseline,
+        model=model,
+        task_name=task_name,
     )
-
-    sample_df = result.sample_results_df()
-
-    assert sample_df is not None, "Sample DF is empty!"
-
-    # Extract metrics
-    # SampleResult.as_pandas_series() adds 'is_error' column which checks:
-    # error, eval_error, score is None, or error_traceback
     num_samples = len(sample_df)
-    error_count = sample_df["is_error"].sum() if "is_error" in sample_df.columns else 0
+    error_count = (
+        int((sample_df["status"] == "error").sum())
+        if "status" in sample_df.columns
+        else 0
+    )
     error_rate = error_count / num_samples if num_samples > 0 else 0.0
-
-    # Calculate score - TaskResult.score is the standard column
-    if "score" in sample_df.columns:
-        score = sample_df["score"].mean()
-    else:
-        score = None
+    score = (
+        result.baseline.objective.value
+        if result.baseline.objective is not None
+        else None
+    )
+    if score is None:
+        diagnostics = "; ".join(
+            diagnostic.message for diagnostic in result.baseline.report.diagnostics
+        )
+        raise RuntimeError(diagnostics or "evaluation did not produce an objective")
 
     return {
         "score": score,
         "num_samples": num_samples,
         "error_rate": error_rate,
         "sample_df": sample_df,
+        "session_id": session_id,
     }
 
 
@@ -244,9 +268,7 @@ async def run_batch_evaluations(
     output_dir: Path,
     n_iterations: int = 1,
     continue_on_error: bool = True,
-    hooks: list[str] | None = None,
     extra: dict[str, Any] | None = None,
-    use_copy: bool = True,
 ) -> pd.DataFrame:
     """
     Run batch evaluations from a DataFrame specification.
@@ -256,9 +278,7 @@ async def run_batch_evaluations(
         output_dir: Directory to save results
         n_iterations: Number of iterations per evaluation
         continue_on_error: Whether to continue on evaluation errors
-        hooks: List of hook names to execute (e.g., ["configure_litellm"])
         extra: Extra parameters to pass to evaluations (merged with model)
-        use_copy: Whether to create temporary copies for each commit
 
     Returns:
         Summary DataFrame with aggregated results
@@ -327,9 +347,8 @@ async def run_batch_evaluations(
                     model,
                     commit,
                     split,
-                    hooks=hooks,
                     extra=extra,
-                    use_copy=use_copy,
+                    sessions_dir=output_dir / "sessions",
                 )
 
                 scores.append(eval_result["score"])
@@ -448,22 +467,10 @@ def main():
         help="Show what would be run without actually running",
     )
     parser.add_argument(
-        "--hook",
-        action="append",
-        dest="hooks",
-        default=[],
-        help="Hook name to execute (can be specified multiple times, e.g., --hook configure_litellm)",
-    )
-    parser.add_argument(
         "--extra",
         type=str,
         default=None,
         help="JSON string of extra parameters to pass to evaluations",
-    )
-    parser.add_argument(
-        "--no-worktree",
-        action="store_true",
-        help="Don't create temporary worktrees (run in current working directory)",
     )
     parser.add_argument(
         "--skip-model",
@@ -529,9 +536,7 @@ def main():
             output_dir=output_dir,
             n_iterations=args.n_iterations,
             continue_on_error=args.continue_on_error,
-            hooks=args.hooks or None,
             extra=extra,
-            use_copy=not args.no_worktree,
         )
     )
 

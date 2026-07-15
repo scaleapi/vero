@@ -15,11 +15,9 @@ gpqa_diamond_no_split_task = OptimizationTask(
     project_path=path_to_vero_agents / "agents/generic-agent",
     dataset_path=DEFAULT_DATASETS_DIR / "gpqa_diamond_no_split",
     score_threshold=0.95,
-    batch_size=512,
-    train_budget=8,
-    validation_budget=None,  # No validation split
+    max_cases_per_evaluation=512,
+    evaluation_budget=8,
     task="gpqa",
-    resource_namespace="gpqa",
 )
 
 GPQA_TASKS = {

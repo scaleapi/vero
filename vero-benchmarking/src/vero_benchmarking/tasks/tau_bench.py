@@ -16,11 +16,9 @@ tau_bench_task = OptimizationTask(
     project_path=path_to_tau_bench,
     dataset_path=DEFAULT_DATASETS_DIR / "tau_bench_retail",
     score_threshold=0.95,
-    batch_size=512,
-    train_budget=8,
-    validation_budget=8,
+    max_cases_per_evaluation=512,
+    evaluation_budget=8,
     task="retail",
-    resource_namespace="tau-bench",
 )
 
 TAU_BENCH_TASKS = {
