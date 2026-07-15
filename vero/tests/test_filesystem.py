@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from vero.filesystem import AccessRule, AccessType, Filesystem
+from vero.filesystem import AccessRule, AccessType, Filesystem, WorkspaceAccessPolicy
 
 
 class TestAccessType:
@@ -214,6 +214,31 @@ class TestAccessRule:
         rule = AccessRule(AccessType.READ, "src/")
         assert rule.matches("src")
         assert rule.matches("src/")
+
+
+class TestWorkspaceAccessPolicy:
+    def test_remote_root_does_not_need_to_exist_on_host(self):
+        policy = WorkspaceAccessPolicy(
+            root="/remote-only/target",
+            default_access=AccessType.WRITE,
+        )
+
+        assert policy.validate_read("src/program.c") == (
+            "/remote-only/target/src/program.c"
+        )
+        assert policy.validate_write("src/../README.md") == (
+            "/remote-only/target/README.md"
+        )
+
+    def test_paths_outside_remote_root_are_excluded(self):
+        policy = WorkspaceAccessPolicy(
+            root="/remote-only/target",
+            default_access=AccessType.WRITE,
+        )
+
+        assert not policy.can_read("../secret")
+        with pytest.raises(PermissionError, match="Read access denied"):
+            policy.validate_read("../secret")
 
 
 class TestFilesystem:

@@ -33,6 +33,7 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.staging import SandboxStagingArea
 
 
 def _default_uv() -> str:
@@ -82,7 +83,7 @@ class HarborBackendConfig(EvaluationModel):
     passthrough_environment: list[str] = Field(default_factory=list)
     extra_args: list[str] = Field(default_factory=list)
 
-    @field_validator("cases_path", "uv_executable")
+    @field_validator("cases_path")
     @classmethod
     def validate_absolute_file(cls, value: str) -> str:
         if not value.strip() or not Path(value).is_absolute():
@@ -101,6 +102,13 @@ class HarborBackendConfig(EvaluationModel):
     def validate_identity(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Harbor backend identity must not be empty")
+        return value
+
+    @field_validator("uv_executable")
+    @classmethod
+    def validate_uv_executable(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("uv_executable must not be empty")
         return value
 
     @field_validator("harbor_requirement")
@@ -178,8 +186,6 @@ class HarborBackendConfig(EvaluationModel):
     def validate_filesystem_and_environment(self) -> HarborBackendConfig:
         if not Path(self.cases_path).is_file():
             raise ValueError("Harbor cases_path must be an existing file")
-        if not Path(self.uv_executable).is_file():
-            raise ValueError("uv_executable must be an existing file")
         overlap = set(self.environment) & set(self.passthrough_environment)
         if overlap:
             raise ValueError(
@@ -299,11 +305,8 @@ class HarborBackend:
                 environment[name] = os.environ[name]
         return environment
 
-    def _source_args(self) -> list[str]:
-        source = Path(self.config.task_source).expanduser()
-        if source.exists():
-            return ["-p", str(source.resolve())]
-        return ["-d", self.config.task_source]
+    def _source_args(self, task_source: str, *, local: bool) -> list[str]:
+        return ["-p", task_source] if local else ["-d", task_source]
 
     def _command(
         self,
@@ -311,7 +314,9 @@ class HarborBackend:
         workspace: str,
         request: EvaluationRequest,
         cases: list[HarborCase],
-        jobs_dir: Path,
+        jobs_dir: str,
+        task_source: str,
+        local_task_source: bool,
     ) -> list[str]:
         command = [
             self.config.uv_executable,
@@ -328,7 +333,7 @@ class HarborBackend:
             self.config.harbor_requirement,
             "harbor",
             "run",
-            *self._source_args(),
+            *self._source_args(task_source, local=local_task_source),
             "--agent-import-path",
             self.config.agent_import_path,
             "-e",
@@ -345,7 +350,7 @@ class HarborBackend:
             command.extend(["-m", str(model)])
         for case in cases:
             command.extend(["-i", case.task_name])
-        command.extend(["--jobs-dir", str(jobs_dir), *self.config.extra_args])
+        command.extend(["--jobs-dir", jobs_dir, *self.config.extra_args])
         return command
 
     def _trial_groups(self, jobs_dir: Path) -> dict[str, list[dict[str, Any]]]:
@@ -573,32 +578,52 @@ class HarborBackend:
         request: EvaluationRequest,
     ) -> EvaluationReport:
         self.validate_request(request)
-        target_root = Path(context.workspace.project_path).resolve()
-        cases_path = Path(self.config.cases_path).resolve()
-        if cases_path == target_root or cases_path.is_relative_to(target_root):
-            raise ValueError("Harbor cases must live outside the editable target")
+        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        if target_root is not None:
+            target_root = target_root.resolve()
+            cases_path = Path(self.config.cases_path).resolve()
+            if cases_path == target_root or cases_path.is_relative_to(target_root):
+                raise ValueError("Harbor cases must live outside the editable target")
         source = Path(self.config.task_source).expanduser()
-        if source.exists():
-            source = source.resolve()
-            if source == target_root or source.is_relative_to(target_root):
+        local_task_source = source.exists()
+        if local_task_source and target_root is not None:
+            resolved_source = source.resolve()
+            if resolved_source == target_root or resolved_source.is_relative_to(target_root):
                 raise ValueError("local Harbor tasks must live outside the editable target")
 
         cases = self._selected_cases(request.evaluation_set)
         capture_dir = context.artifact_dir / "harbor"
         jobs_dir = capture_dir / "jobs"
         jobs_dir.mkdir(parents=True, exist_ok=True)
-        command = self._command(
-            workspace=context.workspace.project_path,
-            request=request,
-            cases=cases,
-            jobs_dir=jobs_dir,
-        )
-        result = await context.workspace.sandbox.run(
-            command,
-            cwd=context.workspace.project_path,
-            timeout=request.limits.timeout_seconds,
-            env=self._environment(),
-        )
+        async with SandboxStagingArea(
+            context.workspace.sandbox,
+            prefix=f"vero-harbor-{context.evaluation_id[:8]}-",
+        ) as staging:
+            remote_jobs_dir = await staging.mkdir("jobs")
+            task_source = (
+                (
+                    str(source.resolve())
+                    if context.workspace.sandbox.capabilities.host_paths
+                    else await staging.upload(source.resolve(), "tasks")
+                )
+                if local_task_source
+                else self.config.task_source
+            )
+            command = self._command(
+                workspace=context.workspace.project_path,
+                request=request,
+                cases=cases,
+                jobs_dir=remote_jobs_dir,
+                task_source=task_source,
+                local_task_source=local_task_source,
+            )
+            result = await context.workspace.sandbox.run(
+                command,
+                cwd=context.workspace.project_path,
+                timeout=request.limits.timeout_seconds,
+                env=self._environment(),
+            )
+            await staging.download("jobs", jobs_dir)
         stdout = self.sanitize_error(result.stdout)
         stderr = self.sanitize_error(result.stderr)
         (capture_dir / "stdout.log").write_text(stdout, encoding="utf-8")

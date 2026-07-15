@@ -4,10 +4,10 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 from typing import AsyncGenerator
 
-from vero.filesystem import AccessType, Filesystem
+from vero.filesystem import AccessType, WorkspaceAccessPolicy
 from vero.sandbox import Sandbox
 from vero.workspace.base import Workspace
 
@@ -50,7 +50,10 @@ class GitWorkspace(Workspace):
         self._name = name or _basename(root)
         self._lock = asyncio.Lock()
         # Default: fully open access. Policy.init() narrows via set_access().
-        self._fs = Filesystem(root=Path(self._project_path), default_access=AccessType.WRITE)
+        self._fs = WorkspaceAccessPolicy(
+            root=self._project_path,
+            default_access=AccessType.WRITE,
+        )
 
     @property
     def sandbox(self) -> Sandbox:
@@ -90,12 +93,12 @@ class GitWorkspace(Workspace):
         Finds the git repo root and determines the project-relative path.
         All resolution happens via sandbox commands, not local path operations.
         """
-        project_path = str(project_path)
+        project_path = await sandbox.canonicalize(str(project_path))
 
         result = await sandbox.run(["git", "rev-parse", "--show-toplevel"], cwd=project_path)
         if result.returncode != 0:
             raise RuntimeError(f"Not a git repository: {project_path}")
-        repo_root = result.stdout.strip()
+        repo_root = await sandbox.canonicalize(result.stdout.strip())
 
         # Find the main repo name (handles worktrees whose common dir differs)
         repo_name = _basename(repo_root)

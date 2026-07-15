@@ -170,6 +170,21 @@ class TestSubdirProject:
 
 class TestDirtyState:
     @pytest.mark.asyncio
+    async def test_canonical_validation_rejects_symlink_escape(
+        self, workspace, tmp_path
+    ):
+        outside = tmp_path.parent / f"{tmp_path.name}-outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("secret", encoding="utf-8")
+        link = Path(workspace.project_path) / "escape"
+        link.symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(PermissionError, match="Read access denied"):
+            await workspace.validate_read_path("escape/secret.txt")
+        with pytest.raises(PermissionError, match="Write access denied"):
+            await workspace.validate_write_path("escape/new.txt")
+
+    @pytest.mark.asyncio
     async def test_clean_initially(self, workspace):
         assert not await workspace.is_dirty()
 

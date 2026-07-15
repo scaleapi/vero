@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from vero.sandbox import CommandResult, FileStat, Sandbox
+from vero.staging import SandboxStagingArea
 
 
 class MockRemoteSandbox(Sandbox):
@@ -163,3 +164,19 @@ class TestMockRemoteSandboxBasics:
         await sandbox.download(str(tmp_path / "remote" / "result.txt"), local_path)
 
         assert (tmp_path / "host" / "result.txt").read_text() == "from remote"
+
+    @pytest.mark.asyncio
+    async def test_staging_area_exchanges_data_and_cleans_up(self, sandbox, tmp_path):
+        source = tmp_path / "host" / "input.txt"
+        source.write_text("input", encoding="utf-8")
+        destination = tmp_path / "host" / "output.txt"
+
+        async with SandboxStagingArea(sandbox) as staging:
+            staging_root = Path(staging.root)
+            await staging.upload(source, "inputs/input.txt")
+            assert await staging.read_text("inputs/input.txt") == "input"
+            await staging.write_text("outputs/output.txt", "output")
+            await staging.download("outputs/output.txt", destination)
+
+        assert destination.read_text(encoding="utf-8") == "output"
+        assert not staging_root.exists()

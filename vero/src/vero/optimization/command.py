@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from pathlib import Path
 
@@ -15,10 +16,12 @@ from vero.optimization.models import (
     OptimizationContext,
 )
 from vero.optimization.protocols import CandidateEvaluationGateway
+from vero.staging import SandboxStagingArea
 from vero.workspace import Workspace
 
 _PLACEHOLDERS = {
     "workspace",
+    "producer",
     "round",
     "instruction",
     "best_candidate_id",
@@ -120,41 +123,53 @@ class CommandCandidateProducer:
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
         root = Path(self.config.root).resolve()
-        target = Path(workspace.project_path).resolve()
-        if root == target or root.is_relative_to(target):
-            raise ValueError("candidate producer must live outside the editable target")
-        working_directory = (root / self.config.working_directory).resolve()
-        if not working_directory.is_relative_to(root):
-            raise ValueError("producer working directory escapes its trusted root")
+        target = workspace.sandbox.host_path(workspace.project_path)
+        if target is not None:
+            target = target.resolve()
+            if root == target or root.is_relative_to(target):
+                raise ValueError("candidate producer must live outside the editable target")
 
         best = context.best
-        values = {
-            "workspace": workspace.project_path,
-            "round": str(context.round),
-            "instruction": proposal.instruction or "",
-            "best_candidate_id": best.request.candidate.id if best else "",
-            "best_version": best.request.candidate.version if best else "",
-            "best_value": (
-                str(best.objective.value)
-                if best is not None
-                and best.objective is not None
-                and best.objective.value is not None
-                else ""
-            ),
-        }
-        command: list[str] = []
-        for argument in self.config.command:
-            expanded = argument
-            for placeholder, value in values.items():
-                expanded = expanded.replace(f"{{{placeholder}}}", value)
-            command.append(expanded)
+        async with SandboxStagingArea(
+            workspace.sandbox,
+            prefix=f"vero-producer-{proposal.id[:8]}-",
+        ) as staging:
+            producer_root = (
+                str(root)
+                if workspace.sandbox.capabilities.host_paths
+                else await staging.upload(root, "producer")
+            )
+            working_directory = posixpath.normpath(
+                posixpath.join(producer_root, self.config.working_directory)
+            )
+            values = {
+                "workspace": workspace.project_path,
+                "producer": producer_root,
+                "round": str(context.round),
+                "instruction": proposal.instruction or "",
+                "best_candidate_id": best.request.candidate.id if best else "",
+                "best_version": best.request.candidate.version if best else "",
+                "best_value": (
+                    str(best.objective.value)
+                    if best is not None
+                    and best.objective is not None
+                    and best.objective.value is not None
+                    else ""
+                ),
+            }
+            command: list[str] = []
+            for argument in self.config.command:
+                expanded = argument
+                for placeholder, value in values.items():
+                    expanded = expanded.replace(f"{{{placeholder}}}", value)
+                command.append(expanded)
 
-        result = await workspace.sandbox.run(
-            command,
-            cwd=str(working_directory),
-            timeout=self.config.timeout_seconds,
-            env=self._environment(),
-        )
+            result = await workspace.sandbox.run(
+                command,
+                cwd=working_directory,
+                timeout=self.config.timeout_seconds,
+                env=self._environment(),
+            )
         if result.returncode != 0:
             raise RuntimeError(
                 result.stderr

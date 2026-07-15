@@ -114,32 +114,41 @@ class BashTool:
         Returns:
             String with the directory listing
         """
-        absolute_path = self.workspace.validate_read(path or ".")
+        absolute_path = await self.workspace.validate_read_path(path or ".")
+        readable_entries: list[tuple[str, str]] = []
+        for name in await self.sandbox.list_dir(absolute_path):
+            if not all and name.startswith("."):
+                continue
+            absolute_subpath = f"{absolute_path.rstrip('/')}/{name}"
+            try:
+                canonical = await self.sandbox.canonicalize(absolute_subpath)
+            except FileNotFoundError:
+                continue
+            if self.workspace.can_read(canonical):
+                readable_entries.append((name, absolute_subpath))
 
-        cmd = ["ls"]
-
-        if all:
-            cmd.append("-a")
-        if long:
-            cmd.append("-l")
-        if human_readable and long:
-            cmd.append("-h")
-        if classify_dirs:
-            cmd.append("-p")
-
-        cmd.append(absolute_path)
-
-        result = await self.sandbox.run(cmd, timeout=self.timeout)
-        if result.returncode != 0:
-            raise RuntimeError(f"ls failed (exit {result.returncode}): {result.stderr}")
-
-        subpaths: list[str] = strip_ansi(result.stdout).split("\n")
-
-        readable_subpaths = []
-        for subpath in subpaths:
-            absolute_subpath = self.workspace.resolve_path(f"{absolute_path.rstrip('/')}/{subpath}")
-            if self.workspace.can_read(absolute_subpath):
-                readable_subpaths.append(subpath)
+        if long and readable_entries:
+            cmd = ["ls", "-ld"]
+            if human_readable:
+                cmd.append("-h")
+            if classify_dirs:
+                cmd.append("-F")
+            cmd.extend(entry_path for _, entry_path in readable_entries)
+            result = await self.sandbox.run(cmd, timeout=self.timeout)
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"ls failed (exit {result.returncode}): {result.stderr}"
+                )
+            readable_subpaths = strip_ansi(result.stdout).splitlines()
+        else:
+            readable_subpaths = []
+            for name, entry_path in readable_entries:
+                suffix = (
+                    "/"
+                    if classify_dirs and await self.sandbox.is_dir(entry_path)
+                    else ""
+                )
+                readable_subpaths.append(f"{name}{suffix}")
 
         paginated_output = paginate(
             items=readable_subpaths,
@@ -199,7 +208,7 @@ class BashTool:
         if not isinstance(exclude_paths, list):
             raise ValueError("exclude_paths must be a list of strings.")
 
-        absolute_path = self.workspace.validate_read(path or ".")
+        absolute_path = await self.workspace.validate_read_path(path or ".")
 
         cmd = ["find", absolute_path]
 
@@ -229,7 +238,11 @@ class BashTool:
                 continue
 
             current_path = self.workspace.resolve_path(line)
-            if self.workspace.can_read(current_path):
+            try:
+                canonical = await self.sandbox.canonicalize(current_path)
+            except FileNotFoundError:
+                continue
+            if self.workspace.can_read(canonical):
                 filtered_output.append(str(current_path))
 
         paginated_output = paginate(
@@ -267,13 +280,11 @@ class BashTool:
         if max_depth < 1:
             raise ValueError("max_depth must be at least 1")
 
-        resolved_path = self.workspace.resolve_path(path or ".")
+        resolved_path = await self.workspace.validate_read_path(path or ".")
         if not await self.sandbox.exists(resolved_path):
             raise FileNotFoundError(f"Path does not exist: {path}")
         if not await self.sandbox.is_dir(resolved_path):
             raise NotADirectoryError(f"Path is not a directory: {path}")
-        if not self.workspace.can_read(resolved_path):
-            raise PermissionError(f"Cannot read directory: {path}")
 
         file_count = 0
         files_shown = 0
@@ -308,12 +319,17 @@ class BashTool:
                         dirs.append(e)
                     else:
                         files.append(e)
-                accessible = [
-                    e
-                    for e in dirs + files
-                    if self.workspace.get_access(e)
-                    in (AccessType.READ, AccessType.WRITE)
-                ]
+                accessible = []
+                for entry in dirs + files:
+                    try:
+                        canonical = await self.sandbox.canonicalize(entry)
+                    except FileNotFoundError:
+                        continue
+                    if self.workspace.get_access(canonical) in (
+                        AccessType.READ,
+                        AccessType.WRITE,
+                    ):
+                        accessible.append(entry)
 
                 for i, entry in enumerate(accessible):
                     is_last = i == len(accessible) - 1

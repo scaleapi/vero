@@ -9,7 +9,11 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.optimization import CandidateProducer, OptimizationStrategy, Optimizer
-from vero.runtime import OptimizationSession, create_local_optimization_session
+from vero.runtime import (
+    OptimizationSession,
+    create_local_optimization_session,
+    create_optimization_session,
+)
 
 __all__ = [
     "Candidate",
@@ -22,5 +26,6 @@ __all__ = [
     "OptimizationSession",
     "OptimizationStrategy",
     "Optimizer",
+    "create_optimization_session",
     "create_local_optimization_session",
 ]

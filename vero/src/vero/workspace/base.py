@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, AsyncGenerator
 
-from vero.filesystem import AccessRule, AccessType, Filesystem
+from vero.filesystem import AccessRule, AccessType, WorkspaceAccessPolicy
 
 if TYPE_CHECKING:
     from vero.sandbox import Sandbox
@@ -130,8 +130,8 @@ class Workspace(ABC):
         creation; non-Policy callers (evaluator, trace analysis) leave
         access fully open (the default set in the constructor).
         """
-        self._fs = Filesystem(
-            root=Path(self.project_path),
+        self._fs = WorkspaceAccessPolicy(
+            root=self.project_path,
             accesses=accesses,
             default_access=default_access,
         )
@@ -142,7 +142,7 @@ class Workspace(ABC):
         Absolute paths pass through.  Relative paths (including ``"."``)
         are resolved against ``project_path``, not ``sandbox.root``.
         """
-        return str(self._fs.resolve_path(path))
+        return self._fs.resolve_path(path)
 
     def get_relative_path(self, path: str) -> str | None:
         """Get path relative to ``project_path``, or None if outside."""
@@ -158,11 +158,40 @@ class Workspace(ABC):
 
     def validate_read(self, path: str) -> str:
         """Resolve path and check read access. Raises AccessDeniedError."""
-        return str(self._fs.validate_read(path))
+        return self._fs.validate_read(path)
 
     def validate_write(self, path: str) -> str:
         """Resolve path and check write access. Raises AccessDeniedError."""
-        return str(self._fs.validate_write(path))
+        return self._fs.validate_write(path)
+
+    async def validate_read_path(self, path: str) -> str:
+        """Validate read access after resolving sandbox symlinks."""
+
+        resolved = self._fs.validate_read(path)
+        canonical = await self.sandbox.canonicalize(resolved)
+        return self._fs.validate_read(canonical)
+
+    async def validate_write_path(self, path: str) -> str:
+        """Validate write access after resolving existing sandbox ancestors."""
+
+        resolved = self._fs.validate_write(path)
+        if await self.sandbox.exists(resolved):
+            canonical = await self.sandbox.canonicalize(resolved)
+            return self._fs.validate_write(canonical)
+
+        current = PurePosixPath(resolved)
+        missing: list[str] = []
+        while not await self.sandbox.exists(current.as_posix()):
+            if current.parent == current:
+                raise FileNotFoundError(resolved)
+            missing.append(current.name)
+            current = current.parent
+        canonical = PurePosixPath(
+            await self.sandbox.canonicalize(current.as_posix())
+        )
+        for component in reversed(missing):
+            canonical /= component
+        return self._fs.validate_write(canonical.as_posix())
 
     def get_access(self, path: str) -> AccessType:
         """Get the access level for a path."""

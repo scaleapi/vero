@@ -67,7 +67,7 @@ class FileRead:
                 f"Start line must be greater than or equal to 1. Got {start_line}."
             )
 
-        file_path = self.workspace.validate_read(target_file)
+        file_path = await self.workspace.validate_read_path(target_file)
 
         if not await self.sandbox.exists(file_path):
             raise FileNotFoundError(f"File '{file_path}' does not exist.")

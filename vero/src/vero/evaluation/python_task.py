@@ -45,7 +45,7 @@ class PythonTaskBackendConfig(EvaluationModel):
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
 
-    @field_validator("harness_root", "cases_path", "uv_executable")
+    @field_validator("harness_root", "cases_path")
     @classmethod
     def validate_absolute_path(cls, value: str) -> str:
         if not value.strip() or not Path(value).is_absolute():
@@ -57,6 +57,13 @@ class PythonTaskBackendConfig(EvaluationModel):
     def validate_identity(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Python task backend identity must not be empty")
+        return value
+
+    @field_validator("uv_executable")
+    @classmethod
+    def validate_uv_executable(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("uv_executable must not be empty")
         return value
 
     @field_validator("partition")
@@ -83,8 +90,6 @@ class PythonTaskBackendConfig(EvaluationModel):
             raise ValueError("Python task harness_root must be an existing directory")
         if not Path(self.cases_path).is_file():
             raise ValueError("Python task cases_path must be an existing file")
-        if not Path(self.uv_executable).is_file():
-            raise ValueError("uv_executable must be an existing file")
         return self
 
 
@@ -106,7 +111,7 @@ class PythonTaskBackend:
                     config.uv_executable,
                     "run",
                     "--project",
-                    config.harness_root,
+                    "{harness}",
                     "--with-editable",
                     target,
                     config.python_executable,
@@ -117,7 +122,7 @@ class PythonTaskBackend:
                     "--task",
                     config.task,
                     "--cases",
-                    config.cases_path,
+                    "{input:cases}",
                     "--request",
                     "{request}",
                     "--report",
@@ -125,6 +130,7 @@ class PythonTaskBackend:
                 ],
                 environment=config.environment,
                 passthrough_environment=config.passthrough_environment,
+                staged_inputs={"cases": config.cases_path},
             )
         )
 
@@ -210,8 +216,10 @@ class PythonTaskBackend:
         context: EvaluationContext,
         request: EvaluationRequest,
     ) -> EvaluationReport:
-        cases_path = Path(self.config.cases_path).resolve()
-        target_root = Path(context.workspace.project_path).resolve()
-        if cases_path == target_root or cases_path.is_relative_to(target_root):
-            raise ValueError("Python task cases must live outside the editable target")
+        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        if target_root is not None:
+            target_root = target_root.resolve()
+            cases_path = Path(self.config.cases_path).resolve()
+            if cases_path == target_root or cases_path.is_relative_to(target_root):
+                raise ValueError("Python task cases must live outside the editable target")
         return await self._command.evaluate(context=context, request=request)

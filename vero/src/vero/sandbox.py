@@ -12,9 +12,14 @@ not Sandbox — the sandbox is a dumb I/O layer.
 from __future__ import annotations
 
 import asyncio
+import posixpath
+import shutil
+import tempfile
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import AsyncIterator, NamedTuple
 
 # =============================================================================
 # Data types
@@ -33,6 +38,14 @@ class CommandResult(NamedTuple):
     stdout: str
     stderr: str
     returncode: int
+
+
+@dataclass(frozen=True)
+class SandboxCapabilities:
+    """Execution features exposed by a sandbox implementation."""
+
+    posix: bool = True
+    host_paths: bool = False
 
 
 # =============================================================================
@@ -70,6 +83,15 @@ class Sandbox(ABC):
     def root(self) -> str:
         """Root directory of the sandbox."""
         ...
+
+    @property
+    def capabilities(self) -> SandboxCapabilities:
+        return SandboxCapabilities()
+
+    def host_path(self, path: str) -> Path | None:
+        """Return a host-visible equivalent, or ``None`` for isolated paths."""
+
+        return None
 
     # ── Path resolution ────────────────────────────────────────────────
 
@@ -120,6 +142,44 @@ class Sandbox(ABC):
         env: dict[str, str] | None = None,
     ) -> CommandResult: ...
 
+    async def canonicalize(self, path: str) -> str:
+        """Resolve a sandbox path, including symlinks, inside the sandbox."""
+
+        result = await self.run(["realpath", path])
+        if result.returncode != 0:
+            raise FileNotFoundError(result.stderr or path)
+        return result.stdout.strip()
+
+    async def remove(self, path: str, *, recursive: bool = False) -> None:
+        """Remove a sandbox path."""
+
+        command = ["rm"]
+        if recursive:
+            command.append("-rf")
+        else:
+            command.append("-f")
+        command.extend(["--", path])
+        result = await self.run(command)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or f"failed to remove {path}")
+
+    @asynccontextmanager
+    async def temporary_directory(self, prefix: str = "vero-") -> AsyncIterator[str]:
+        """Create and clean up a temporary directory inside the sandbox."""
+
+        safe_prefix = "".join(
+            character for character in prefix if character.isalnum() or character in "-_"
+        )
+        template = f"/tmp/{safe_prefix or 'vero-'}XXXXXX"
+        result = await self.run(["mktemp", "-d", template])
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or "failed to create sandbox temporary directory")
+        path = result.stdout.strip()
+        try:
+            yield path
+        finally:
+            await self.remove(path, recursive=True)
+
     # ── Host ↔ Sandbox file transfer (async) ───────────────────────────
 
     @abstractmethod
@@ -139,6 +199,11 @@ class Sandbox(ABC):
         For remote sandboxes this would be docker cp, scp, etc.
         """
         ...
+
+    async def close(self) -> None:
+        """Release resources owned by this sandbox. Default: no-op."""
+
+        return None
 
 
 # =============================================================================
@@ -172,6 +237,13 @@ class LocalSandbox(Sandbox):
     def root(self) -> str:
         return str(self._root)
 
+    @property
+    def capabilities(self) -> SandboxCapabilities:
+        return SandboxCapabilities(host_paths=True)
+
+    def host_path(self, path: str) -> Path:
+        return Path(self.resolve_path(path))
+
     # ── Path resolution ────────────────────────────────────────────────
 
     def resolve_path(self, path: str) -> str:
@@ -179,6 +251,12 @@ class LocalSandbox(Sandbox):
         if p.is_absolute():
             return str(p.resolve())
         return str((self._root / p).resolve())
+
+    async def canonicalize(self, path: str) -> str:
+        resolved = Path(self.resolve_path(path))
+        if not resolved.exists():
+            raise FileNotFoundError(path)
+        return str(resolved.resolve())
 
     # ── Filesystem ──────────────────────────────────────────────────────
 
@@ -302,3 +380,248 @@ class LocalSandbox(Sandbox):
         elif src.is_file():
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+
+
+class DockerSandbox(Sandbox):
+    """POSIX sandbox backed by a Docker container with no shared filesystem."""
+
+    def __init__(
+        self,
+        container_id: str,
+        *,
+        root: str = "/workspace",
+        docker_executable: str = "docker",
+        owns_container: bool = False,
+    ) -> None:
+        self.container_id = container_id
+        self._root = posixpath.normpath(root)
+        self.docker_executable = docker_executable
+        self.owns_container = owns_container
+        self._closed = False
+
+    @classmethod
+    async def create(
+        cls,
+        *,
+        image: str,
+        root: str = "/workspace",
+        name: str | None = None,
+        docker_executable: str | None = None,
+        **kwargs,
+    ) -> DockerSandbox:
+        executable = docker_executable or shutil.which("docker")
+        if executable is None:
+            raise ValueError("docker is required to create a DockerSandbox")
+        command = [
+            executable,
+            "run",
+            "--detach",
+            "--rm",
+            "--workdir",
+            root,
+        ]
+        if name is not None:
+            command.extend(["--name", name])
+        command.extend(
+            [image, "sh", "-c", "while :; do sleep 3600; done"]
+        )
+        result = await cls._host_command(command, timeout=60)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or "failed to create Docker sandbox")
+        sandbox = cls(
+            result.stdout.strip(),
+            root=root,
+            docker_executable=executable,
+            owns_container=True,
+        )
+        mkdir_result = await sandbox.run(["mkdir", "-p", root])
+        if mkdir_result.returncode != 0:
+            await sandbox.close()
+            raise RuntimeError(mkdir_result.stderr or f"failed to create {root}")
+        return sandbox
+
+    @classmethod
+    async def from_container(
+        cls,
+        container_id: str,
+        *,
+        root: str = "/workspace",
+        docker_executable: str | None = None,
+    ) -> DockerSandbox:
+        executable = docker_executable or shutil.which("docker")
+        if executable is None:
+            raise ValueError("docker is required to attach a DockerSandbox")
+        sandbox = cls(
+            container_id,
+            root=root,
+            docker_executable=executable,
+            owns_container=False,
+        )
+        result = await sandbox.run(["mkdir", "-p", root])
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or f"cannot access Docker container {container_id}")
+        return sandbox
+
+    @staticmethod
+    async def _host_command(
+        command: list[str],
+        *,
+        timeout: int | float | None = 30,
+    ) -> CommandResult:
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            return CommandResult("", f"Command timed out after {timeout} seconds", -1)
+        return CommandResult(
+            stdout.decode(errors="replace").strip(),
+            stderr.decode(errors="replace").strip(),
+            process.returncode or 0,
+        )
+
+    async def _docker(self, *arguments: str, timeout: int | float | None = 30) -> CommandResult:
+        return await self._host_command(
+            [self.docker_executable, *arguments],
+            timeout=timeout,
+        )
+
+    @property
+    def root(self) -> str:
+        return self._root
+
+    @property
+    def capabilities(self) -> SandboxCapabilities:
+        return SandboxCapabilities(posix=True, host_paths=False)
+
+    def resolve_path(self, path: str) -> str:
+        if posixpath.isabs(path):
+            return posixpath.normpath(path)
+        return posixpath.normpath(posixpath.join(self._root, path))
+
+    async def read_file(self, path: str, encoding: str = "utf-8") -> str:
+        return (await self.read_file_bytes(path)).decode(encoding)
+
+    async def read_file_bytes(self, path: str, limit: int | None = None) -> bytes:
+        command = [self.docker_executable, "exec", self.container_id]
+        if limit is None:
+            command.extend(["cat", self.resolve_path(path)])
+        else:
+            command.extend(["head", "-c", str(limit), self.resolve_path(path)])
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            raise FileNotFoundError(stderr.decode(errors="replace") or path)
+        return stdout
+
+    async def write_file(
+        self, path: str, content: str, encoding: str = "utf-8"
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="vero-docker-") as directory:
+            local_path = Path(directory) / "content"
+            local_path.write_text(content, encoding=encoding)
+            await self.upload(str(local_path), self.resolve_path(path))
+
+    async def exists(self, path: str) -> bool:
+        return (await self.run(["test", "-e", self.resolve_path(path)])).returncode == 0
+
+    async def is_file(self, path: str) -> bool:
+        return (await self.run(["test", "-f", self.resolve_path(path)])).returncode == 0
+
+    async def is_dir(self, path: str) -> bool:
+        return (await self.run(["test", "-d", self.resolve_path(path)])).returncode == 0
+
+    async def mkdir(self, path: str, parents: bool = True) -> None:
+        command = ["mkdir"]
+        if parents:
+            command.append("-p")
+        command.append(self.resolve_path(path))
+        result = await self.run(command)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or f"failed to create {path}")
+
+    async def stat(self, path: str) -> FileStat:
+        result = await self.run(["stat", "-c", "%s", self.resolve_path(path)])
+        if result.returncode != 0:
+            raise FileNotFoundError(result.stderr or path)
+        return FileStat(st_size=int(result.stdout))
+
+    async def list_dir(self, path: str) -> list[str]:
+        result = await self.run(["ls", "-1A", self.resolve_path(path)])
+        if result.returncode != 0:
+            raise FileNotFoundError(result.stderr or path)
+        return sorted(line for line in result.stdout.splitlines() if line)
+
+    async def run(
+        self,
+        command: str | list[str],
+        cwd: str | None = None,
+        timeout: int | None = 30,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        arguments = ["exec"]
+        if cwd is not None:
+            arguments.extend(["--workdir", self.resolve_path(cwd)])
+        for name, value in (env or {}).items():
+            arguments.extend(["--env", f"{name}={value}"])
+        arguments.append(self.container_id)
+        if isinstance(command, str):
+            arguments.extend(["sh", "-c", command])
+        else:
+            arguments.extend(command)
+        return await self._docker(*arguments, timeout=timeout)
+
+    async def canonicalize(self, path: str) -> str:
+        result = await self.run(["readlink", "-f", self.resolve_path(path)])
+        if result.returncode != 0:
+            raise FileNotFoundError(result.stderr or path)
+        return result.stdout.strip()
+
+    async def upload(self, local_path: str, remote_path: str) -> None:
+        source = Path(local_path).resolve()
+        if not source.exists():
+            raise FileNotFoundError(local_path)
+        destination = self.resolve_path(remote_path)
+        if source.is_dir():
+            await self.mkdir(destination)
+            docker_source = f"{source}/."
+        else:
+            await self.mkdir(posixpath.dirname(destination))
+            docker_source = str(source)
+        result = await self._docker(
+            "cp", docker_source, f"{self.container_id}:{destination}", timeout=120
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or f"failed to upload {local_path}")
+
+    async def download(self, remote_path: str, local_path: str) -> None:
+        source = self.resolve_path(remote_path)
+        destination = Path(local_path).resolve()
+        if not await self.exists(source):
+            raise FileNotFoundError(remote_path)
+        if await self.is_dir(source):
+            destination.mkdir(parents=True, exist_ok=True)
+            docker_source = f"{self.container_id}:{source}/."
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            docker_source = f"{self.container_id}:{source}"
+        result = await self._docker("cp", docker_source, str(destination), timeout=120)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr or f"failed to download {remote_path}")
+
+    async def close(self) -> None:
+        if self._closed or not self.owns_container:
+            return
+        self._closed = True
+        result = await self._docker("rm", "--force", self.container_id, timeout=30)
+        if result.returncode != 0 and "No such container" not in result.stderr:
+            raise RuntimeError(result.stderr or "failed to remove Docker sandbox")

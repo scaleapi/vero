@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
-from pathlib import Path
+import posixpath
+from pathlib import Path, PurePosixPath
 
 from vero.exceptions import AccessDeniedError
 
@@ -61,6 +62,69 @@ class AccessRule:
         return wcpathlib.PurePath(relative_path).globmatch(
             pattern, flags=wcpathlib.GLOBSTAR | wcpathlib.BRACE | wcpathlib.DOTMATCH
         )
+
+
+@dataclass
+class WorkspaceAccessPolicy:
+    """Sandbox-independent workspace path and access policy.
+
+    Unlike :class:`Filesystem`, this class never touches the host filesystem.
+    Its root and all resolved values are POSIX paths in the workspace's
+    sandbox.  Filesystem operations and canonical symlink checks belong to the
+    sandbox itself.
+    """
+
+    root: str
+    accesses: list[AccessRule] = field(default_factory=list)
+    default_access: AccessType = AccessType.EXCLUDE
+
+    def __post_init__(self) -> None:
+        root = PurePosixPath(self.root)
+        if not root.is_absolute():
+            raise ValueError("workspace access root must be an absolute sandbox path")
+        self.root = posixpath.normpath(root.as_posix())
+
+    def resolve_path(self, path: str | PurePosixPath) -> str:
+        value = PurePosixPath(str(path))
+        if value.is_absolute():
+            return posixpath.normpath(value.as_posix())
+        return posixpath.normpath(posixpath.join(self.root, value.as_posix()))
+
+    def get_relative_path(self, path: str | PurePosixPath) -> str | None:
+        resolved = PurePosixPath(self.resolve_path(path))
+        try:
+            relative = resolved.relative_to(PurePosixPath(self.root))
+        except ValueError:
+            return None
+        return relative.as_posix()
+
+    def get_access(self, path: str | PurePosixPath) -> AccessType:
+        relative_path = self.get_relative_path(path)
+        if relative_path is None:
+            return AccessType.EXCLUDE
+        result = self.default_access
+        for rule in self.accesses:
+            if rule.matches(relative_path):
+                result = rule.access_type
+        return result
+
+    def can_read(self, path: str | PurePosixPath) -> bool:
+        return self.get_access(path).can_read()
+
+    def can_write(self, path: str | PurePosixPath) -> bool:
+        return self.get_access(path).can_write()
+
+    def validate_read(self, path: str | PurePosixPath) -> str:
+        resolved = self.resolve_path(path)
+        if not self.can_read(resolved):
+            raise AccessDeniedError(f"Read access denied: {resolved}")
+        return resolved
+
+    def validate_write(self, path: str | PurePosixPath) -> str:
+        resolved = self.resolve_path(path)
+        if not self.can_write(resolved):
+            raise AccessDeniedError(f"Write access denied: {resolved}")
+        return resolved
 
 
 @dataclass

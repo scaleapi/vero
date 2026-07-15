@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import posixpath
 import re
 from pathlib import Path
 
@@ -26,9 +27,11 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.staging import SandboxStagingArea
 
-_PLACEHOLDERS = {"workspace", "request", "report", "artifacts"}
+_PLACEHOLDERS = {"workspace", "harness", "request", "report", "artifacts"}
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
+_INPUT_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
 class CommandBackendConfig(EvaluationModel):
@@ -37,6 +40,7 @@ class CommandBackendConfig(EvaluationModel):
     working_directory: str = "."
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
+    staged_inputs: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("harness_root")
     @classmethod
@@ -56,7 +60,7 @@ class CommandBackendConfig(EvaluationModel):
             placeholder
             for argument in value
             for placeholder in _PLACEHOLDER_PATTERN.findall(argument)
-            if placeholder not in _PLACEHOLDERS
+            if placeholder not in _PLACEHOLDERS and not placeholder.startswith("input:")
         }
         if unknown:
             raise ValueError(
@@ -98,6 +102,20 @@ class CommandBackendConfig(EvaluationModel):
                 "environment and passthrough_environment overlap for: "
                 + ", ".join(sorted(overlap))
             )
+        invalid = sorted(
+            name for name in self.staged_inputs if not _INPUT_NAME_PATTERN.fullmatch(name)
+        )
+        if invalid:
+            raise ValueError(f"invalid staged input names: {', '.join(invalid)}")
+        referenced = {
+            placeholder.removeprefix("input:")
+            for argument in self.command
+            for placeholder in _PLACEHOLDER_PATTERN.findall(argument)
+            if placeholder.startswith("input:")
+        }
+        unknown = sorted(referenced - set(self.staged_inputs))
+        if unknown:
+            raise ValueError(f"unknown staged command inputs: {', '.join(unknown)}")
         return self
 
 
@@ -128,12 +146,10 @@ class CommandBackend:
             return EvaluationCost(cases=None)
         raise AssertionError(f"unsupported case selection: {selection}")
 
-    def _working_directory(self) -> Path:
-        root = Path(self.config.harness_root).resolve()
-        working_directory = (root / self.config.working_directory).resolve()
-        if not working_directory.is_relative_to(root):
-            raise ValueError("working_directory escapes harness_root")
-        return working_directory
+    def _working_directory(self, harness_root: str) -> str:
+        return posixpath.normpath(
+            posixpath.join(harness_root, self.config.working_directory)
+        )
 
     def _environment(self) -> dict[str, str]:
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
@@ -201,36 +217,60 @@ class CommandBackend:
         context: EvaluationContext,
         request: EvaluationRequest,
     ) -> EvaluationReport:
-        harness_root = Path(self.config.harness_root).resolve()
-        target_root = Path(context.workspace.project_path).resolve()
-        if harness_root == target_root or harness_root.is_relative_to(target_root):
-            raise ValueError("command harness must live outside the editable target")
+        harness_source = Path(self.config.harness_root).resolve()
+        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        if target_root is not None:
+            target_root = target_root.resolve()
+            if harness_source == target_root or harness_source.is_relative_to(target_root):
+                raise ValueError("command harness must live outside the editable target")
 
-        backend_dir = context.result_dir / "backend" / self.name
-        backend_dir.mkdir(parents=True, exist_ok=True)
         capture_dir = context.artifact_dir / "command"
         capture_dir.mkdir(parents=True, exist_ok=True)
-        request_path = backend_dir / "request.json"
-        report_path = backend_dir / "report.json"
-        request_path.write_text(
-            CommandEvaluationInput(request=request).model_dump_json(indent=2),
-            encoding="utf-8",
-        )
-
-        command = self._expand_command(
-            {
-                "workspace": context.workspace.project_path,
-                "request": str(request_path),
-                "report": str(report_path),
-                "artifacts": str(context.artifact_dir),
+        async with SandboxStagingArea(
+            context.workspace.sandbox,
+            prefix=f"vero-eval-{context.evaluation_id[:8]}-",
+        ) as staging:
+            harness_root = (
+                str(harness_source)
+                if context.workspace.sandbox.capabilities.host_paths
+                else await staging.upload(harness_source, "harness")
+            )
+            staged_inputs = {
+                f"input:{name}": await staging.upload(source, f"inputs/{name}")
+                for name, source in self.config.staged_inputs.items()
             }
-        )
-        result = await context.workspace.sandbox.run(
-            command,
-            cwd=str(self._working_directory()),
-            timeout=request.limits.timeout_seconds,
-            env=self._environment(),
-        )
+            request_path = await staging.write_text(
+                "request.json",
+                CommandEvaluationInput(request=request).model_dump_json(indent=2),
+            )
+            report_path = staging.path("report.json")
+            artifacts_path = await staging.mkdir("artifacts")
+
+            command = self._expand_command(
+                {
+                    "workspace": context.workspace.project_path,
+                    "harness": harness_root,
+                    "request": request_path,
+                    "report": report_path,
+                    "artifacts": artifacts_path,
+                    **staged_inputs,
+                }
+            )
+            result = await context.workspace.sandbox.run(
+                command,
+                cwd=self._working_directory(harness_root),
+                timeout=request.limits.timeout_seconds,
+                env=self._environment(),
+            )
+
+            if await staging.exists("artifacts"):
+                await staging.download("artifacts", context.artifact_dir)
+
+            report_payload = (
+                await staging.read_text("report.json")
+                if await staging.exists("report.json")
+                else None
+            )
 
         stdout = self.sanitize_error(result.stdout)
         stderr = self.sanitize_error(result.stderr)
@@ -257,7 +297,7 @@ class CommandBackend:
                 message=message,
                 artifacts=capture_artifacts,
             )
-        if not report_path.exists():
+        if report_payload is None:
             return self._failure_report(
                 code="missing_report",
                 message="evaluation command did not write a report",
@@ -265,7 +305,7 @@ class CommandBackend:
             )
         try:
             report = EvaluationReport.model_validate_json(
-                report_path.read_text(encoding="utf-8")
+                report_payload
             )
         except Exception as error:
             return self._failure_report(

@@ -138,7 +138,9 @@ vero optimize ./my-program \
 Commands are parsed into argument vectors, not executed through a shell. Use
 absolute executable paths when the executable is not on the standard system
 `PATH`. Available evaluation placeholders are `{workspace}`, `{request}`,
-`{report}`, and `{artifacts}`.
+`{report}`, `{artifacts}`, and `{harness}`. External producers additionally get
+`{producer}`. The latter two resolve to staged sandbox paths when the target is
+not host-visible.
 
 The flag-based `vero optimize` command exposes the same objective constraints,
 case selection, target ref, timeouts, environments, and concurrency controls;
@@ -210,6 +212,68 @@ session = await create_local_optimization_session(
 result = await session.run()
 print(result.best.request.candidate.version, result.best.objective.value)
 ```
+
+### Run the target in a remote sandbox
+
+The local factory above is a convenience wrapper. For containers, remote VMs,
+or another execution environment, provision a `Workspace` in that sandbox and
+pass it to the generic factory:
+
+```python
+from vero.runtime import create_optimization_session
+from vero.sandbox import DockerSandbox
+from vero.workspace import GitWorkspace
+
+sandbox = await DockerSandbox.create(image="gcc:14-bookworm")
+try:
+    # The repository is copied into the container; it is not bind-mounted.
+    await sandbox.upload("./my-program", "/workspace/my-program")
+    workspace = await GitWorkspace.from_path(
+        sandbox,
+        "/workspace/my-program",
+    )
+
+    backend = CommandBackend(CommandBackendConfig(
+        harness_root=str(Path("../my-evaluator").resolve()),
+        command=[
+            "sh",
+            "{harness}/evaluate.sh",
+            "{workspace}",
+            "{report}",
+            "{artifacts}",
+        ],
+    ))
+    producer = CommandCandidateProducer(CommandCandidateProducerConfig(
+        root=str(Path("../my-optimizer").resolve()),
+        command=["sh", "{producer}/improve.sh", "{workspace}"],
+    ))
+    session = await create_optimization_session(
+        workspace=workspace,
+        session_dir="~/.vero/sessions/remote-run",
+        backend_id="command",
+        backend=backend,
+        objective=ObjectiveSpec(
+            selector=MetricSelector(metric="latency_ms"),
+            direction="minimize",
+        ),
+        producers={"default": producer},
+    )
+    result = await session.run()
+finally:
+    await sandbox.close()
+```
+
+Session manifests, databases, budgets, W&B logging, and durable artifacts stay
+on the host. Git worktrees, candidate commands, compilation, and evaluation
+commands run in the sandbox. Requests and reports use a temporary staging area;
+VeRO transfers them explicitly and removes it after each operation.
+
+Remote command harnesses and producer directories must be self-contained. An
+executable named in a command must either be installed in the sandbox or live
+under `{harness}` or `{producer}`. `ClaudeCodeAgent` requires a host-visible
+workspace because its SDK takes a local `cwd`; `VeroAgent` and custom agents
+whose tools operate through `Sandbox` can work without one. Incompatible agents
+are rejected when the session is created.
 
 ### Python benchmark tasks
 

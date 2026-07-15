@@ -1,9 +1,10 @@
 from .producer import AgentCandidateProducer
-from .protocol import AgentContext, AgentRunResult, CodingAgent
+from .protocol import AgentContext, AgentRequirements, AgentRunResult, CodingAgent
 
 __all__ = [
     "AgentCandidateProducer",
     "AgentContext",
+    "AgentRequirements",
     "AgentRunResult",
     "ClaudeCodeAgent",
     "CodingAgent",

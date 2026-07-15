@@ -13,12 +13,14 @@ from vero.agents import AgentContext, CodingAgent
 from vero.agents.claude_code import ClaudeCodeAgent, default_tool_sets
 from vero.candidate import Candidate
 from vero.optimization import CandidateProposal
+from vero.sandbox import LocalSandbox
 from vero.tools.evaluation import EvaluationTools
 
 
 class StubWorkspace:
     def __init__(self, project_path: Path):
         self.project_path = str(project_path)
+        self.sandbox = LocalSandbox(project_path)
         self.accesses = []
         self.saved: list[str] = []
 

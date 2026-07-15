@@ -35,6 +35,17 @@ class TestProperties:
         result = sandbox.resolve_path("hello.txt")
         assert result == str(tmp_path / "hello.txt")
 
+    def test_local_paths_are_host_visible(self, sandbox, tmp_path):
+        assert sandbox.capabilities.host_paths
+        assert sandbox.host_path("hello.txt") == tmp_path / "hello.txt"
+
+    @pytest.mark.asyncio
+    async def test_temporary_directory_is_cleaned_up(self, sandbox):
+        async with sandbox.temporary_directory("vero-test-") as directory:
+            assert await sandbox.is_dir(directory)
+            assert Path(directory).name.startswith("vero-test-")
+        assert not await sandbox.exists(directory)
+
 
 class TestFileOperations:
     @pytest.mark.asyncio
@@ -215,5 +226,4 @@ class TestFileTransfer:
         await sandbox.download(path, path)
         content = await sandbox.read_file("hello.txt")
         assert content == "hello world\n"
-
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from vero.agents import AgentCandidateProducer, AgentRunResult
+from vero.agents import AgentCandidateProducer, AgentRequirements, AgentRunResult
 from vero.evaluation import (
     BackendRegistry,
     CommandBackend,
@@ -86,6 +87,25 @@ class CheckpointingCodingAgent:
             state={"turn": 2},
             trace=[{"objective": feedback.objective.value}],
             metadata={"provider": "test"},
+        )
+
+
+def test_host_native_agent_rejects_isolated_workspace():
+    class HostNativeAgent:
+        requirements = AgentRequirements(host_visible_workspace=True)
+
+    class IsolatedSandbox:
+        def host_path(self, path):
+            return None
+
+    producer = AgentCandidateProducer(HostNativeAgent())
+
+    with pytest.raises(ValueError, match="requires a host-visible workspace"):
+        producer.validate_workspace(
+            SimpleNamespace(
+                project_path="/workspace/target",
+                sandbox=IsolatedSandbox(),
+            )
         )
 
 

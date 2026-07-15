@@ -91,7 +91,7 @@ class Grep:
         # and let the filtering handle access control on individual results.
         resolved = self.workspace.resolve_path(search_path)
         if await self.sandbox.is_file(resolved):
-            search_path = self.workspace.validate_read(search_path)
+            search_path = await self.workspace.validate_read_path(search_path)
         else:
             search_path = resolved
 
@@ -132,9 +132,11 @@ class Grep:
             return f"No matches found for pattern: {pattern}"
 
         # Parse JSON output and filter by readable paths
-        return self._process_rg_json_output(stdout, output_mode, head_limit, pattern)
+        return await self._process_rg_json_output(
+            stdout, output_mode, head_limit, pattern
+        )
 
-    def _process_rg_json_output(
+    async def _process_rg_json_output(
         self,
         stdout: str,
         output_mode: str,
@@ -168,7 +170,8 @@ class Grep:
             # Check if path is readable
             try:
                 absolute_path = self.workspace.resolve_path(filepath)
-                if not self.workspace.can_read(absolute_path):
+                canonical = await self.sandbox.canonicalize(absolute_path)
+                if not self.workspace.can_read(canonical):
                     continue
             except Exception:
                 continue

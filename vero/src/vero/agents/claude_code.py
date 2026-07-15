@@ -30,7 +30,7 @@ from claude_agent_sdk.types import (
 from pydantic import BaseModel, create_model
 
 from vero.agents.events import AgentEvent
-from vero.agents.protocol import AgentContext, AgentRunResult
+from vero.agents.protocol import AgentContext, AgentRequirements, AgentRunResult
 from vero.filesystem import AccessType
 from vero.tools.base import ToolSet
 from vero.tools.evaluation import EvaluationTools
@@ -131,6 +131,8 @@ def _default_claude_options() -> ClaudeAgentOptions:
 @dataclass
 class ClaudeCodeAgent:
     """Claude Agent SDK coding agent for a scoped optimization proposal."""
+
+    requirements = AgentRequirements(host_visible_workspace=True)
 
     options: ClaudeAgentOptions = field(default_factory=_default_claude_options)
     tool_sets: list[ToolSet] = field(default_factory=default_tool_sets)

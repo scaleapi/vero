@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any, Callable
 
-from vero.agents.protocol import AgentContext, CodingAgent
+from vero.agents.protocol import AgentContext, AgentRequirements, CodingAgent
 from vero.optimization import (
     CandidateChange,
     CandidateEvaluationGateway,
@@ -33,6 +33,17 @@ class AgentCandidateProducer:
         self.max_turns = max_turns
         self.artifacts = artifacts
         self.on_event = on_event
+
+    def validate_workspace(self, workspace: Workspace) -> None:
+        requirements = getattr(self.agent, "requirements", AgentRequirements())
+        if (
+            requirements.host_visible_workspace
+            and workspace.sandbox.host_path(workspace.project_path) is None
+        ):
+            raise ValueError(
+                f"{type(self.agent).__name__} requires a host-visible workspace; "
+                f"sandbox {type(workspace.sandbox).__name__} does not expose one"
+            )
 
     def bind_artifacts(
         self,
@@ -66,6 +77,7 @@ class AgentCandidateProducer:
         workspace: Workspace,
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
+        self.validate_workspace(workspace)
         result = await self.agent.run(
             context=AgentContext(
                 session_id=context.session_id,

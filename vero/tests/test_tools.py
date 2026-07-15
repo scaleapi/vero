@@ -22,8 +22,10 @@ class SimpleWorkspace(Workspace):
 
     def __init__(self, sandbox: Sandbox, root: str):
         self._sandbox = sandbox
-        self._root = root
-        self._fs = Filesystem(root=Path(root), default_access=AccessType.WRITE)
+        self._root = str(Path(root).resolve())
+        self._fs = Filesystem(
+            root=Path(self._root), default_access=AccessType.WRITE
+        )
 
     @property
     def sandbox(self) -> Sandbox:

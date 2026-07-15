@@ -17,7 +17,13 @@ from vero.optimization import (
     CommandCandidateProducer,
     CommandCandidateProducerConfig,
 )
-from vero.runtime import SessionStatus, create_local_optimization_session
+from vero.runtime import (
+    SessionStatus,
+    create_local_optimization_session,
+    create_optimization_session,
+)
+from vero.sandbox import LocalSandbox
+from vero.workspace import GitWorkspace
 
 
 def initialize_repository(path: Path) -> str:
@@ -114,6 +120,32 @@ Path(sys.argv[1], "program.txt").write_text(value + "\\n")
         )
     )
     return backend, producer
+
+
+@pytest.mark.asyncio
+async def test_generic_factory_accepts_a_provisioned_workspace(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    backend, _ = command_components(tmp_path)
+    workspace = await GitWorkspace.from_path(LocalSandbox(tmp_path), str(target))
+
+    session = await create_optimization_session(
+        workspace=workspace,
+        session_dir=tmp_path / "sessions" / "generic",
+        backend_id="command",
+        backend=backend,
+        objective=ObjectiveSpec(
+            selector=MetricSelector(metric="score"),
+            direction="maximize",
+        ),
+        producers={},
+        max_candidates=0,
+    )
+    result = await session.run()
+
+    assert result.baseline.objective.value == 0.0
 
 
 @pytest.mark.asyncio

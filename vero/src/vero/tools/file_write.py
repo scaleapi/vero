@@ -29,7 +29,7 @@ class FileWrite(FileSystemWriteBase):
     async def _write_file(self, file_path: str, content: str) -> FileWriteToolResult:
         """Helper to write content to a file, creating it if it doesn't exist or overwriting if it does."""
 
-        absolute_path = self.workspace.validate_write(file_path)
+        absolute_path = await self.workspace.validate_write_path(file_path)
         file_exists = await self.sandbox.exists(absolute_path)
 
         if not await self._is_file_tracked(absolute_path) and file_exists:
@@ -72,7 +72,7 @@ class FileWrite(FileSystemWriteBase):
     ) -> FileEditToolResult:
         """Helper to replace text in a file."""
 
-        absolute_path = self.workspace.validate_write(file_path)
+        absolute_path = await self.workspace.validate_write_path(file_path)
 
         if not await self._is_file_tracked(absolute_path):
             raise FileNotTrackedError(

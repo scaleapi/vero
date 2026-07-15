@@ -77,11 +77,12 @@ async def test_python_task_backend_builds_uv_command_and_resolves_cost(tmp_path:
         sys.executable,
         "run",
         "--project",
-        str(tmp_path),
+        "{harness}",
         "--with-editable",
         "{workspace}/packages/target",
     ]
     assert command[-4:] == ["--request", "{request}", "--report", "{report}"]
+    assert "{input:cases}" in command
     assert (await backend.resolve_cost(EvaluationSet(selection=AllCases()))).cases == 3
     assert (
         await backend.resolve_cost(EvaluationSet(selection=CaseRange(start=1, stop=3)))

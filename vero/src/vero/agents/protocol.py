@@ -18,6 +18,13 @@ from vero.workspace import Workspace
 
 
 @dataclass(frozen=True)
+class AgentRequirements:
+    """Workspace capabilities required by a coding-agent adapter."""
+
+    host_visible_workspace: bool = False
+
+
+@dataclass(frozen=True)
 class AgentContext:
     """Capabilities visible to a coding agent working on one proposal."""
 
@@ -30,7 +37,14 @@ class AgentContext:
 
     @property
     def project_path(self) -> Path:
-        return Path(self.workspace.project_path)
+        path = self.workspace.sandbox.host_path(self.workspace.project_path)
+        if path is None:
+            raise RuntimeError("coding agent requires a host-visible workspace path")
+        return path
+
+    @property
+    def sandbox_project_path(self) -> str:
+        return self.workspace.project_path
 
     @property
     def instructions(self) -> str | None:

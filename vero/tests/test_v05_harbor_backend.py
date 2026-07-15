@@ -21,7 +21,7 @@ from vero.evaluation import (
     EvaluationStatus,
 )
 from vero.harbor import HarborBackend, HarborBackendConfig
-from vero.sandbox import CommandResult
+from vero.sandbox import CommandResult, LocalSandbox
 
 
 def _cases(path: Path) -> Path:
@@ -72,8 +72,14 @@ def _request(selection=None) -> EvaluationRequest:
     )
 
 
-class FakeSandbox:
-    def __init__(self, trials: dict[str, list[dict]], result: CommandResult | None = None):
+class FakeSandbox(LocalSandbox):
+    def __init__(
+        self,
+        root: Path,
+        trials: dict[str, list[dict]],
+        result: CommandResult | None = None,
+    ):
+        super().__init__(root)
         self.trials = trials
         self.result = result or CommandResult("harbor output", "", 0)
         self.command = None
@@ -81,7 +87,9 @@ class FakeSandbox:
         self.timeout = None
         self.env = None
 
-    async def run(self, command, *, cwd, timeout, env):
+    async def run(self, command, cwd=None, timeout=30, env=None):
+        if not isinstance(command, list) or "--jobs-dir" not in command:
+            return await super().run(command, cwd=cwd, timeout=timeout, env=env)
         self.command = command
         self.cwd = cwd
         self.timeout = timeout
@@ -147,6 +155,7 @@ async def test_harbor_backend_resolves_canonical_case_selections(tmp_path):
 @pytest.mark.asyncio
 async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     sandbox = FakeSandbox(
+        tmp_path,
         {
             "example/alpha": [
                 {"verifier_result": {"rewards": {"reward": 1.0}}}
@@ -204,6 +213,7 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
 @pytest.mark.asyncio
 async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
     sandbox = FakeSandbox(
+        tmp_path,
         {
             "example/alpha": [
                 {"verifier_result": {"rewards": {"pass": 1.0}}},
@@ -233,6 +243,7 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
 async def test_harbor_backend_fails_when_no_requested_trials_match(tmp_path):
     secret = "sensitive-token"
     sandbox = FakeSandbox(
+        tmp_path,
         {},
         CommandResult("", f"runner failed with {secret}", 1),
     )

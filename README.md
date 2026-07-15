@@ -18,6 +18,11 @@ The target and evaluator do not need to be Python. External evaluators and
 candidate producers connect through command protocols; Python benchmarks can
 use the optional, optimizer-independent `scale-vero-tasks` package.
 
+Targets may live locally or in an isolated sandbox. VeRO keeps optimization
+state and experiment tracking on the host while running Git worktrees, producer
+commands, builds, and evaluation commands in the target sandbox. The core guide
+includes a no-bind-mount `DockerSandbox` example.
+
 ## Repository layout
 
 | Directory | Purpose |
