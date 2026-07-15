@@ -9,7 +9,12 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 
-from vero.evaluation import DisclosureLevel, EvaluationModel, MetricSelector, ObjectiveSpec
+from vero.evaluation import (
+    DisclosureLevel,
+    EvaluationModel,
+    MetricSelector,
+    ObjectiveSpec,
+)
 
 
 class AgentAccessSpec(EvaluationModel):
@@ -82,6 +87,7 @@ class HarborBuildConfig(EvaluationModel):
 
     model: str | None = None
     environment_name: str = "modal"
+    harbor_python_version: str = "3.12"
     default_index: str = "https://pypi.org/simple"
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
@@ -112,6 +118,7 @@ class HarborBuildConfig(EvaluationModel):
         "agent_import_path",
         "evaluation_set_name",
         "environment_name",
+        "harbor_python_version",
         "default_index",
         "base_image_main",
         "base_image_sidecar",
@@ -132,7 +139,11 @@ class HarborBuildConfig(EvaluationModel):
     @field_validator("harbor_requirement")
     @classmethod
     def validate_pinned_harbor(cls, value: str) -> str:
-        exact = re.search(r"(?:^|\s)harbor\s*==\s*[^*\s,;]+", value)
+        exact = re.search(
+            r"(?:^|\s)harbor(?:\[[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*\])?"
+            r"\s*==\s*[^*\s,;]+",
+            value,
+        )
         pinned_git = re.search(r"@[0-9a-f]{7,64}(?:#.*)?$", value)
         if exact is None and pinned_git is None:
             raise ValueError(
@@ -164,14 +175,11 @@ class HarborBuildConfig(EvaluationModel):
             "--n-attempts",
         }
         conflicts = [
-            argument
-            for argument in value
-            if argument.split("=", 1)[0] in controlled
+            argument for argument in value if argument.split("=", 1)[0] in controlled
         ]
         if conflicts:
             raise ValueError(
-                "extra_harbor_args override controlled flags: "
-                + ", ".join(conflicts)
+                "extra_harbor_args override controlled flags: " + ", ".join(conflicts)
             )
         return value
 
@@ -223,9 +231,7 @@ class HarborBuildConfig(EvaluationModel):
     @model_validator(mode="after")
     def validate_references(self) -> HarborBuildConfig:
         if not Path(self.task_source).exists() and "@" not in self.task_source:
-            raise ValueError(
-                "registry task_source must include an explicit version"
-            )
+            raise ValueError("registry task_source must include an explicit version")
         known = set(self.partitions)
         if self.selection_partition not in known:
             raise ValueError("selection_partition is not present in partitions")
@@ -234,7 +240,9 @@ class HarborBuildConfig(EvaluationModel):
             raise ValueError("agent_access partitions must be unique")
         unknown_access = sorted(set(access_names) - known)
         if unknown_access:
-            raise ValueError(f"agent_access references unknown partitions: {unknown_access}")
+            raise ValueError(
+                f"agent_access references unknown partitions: {unknown_access}"
+            )
         if self.selection_partition not in access_names:
             raise ValueError("selection_partition must be agent-evaluable")
         if not self.targets:
@@ -253,7 +261,9 @@ def load_harbor_build_config(path: Path | str) -> HarborBuildConfig:
     try:
         import yaml
     except ImportError as error:
-        raise RuntimeError("install scale-vero[harbor] to load Harbor builds") from error
+        raise RuntimeError(
+            "install scale-vero[harbor] to load Harbor builds"
+        ) from error
 
     config_path = Path(path).expanduser().resolve()
     value = yaml.safe_load(config_path.read_text(encoding="utf-8"))

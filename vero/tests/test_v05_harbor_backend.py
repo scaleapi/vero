@@ -72,6 +72,15 @@ def _request(selection=None) -> EvaluationRequest:
     )
 
 
+def test_backend_accepts_pinned_environment_extra(tmp_path):
+    config = _config(
+        tmp_path,
+        harbor_requirement="harbor[modal]==0.18.0",
+    )
+
+    assert config.harbor_requirement == "harbor[modal]==0.18.0"
+
+
 class FakeSandbox(LocalSandbox):
     def __init__(
         self,
@@ -97,7 +106,9 @@ class FakeSandbox(LocalSandbox):
         jobs_dir = Path(command[command.index("--jobs-dir") + 1])
         for task_name, attempts in self.trials.items():
             for index, attempt in enumerate(attempts):
-                trial_dir = jobs_dir / f"job-{index}" / f"trial-{task_name.split('/')[-1]}"
+                trial_dir = (
+                    jobs_dir / f"job-{index}" / f"trial-{task_name.split('/')[-1]}"
+                )
                 trial_dir.mkdir(parents=True, exist_ok=True)
                 payload = {
                     "task_name": task_name,
@@ -146,9 +157,7 @@ async def test_harbor_backend_resolves_canonical_case_selections(tmp_path):
 
     with pytest.raises(ValueError, match="unknown Harbor case IDs"):
         await backend.resolve_cost(
-            evaluation_set.model_copy(
-                update={"selection": CaseIds(ids=["missing"])}
-            )
+            evaluation_set.model_copy(update={"selection": CaseIds(ids=["missing"])})
         )
 
 
@@ -157,16 +166,14 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     sandbox = FakeSandbox(
         tmp_path,
         {
-            "example/alpha": [
-                {"verifier_result": {"rewards": {"reward": 1.0}}}
-            ],
+            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
             "example/beta": [
                 {
                     "verifier_result": None,
                     "exception_info": {"exception_type": "AgentCrash"},
                 }
             ],
-        }
+        },
     )
     backend = HarborBackend(_config(tmp_path))
     runtime_context = await _context(tmp_path, sandbox)
@@ -184,9 +191,11 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     ]
     assert report.cases[1].metrics["score"] == 0.0
     assert report.cases[1].errors[0].code == "harbor_no_reward"
-    assert sandbox.command[:13] == [
+    assert sandbox.command[:15] == [
         sys.executable,
         "run",
+        "--python",
+        "3.12",
         "--no-config",
         "--no-env-file",
         "--default-index",
@@ -211,6 +220,38 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_harbor_backend_matches_canonical_result_task_name(tmp_path):
+    cases_path = tmp_path / "canonical-cases.json"
+    cases_path.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "local-task",
+                    "task_name": "local-task",
+                    "result_task_name": "org/local-task",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    sandbox = FakeSandbox(
+        tmp_path,
+        {"org/local-task": [{"verifier_result": {"rewards": {"reward": 1.0}}}]},
+    )
+    backend = HarborBackend(_config(tmp_path, cases_path=str(cases_path)))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(),
+    )
+
+    assert report.status == EvaluationStatus.SUCCESS
+    assert report.metrics["score"] == 1.0
+    assert report.cases[0].output["task_name"] == "local-task"
+    assert report.cases[0].output["result_task_name"] == "org/local-task"
+
+
+@pytest.mark.asyncio
 async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
     sandbox = FakeSandbox(
         tmp_path,
@@ -222,7 +263,7 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
                     "exception_info": {"exception_type": "TimeoutError"},
                 },
             ]
-        }
+        },
     )
     backend = HarborBackend(_config(tmp_path, aggregate_attempts="mean"))
 

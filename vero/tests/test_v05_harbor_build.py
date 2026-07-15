@@ -48,7 +48,14 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
     target = _target_repo(tmp_path / "target")
     task_source = tmp_path / "protected-tasks"
     task_source.mkdir()
-    (task_source / "task.toml").write_text('[task]\nname="inner"\n')
+    task_names = ["task-a", "task-b", "task-c", "task-d", "task-e", "task-hidden"]
+    for task_name in task_names:
+        task = task_source / task_name
+        task.mkdir()
+        (task / "task.toml").write_text(
+            f'[task]\nname="org/{task_name}"\n',
+            encoding="utf-8",
+        )
     values = {
         "name": 'org/optimize-"program"',
         "description": "Improve the program",
@@ -57,8 +64,8 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
         "agent_import_path": "target.agent:Agent",
         "harbor_requirement": "harbor==0.1.17",
         "partitions": {
-            "validation": ["org/task-a", "org/task-b", "org/task-c", "org/task-d", "org/task-e"],
-            "test": ["org/task-hidden"],
+            "validation": ["task-a", "task-b", "task-c", "task-d", "task-e"],
+            "test": ["task-hidden"],
         },
         "agent_access": [
             AgentAccessSpec(
@@ -76,6 +83,13 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
 
 
 def test_build_config_requires_pins_and_valid_partition_references(tmp_path):
+    assert (
+        _config(
+            tmp_path / "modal",
+            harbor_requirement="harbor[modal]==0.18.0",
+        ).harbor_requirement
+        == "harbor[modal]==0.18.0"
+    )
     with pytest.raises(ValidationError, match="pin an exact version"):
         _config(tmp_path / "unpinned", harbor_requirement="harbor>=0.1")
     with pytest.raises(ValidationError, match="selection_partition"):
@@ -137,7 +151,16 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["targets"][0]["backend_id"] == "harbor-test"
     assert serve["targets"][0]["reward_scale"] == 1.0
     assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
-    assert (output / "environment/sidecar/task-source/task.toml").is_file()
+    assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
+    test_case = json.loads(
+        (output / "environment/sidecar/cases/test.jsonl").read_text(encoding="utf-8")
+    )
+    assert test_case == {
+        "id": "task-hidden",
+        "task_name": "task-hidden",
+        "result_task_name": "org/task-hidden",
+    }
+    assert (output / "environment/sidecar/task-source/task-hidden/task.toml").is_file()
     assert not (output / "environment/agent-seed/protected-tasks").exists()
     instruction = (output / "instruction.md").read_text(encoding="utf-8")
     assert "--backend harbor-validation" in instruction
@@ -168,6 +191,17 @@ def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
         )
     assert not output.exists()
 
+    monkeypatch.setenv("MISSING_TEST_SECRET", "configured")
+    compile_harbor_task(
+        config,
+        output,
+        vero_root=Path(__file__).parents[1],
+    )
+    task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    assert task["environment"]["env"] == {
+        "MISSING_TEST_SECRET": "${MISSING_TEST_SECRET}"
+    }
+
     safe = config.model_copy(update={"secrets": []})
     with pytest.raises(ValueError, match="overlaps protected source"):
         compile_harbor_task(
@@ -195,4 +229,4 @@ def test_compiler_uses_published_version_outside_a_source_checkout(
 
     assert not (output / "environment/vero").exists()
     dockerfile = (output / "environment/Dockerfile").read_text(encoding="utf-8")
-    assert 'scale-vero[harbor]==0.5.0' in dockerfile
+    assert "scale-vero[harbor]==0.5.0" in dockerfile

@@ -20,6 +20,8 @@ COPY sidecar/task-source /opt/task-source
 {% endif %}
 
 RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
-RUN git config --system --add safe.directory '*'
+RUN git config --system --add safe.directory /opt/agent-baseline \
+    && git config --system --add safe.directory /work/agent \
+    && git config --system --add safe.directory /work/agent/.git
 
 WORKDIR /opt

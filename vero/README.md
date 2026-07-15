@@ -334,7 +334,7 @@ backend = HarborBackend(HarborBackendConfig(
     task_source="org/terminal-benchmark@1.0",
     agent_import_path="my_program.agent:Agent",
     cases_path=str(Path("../harbor-cases.jsonl").resolve()),
-    harbor_requirement="harbor==0.1.17",
+    harbor_requirement="harbor[modal]==0.18.0",
     evaluation_set_name="terminal-benchmark",
     partition="test",
     passthrough_environment=["ANTHROPIC_API_KEY"],
@@ -385,7 +385,7 @@ name: example/optimize-agent
 agent_repo: ../my-program
 task_source: example/terminal-benchmark@1.0
 agent_import_path: my_program.agent:Agent
-harbor_requirement: harbor==0.1.17
+harbor_requirement: harbor[modal]==0.18.0
 
 partitions:
   validation: [example/task-a, example/task-b, example/task-c,

@@ -48,6 +48,7 @@ class HarborCase(EvaluationModel):
 
     id: str
     task_name: str
+    result_task_name: str | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
     @field_validator("id", "task_name")
@@ -56,6 +57,17 @@ class HarborCase(EvaluationModel):
         if not value.strip():
             raise ValueError("Harbor case identity must not be empty")
         return value
+
+    @field_validator("result_task_name")
+    @classmethod
+    def validate_result_identity(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Harbor result task identity must not be empty")
+        return value
+
+    @property
+    def expected_result_task_name(self) -> str:
+        return self.result_task_name or self.task_name
 
 
 class HarborBackendConfig(EvaluationModel):
@@ -69,6 +81,7 @@ class HarborBackendConfig(EvaluationModel):
     partition: str | None = None
     model: str | None = None
     environment_name: str = "modal"
+    python_version: str = "3.12"
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
     reward_key: str | None = None
@@ -96,6 +109,7 @@ class HarborBackendConfig(EvaluationModel):
         "harbor_requirement",
         "evaluation_set_name",
         "environment_name",
+        "python_version",
         "default_index",
     )
     @classmethod
@@ -114,7 +128,11 @@ class HarborBackendConfig(EvaluationModel):
     @field_validator("harbor_requirement")
     @classmethod
     def validate_pinned_harbor_requirement(cls, value: str) -> str:
-        exact = re.search(r"(?:^|\s)harbor\s*==\s*[^*\s,;]+", value)
+        exact = re.search(
+            r"(?:^|\s)harbor(?:\[[A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*\])?"
+            r"\s*==\s*[^*\s,;]+",
+            value,
+        )
         pinned_git = re.search(r"@[0-9a-f]{7,64}(?:#.*)?$", value)
         if exact is None and pinned_git is None:
             raise ValueError(
@@ -171,9 +189,7 @@ class HarborBackendConfig(EvaluationModel):
             "--n-attempts",
         }
         conflicts = [
-            argument
-            for argument in value
-            if argument.split("=", 1)[0] in controlled
+            argument for argument in value if argument.split("=", 1)[0] in controlled
         ]
         if conflicts:
             raise ValueError(
@@ -209,7 +225,9 @@ class HarborBackend:
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("Harbor case IDs must be unique")
         if len(task_names) != len(set(task_names)):
-            raise ValueError("Harbor task names must be unique within an evaluation set")
+            raise ValueError(
+                "Harbor task names must be unique within an evaluation set"
+            )
 
     @property
     def provenance(self) -> BackendProvenance:
@@ -321,6 +339,8 @@ class HarborBackend:
         command = [
             self.config.uv_executable,
             "run",
+            "--python",
+            self.config.python_version,
             "--no-config",
             "--no-env-file",
             "--default-index",
@@ -471,7 +491,10 @@ class HarborBackend:
             }
             for attempt in attempts
         ]
-        output: dict[str, JsonValue] = {"task_name": case.task_name}
+        output: dict[str, JsonValue] = {
+            "task_name": case.task_name,
+            "result_task_name": case.expected_result_task_name,
+        }
         if self.config.expose_attempt_detail:
             output["attempts"] = attempt_detail
 
@@ -578,7 +601,9 @@ class HarborBackend:
         request: EvaluationRequest,
     ) -> EvaluationReport:
         self.validate_request(request)
-        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        target_root = context.workspace.sandbox.host_path(
+            context.workspace.project_path
+        )
         if target_root is not None:
             target_root = target_root.resolve()
             cases_path = Path(self.config.cases_path).resolve()
@@ -588,8 +613,12 @@ class HarborBackend:
         local_task_source = source.exists()
         if local_task_source and target_root is not None:
             resolved_source = source.resolve()
-            if resolved_source == target_root or resolved_source.is_relative_to(target_root):
-                raise ValueError("local Harbor tasks must live outside the editable target")
+            if resolved_source == target_root or resolved_source.is_relative_to(
+                target_root
+            ):
+                raise ValueError(
+                    "local Harbor tasks must live outside the editable target"
+                )
 
         cases = self._selected_cases(request.evaluation_set)
         capture_dir = context.artifact_dir / "harbor"
@@ -642,7 +671,7 @@ class HarborBackend:
         ]
 
         groups = self._trial_groups(jobs_dir)
-        requested_tasks = {case.task_name for case in cases}
+        requested_tasks = {case.expected_result_task_name for case in cases}
         matching_tasks = requested_tasks & set(groups)
         if not matching_tasks:
             code = "harbor_timeout" if result.returncode == -1 else "harbor_no_trials"
@@ -666,7 +695,10 @@ class HarborBackend:
         case_results: list[CaseResult] = []
         scores: list[float] = []
         for case in cases:
-            case_result, score = self._case_result(case, groups.get(case.task_name, []))
+            case_result, score = self._case_result(
+                case,
+                groups.get(case.expected_result_task_name, []),
+            )
             case_results.append(case_result)
             scores.append(score)
             await context.case_store.save(case_result)

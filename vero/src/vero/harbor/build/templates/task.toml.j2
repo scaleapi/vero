@@ -13,3 +13,10 @@ timeout_sec = {{ verifier_timeout }}
 
 [environment]
 build_timeout_sec = 1800
+{% if secrets %}
+
+[environment.env]
+{% for secret in secrets %}
+{{ secret }} = "${{ '{' }}{{ secret }}{{ '}' }}"
+{% endfor %}
+{% endif %}

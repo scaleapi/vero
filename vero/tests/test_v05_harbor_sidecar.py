@@ -119,7 +119,11 @@ class StubBackend:
 
     async def evaluate(self, *, context, request):
         selection = request.evaluation_set.selection
-        ids = selection.ids if isinstance(selection, CaseIds) else [f"case-{i}" for i in range(8)]
+        ids = (
+            selection.ids
+            if isinstance(selection, CaseIds)
+            else [f"case-{i}" for i in range(8)]
+        )
         cases = [
             CaseResult(
                 case_id=case_id,
@@ -310,13 +314,56 @@ def _init_repo(path: Path, content: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path):
+async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path, monkeypatch):
     agent_repo = tmp_path / "agent repo"
     trusted_repo = tmp_path / "trusted"
     agent_commit = _init_repo(agent_repo, "candidate")
     _init_repo(trusted_repo, "baseline")
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(trusted_repo))
+    system_config = tmp_path / "trusted-system-gitconfig"
+    _git(
+        tmp_path,
+        "config",
+        "--file",
+        str(system_config),
+        "--add",
+        "safe.directory",
+        str(trusted_repo),
+    )
+    _git(
+        tmp_path,
+        "config",
+        "--file",
+        str(system_config),
+        "--add",
+        "safe.directory",
+        str(agent_repo),
+    )
+    _git(
+        tmp_path,
+        "config",
+        "--file",
+        str(system_config),
+        "--add",
+        "safe.directory",
+        str(agent_repo / ".git"),
+    )
+    original_run = sandbox.run
+
+    async def run_as_different_owner(command, cwd=None, timeout=30, env=None):
+        return await original_run(
+            command,
+            cwd=cwd,
+            timeout=timeout,
+            env={
+                **(env or {}),
+                "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+                "GIT_CONFIG_SYSTEM": str(system_config),
+            },
+        )
+
+    monkeypatch.setattr(sandbox, "run", run_as_different_owner)
     transport = GitCandidateTransport(
         workspace=workspace,
         agent_repo_path=str(agent_repo),
@@ -328,9 +375,15 @@ async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path):
     assert candidate == repeated
     assert candidate.version == agent_commit
     assert candidate.description == "program candidate"
-    assert _git(
-        trusted_repo,
-        "rev-parse",
-        f"refs/vero/candidates/{agent_commit}",
-    ) == agent_commit
-    assert _git(trusted_repo, "for-each-ref", "--format=%(refname)", "refs/vero/incoming") == ""
+    assert (
+        _git(
+            trusted_repo,
+            "rev-parse",
+            f"refs/vero/candidates/{agent_commit}",
+        )
+        == agent_commit
+    )
+    assert (
+        _git(trusted_repo, "for-each-ref", "--format=%(refname)", "refs/vero/incoming")
+        == ""
+    )

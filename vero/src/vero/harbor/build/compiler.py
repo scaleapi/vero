@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tomllib
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 
@@ -78,9 +79,7 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
             if member.issym() or member.islnk():
                 link = PurePosixPath(member.linkname)
                 if link.is_absolute() or ".." in link.parts:
-                    raise ValueError(
-                        f"unsafe link in Git archive: {member.linkname!r}"
-                    )
+                    raise ValueError(f"unsafe link in Git archive: {member.linkname!r}")
         archive.extractall(destination)
 
 
@@ -144,12 +143,54 @@ def _prepare_baseline_repo(
     return git("rev-parse", "HEAD")
 
 
+def _local_result_task_name(task_source: Path, selector: str) -> str:
+    root = task_source.resolve()
+    task_dir = (root / selector).resolve()
+    if task_dir.parent != root:
+        raise ValueError(
+            f"local Harbor task selector {selector!r} must name a direct child directory"
+        )
+    config_path = task_dir / "task.toml"
+    if not config_path.is_file():
+        raise ValueError(f"local Harbor task selector {selector!r} has no task.toml")
+    try:
+        value = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        task_name = value["task"]["name"]
+    except (KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(
+            f"local Harbor task selector {selector!r} has no canonical task.name"
+        ) from error
+    if not isinstance(task_name, str) or not task_name.strip():
+        raise ValueError(
+            f"local Harbor task selector {selector!r} has no canonical task.name"
+        )
+    return task_name
+
+
 def _write_cases(config: HarborBuildConfig, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
+    task_source = Path(config.task_source)
+    local = task_source.exists()
     for partition, tasks in config.partitions.items():
         path = destination / f"{partition}.jsonl"
         lines = [
-            json.dumps({"id": task, "task_name": task}, ensure_ascii=False)
+            json.dumps(
+                {
+                    "id": task,
+                    "task_name": task,
+                    **(
+                        {
+                            "result_task_name": _local_result_task_name(
+                                task_source,
+                                task,
+                            )
+                        }
+                        if local
+                        else {}
+                    ),
+                },
+                ensure_ascii=False,
+            )
             for task in tasks
         ]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -173,6 +214,7 @@ def _deployment_config(
             "partition": partition,
             "model": config.model,
             "environment_name": config.environment_name,
+            "python_version": config.harbor_python_version,
             "default_index": config.default_index,
             "n_attempts": config.n_attempts,
             "max_retries": config.max_retries,
@@ -265,7 +307,9 @@ def _deployment_config(
         "budgets": budgets,
         "selection": {
             "mode": config.reward_mode,
-            "backend_id": selection_backend if config.reward_mode == "auto_best" else None,
+            "backend_id": selection_backend
+            if config.reward_mode == "auto_best"
+            else None,
             "evaluation_set": (
                 selection_set.model_dump(mode="json")
                 if config.reward_mode == "auto_best"
@@ -296,7 +340,9 @@ def _render(template: str, destination: Path, **context) -> None:
     try:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ImportError as error:
-        raise RuntimeError("install scale-vero[harbor] to compile Harbor tasks") from error
+        raise RuntimeError(
+            "install scale-vero[harbor] to compile Harbor tasks"
+        ) from error
     environment = Environment(
         loader=FileSystemLoader(str(_TEMPLATES)),
         undefined=StrictUndefined,
@@ -323,9 +369,7 @@ def compile_harbor_task(
     source_root = (vero_root or Path(__file__).parents[4]).resolve()
     use_local_vero = _is_vero_source(source_root)
     if vero_root is not None and not use_local_vero:
-        raise ValueError(
-            f"vero_root {source_root} is not a scale-vero source checkout"
-        )
+        raise ValueError(f"vero_root {source_root} is not a scale-vero source checkout")
     protected = [Path(config.agent_repo).resolve()]
     if use_local_vero:
         protected.append(source_root)
@@ -408,8 +452,7 @@ def compile_harbor_task(
         ),
         "exhaust_budget": config.instruct_exhaust_budget,
         "verifier_timeout": (
-            config.verifier_timeout_seconds
-            or max(1, int(config.timeout_seconds))
+            config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),
     }
     _render("task.toml.j2", output / "task.toml", **context)

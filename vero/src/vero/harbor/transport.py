@@ -62,6 +62,14 @@ class GitCandidateTransport:
         cwd: str,
         timeout: int,
     ) -> str:
+        if command[0] != "git":
+            raise ValueError("candidate transport only permits Git commands")
+        command = [
+            "git",
+            "-c",
+            f"safe.directory={cwd}",
+            *command[1:],
+        ]
         result = await self.workspace.sandbox.run(
             command,
             cwd=cwd,
@@ -69,9 +77,7 @@ class GitCandidateTransport:
             env={
                 "PATH": os.defpath,
                 "LANG": "C.UTF-8",
-                "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_CONFIG_GLOBAL": "/dev/null",
-                "GIT_CONFIG_SYSTEM": "/dev/null",
             },
         )
         if result.returncode != 0:
@@ -94,7 +100,9 @@ class GitCandidateTransport:
             timeout=30,
         )
         if self._OBJECT_ID.fullmatch(value) is None:
-            raise CandidateTransferError("source ref did not resolve to a Git object ID")
+            raise CandidateTransferError(
+                "source ref did not resolve to a Git object ID"
+            )
         return value
 
     async def trusted_candidate(self, version: str | None = None) -> Candidate:
@@ -136,7 +144,9 @@ class GitCandidateTransport:
         try:
             created_at = datetime.fromisoformat(timestamp)
         except ValueError as error:
-            raise CandidateTransferError("imported commit has an invalid timestamp") from error
+            raise CandidateTransferError(
+                "imported commit has an invalid timestamp"
+            ) from error
         parent_id = parents.split()[0] if parents.strip() else None
         return Candidate(
             id=object_id,
@@ -167,6 +177,10 @@ class GitCandidateTransport:
             await self._run(
                 [
                     "git",
+                    "-c",
+                    f"safe.directory={self.agent_repo_path}",
+                    "-c",
+                    f"safe.directory={self.agent_repo_path}/.git",
                     "-c",
                     "core.hooksPath=/dev/null",
                     "-c",
@@ -204,6 +218,8 @@ class GitCandidateTransport:
                 await self.workspace.sandbox.run(
                     [
                         "git",
+                        "-c",
+                        f"safe.directory={self.workspace.root}",
                         "-C",
                         self.workspace.root,
                         "update-ref",
@@ -215,9 +231,7 @@ class GitCandidateTransport:
                     env={
                         "PATH": os.defpath,
                         "LANG": "C.UTF-8",
-                        "GIT_CONFIG_NOSYSTEM": "1",
                         "GIT_CONFIG_GLOBAL": "/dev/null",
-                        "GIT_CONFIG_SYSTEM": "/dev/null",
                     },
                 )
             except Exception:
