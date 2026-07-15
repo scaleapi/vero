@@ -96,7 +96,11 @@ class BudgetLedger:
             snapshot = dict(self._budgets)
             snapshot[key] = updated
             if self.path is not None:
-                _atomic_write_json(self.path, self._serialize(snapshot))
+                await asyncio.to_thread(
+                    _atomic_write_json,
+                    self.path,
+                    self._serialize(snapshot),
+                )
             self._budgets = snapshot
             return updated
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.optimization import (
+    CandidateChange,
     CandidateProposal,
     CommandCandidateProducer,
     CommandCandidateProducerConfig,
@@ -194,6 +196,38 @@ class ReusedIdStrategy:
         ]
 
 
+class FailingBatchProducer:
+    def __init__(self, sibling_started):
+        self.sibling_started = sibling_started
+
+    async def produce(self, **_kwargs):
+        await self.sibling_started.wait()
+        raise RuntimeError("producer failed")
+
+
+class CancelledBatchProducer:
+    def __init__(self):
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def produce(self, **_kwargs):
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return CandidateChange()
+
+
+class FailingBatchStrategy:
+    async def propose(self, _context):
+        return [
+            CandidateProposal(id="failing-proposal", producer_id="failing"),
+            CandidateProposal(id="cancelled-proposal", producer_id="cancelled"),
+        ]
+
+
 @pytest.mark.asyncio
 async def test_optimizer_rejects_strategy_candidate_id_reuse(tmp_path: Path):
     target = tmp_path / "target"
@@ -260,3 +294,82 @@ Path(sys.argv[1]).write_text(json.dumps({
 
     with pytest.raises(ValueError, match="reused an existing candidate ID"):
         await optimizer.run()
+
+
+@pytest.mark.asyncio
+async def test_optimizer_cancels_sibling_producers_and_cleans_worktrees(
+    tmp_path: Path,
+):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("slow\n")
+    initialize_repository(target)
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    harness_script = harness / "evaluate.py"
+    harness_script.write_text(
+        """
+import json
+import sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(json.dumps({
+    "schema_version": 1,
+    "status": "success",
+    "metrics": {"score": 1.0},
+}))
+"""
+    )
+    sandbox = await LocalSandbox.create(root=tmp_path)
+    workspace = await GitWorkspace.from_path(sandbox, str(target))
+    engine = EvaluationEngine(
+        evaluator=Evaluator(
+            workspace=workspace,
+            session_dir=tmp_path / "session",
+        ),
+        backends=BackendRegistry(
+            {
+                "command": CommandBackend(
+                    CommandBackendConfig(
+                        harness_root=str(harness),
+                        command=[sys.executable, str(harness_script), "{report}"],
+                    )
+                )
+            }
+        ),
+        database=EvaluationDatabase(id="session"),
+    )
+    cancelled = CancelledBatchProducer()
+    optimizer = Optimizer(
+        workspace=workspace,
+        engine=engine,
+        backend_id="command",
+        evaluation_set=EvaluationSet(),
+        objective=ObjectiveSpec(
+            selector=MetricSelector(metric="score"),
+            direction="maximize",
+        ),
+        strategy=FailingBatchStrategy(),
+        producers={
+            "failing": FailingBatchProducer(cancelled.started),
+            "cancelled": cancelled,
+        },
+        max_candidates=2,
+        max_concurrency=2,
+    )
+
+    with pytest.raises(ExceptionGroup) as captured:
+        await optimizer.run()
+
+    assert any(
+        isinstance(error, RuntimeError) and str(error) == "producer failed"
+        for error in captured.value.exceptions
+    )
+    assert cancelled.cancelled
+    worktrees = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=target,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert worktrees.count("worktree ") == 1

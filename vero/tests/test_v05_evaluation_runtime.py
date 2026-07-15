@@ -35,6 +35,7 @@ from vero.evaluation import (
     ObjectiveResult,
     ObjectiveSpec,
 )
+from vero.evaluation import persistence
 from vero.filesystem import AccessType, Filesystem
 from vero.workspace import Workspace
 
@@ -235,6 +236,30 @@ def test_running_manifest_is_not_a_completed_record(tmp_path: Path):
 
     with pytest.raises(ValueError, match="invalid evaluation manifest"):
         store.load()
+
+
+def test_atomic_json_write_closes_descriptor_when_fdopen_fails(
+    tmp_path: Path,
+    monkeypatch,
+):
+    closed = []
+    real_close = persistence.os.close
+
+    def fail_fdopen(*_args, **_kwargs):
+        raise RuntimeError("fdopen failed")
+
+    def tracked_close(descriptor):
+        closed.append(descriptor)
+        real_close(descriptor)
+
+    monkeypatch.setattr(persistence.os, "fdopen", fail_fdopen)
+    monkeypatch.setattr(persistence.os, "close", tracked_close)
+
+    with pytest.raises(RuntimeError, match="fdopen failed"):
+        persistence._atomic_write_json(tmp_path / "value.json", {"value": 1})
+
+    assert len(closed) == 1
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_database_round_trips_schema_one_and_distinguishes_empty_filter(tmp_path: Path):

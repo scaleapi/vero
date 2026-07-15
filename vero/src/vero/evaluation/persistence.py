@@ -50,6 +50,10 @@ def _atomic_write_json(path: Path, value: Any) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
     except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
         temporary_path.unlink(missing_ok=True)
         raise
 

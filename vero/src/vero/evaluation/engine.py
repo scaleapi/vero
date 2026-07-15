@@ -113,7 +113,10 @@ class EvaluationEngine:
         async with self._record_lock:
             self.database.add_evaluation(record)
             if self.database_path is not None:
-                self.database.save_to_file(self.database_path)
+                await asyncio.to_thread(
+                    self.database.save_to_file,
+                    self.database_path,
+                )
         for listener in self.listeners:
             try:
                 result = listener(record)

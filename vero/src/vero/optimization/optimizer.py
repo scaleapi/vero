@@ -404,9 +404,11 @@ class Optimizer:
                         parent=parent,
                     )
 
-            outcomes = await asyncio.gather(
-                *(produce(proposal) for proposal in proposals)
-            )
+            async with asyncio.TaskGroup() as group:
+                production_tasks = [
+                    group.create_task(produce(proposal)) for proposal in proposals
+                ]
+            outcomes = [task.result() for task in production_tasks]
             meaningful_outcomes = [
                 outcome for outcome in outcomes if outcome.candidates
             ]
@@ -432,9 +434,11 @@ class Optimizer:
                 async with semaphore:
                     return await self.evaluate_candidate(candidate)
 
-            evaluations.extend(
-                await asyncio.gather(*(evaluate(candidate) for candidate in produced))
-            )
+            async with asyncio.TaskGroup() as group:
+                evaluation_tasks = [
+                    group.create_task(evaluate(candidate)) for candidate in produced
+                ]
+            evaluations.extend(task.result() for task in evaluation_tasks)
 
         return OptimizationResult(
             baseline=baseline_record,
