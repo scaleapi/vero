@@ -1,0 +1,50 @@
+# Optimize the program
+
+Improve the program in `/work/agent` so it scores as highly as possible on the
+hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
+budget, and final candidate selection.
+
+## Workflow
+
+1. Inspect and edit `/work/agent`.
+2. Commit each candidate with Git.
+3. Evaluate the current commit on the selection set:
+
+   ```bash
+   vero harbor eval \
+     --backend {{ selection_backend }} \
+     --evaluation-set {{ evaluation_set_name }} \
+     --partition {{ selection_partition }}
+   ```
+
+4. Use `vero harbor status` to inspect allowed evaluation sets and remaining
+   budgets.
+{% if submit_enabled %}
+5. When finished, nominate the chosen commit with `vero harbor submit`.
+{% else %}
+5. VeRO automatically pools your measurements, re-scores a shortlist with the
+   trusted evaluator, and selects the best candidate. The unmodified baseline is
+   used as a floor, so a regression is not shipped.
+{% endif %}
+
+{% if multifidelity %}
+## Screen cheaply, then confirm
+
+Use `--start 0 --stop N` or repeated `--case-id ID` flags to evaluate a stable
+subset while screening ideas. Confirm survivors on the full selection set.
+Aggregate-only subsets must include at least {{ minimum_subset_cases }} cases;
+this prevents singleton aggregates from exposing individual hidden results.
+
+{% endif %}
+## Rules
+
+- Only the sidecar evaluates candidates. Evaluation cases and final targets are
+  not mounted into this container.
+- Evaluation budgets are finite and are charged by backend and evaluation set.
+- Scores may be noisy; compare candidates on the same selection whenever possible.
+{% if exhaust_budget %}
+- Unspent evaluation budget is wasted. Use remaining calls to re-measure the
+  strongest candidate or try another plausible change.
+{% endif %}
+- Paths marked read-only are guardrails. The authoritative evaluator lives in the
+  sidecar, outside the candidate repository.

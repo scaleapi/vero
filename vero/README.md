@@ -203,8 +203,10 @@ collates verifier rewards into schema-v1 case results, zero-fills dead attempts
 for mean aggregation, and preserves Harbor output as evaluation artifacts. The
 pinned Harbor overlay protects against a candidate changing its dependency pin;
 it is not a process isolation boundary because candidate code still runs inside
-the nested Harbor process. Use Harbor's external verifier/sidecar deployment
-when the candidate itself is adversarial.
+the nested Harbor process. The sidecar isolates the optimizer process and keeps
+budget/finalization state trusted, but it does not by itself contain malicious
+target code loaded by the nested runner. When targets are adversarial, execute
+them in a separate sandbox that cannot read verifier data or credentials.
 
 For optimization-as-a-Harbor-task, `EvaluationSidecar` exposes the same engine
 across a process boundary. `EvaluationAccessPolicy` maps each backend and
@@ -231,6 +233,40 @@ The optimizer uses `vero harbor eval`, `status`, and `submit` through
 `VERO_EVAL_URL`. Harbor's trusted verifier uses `vero harbor finalize` with the
 root-readable token file and writes only the final reward mapping to
 `reward.json`.
+
+The built-in Harbor compiler supplies that factory and container topology for
+nested Harbor evaluations. A minimal build file looks like:
+
+```yaml
+name: example/optimize-agent
+agent_repo: ../my-program
+task_source: example/terminal-benchmark@1.0
+agent_import_path: my_program.agent:Agent
+harbor_requirement: harbor==0.1.17
+
+partitions:
+  validation: [example/task-a, example/task-b, example/task-c,
+               example/task-d, example/task-e]
+  test: [example/task-hidden]
+
+agent_access:
+  - partition: validation
+    disclosure: aggregate
+    total_runs: 10
+    total_cases: 50
+    max_cases_per_run: 5
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+```
+
+Compile it with `vero harbor build --config build.yaml --output task`, then run
+the generated task with Harbor. The test partition and task source exist only in
+the sidecar image; the optimizer container receives the editable baseline, the
+agent-facing CLI, and approved result projections. Exact Harbor and registry
+task-source versions are required so the measurement substrate is reproducible.
 
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,

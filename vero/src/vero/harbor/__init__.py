@@ -1,6 +1,14 @@
 """Harbor adapters for canonical VeRO evaluation backends."""
 
 from vero.harbor.backend import HarborBackend, HarborBackendConfig, HarborCase
+from vero.harbor.build import (
+    AgentAccessSpec,
+    HarborBuildConfig,
+    VerificationTargetSpec,
+    compile_harbor_task,
+    load_harbor_build_config,
+)
+from vero.harbor.deployment import HarborDeploymentConfig, build_harbor_components
 from vero.harbor.sidecar import (
     EvaluationAccessError,
     EvaluationAccessPolicy,
@@ -29,6 +37,10 @@ __all__ = [
     "HarborBackend",
     "HarborBackendConfig",
     "HarborCase",
+    "HarborDeploymentConfig",
+    "AgentAccessSpec",
+    "HarborBuildConfig",
+    "VerificationTargetSpec",
     "CandidateTransferError",
     "CandidateTransport",
     "EvaluationAccessError",
@@ -46,4 +58,7 @@ __all__ = [
     "VerificationResult",
     "VerificationSelection",
     "VerificationTarget",
+    "build_harbor_components",
+    "compile_harbor_task",
+    "load_harbor_build_config",
 ]

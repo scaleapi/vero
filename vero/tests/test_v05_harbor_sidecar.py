@@ -256,6 +256,17 @@ async def test_sidecar_fails_closed_before_transfer_or_budget(tmp_path):
                 update={"evaluation_set": EvaluationSet(name="hidden")}
             )
         )
+    with pytest.raises(EvaluationAccessError, match="not agent-controllable"):
+        await sidecar.evaluate(
+            SidecarEvaluationRequest(
+                backend_id="primary",
+                evaluation_set=EvaluationSet(
+                    name="benchmark",
+                    partition="validation",
+                ),
+                parameters={"harbor_model_override": "untrusted-model"},
+            )
+        )
 
     assert transport.calls == []
     budget = ledger.get("primary", too_small.evaluation_set)

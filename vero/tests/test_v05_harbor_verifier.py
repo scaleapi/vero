@@ -268,3 +268,37 @@ async def test_verifier_floors_rewards_when_no_candidate_exists(tmp_path):
     assert result.candidate is None
     assert result.rewards == {"reward": 0.0}
     assert "selection" in result.errors
+
+
+@pytest.mark.asyncio
+async def test_verifier_transforms_minimization_objective_into_higher_reward(tmp_path):
+    candidate = _candidate("submitted")
+    minimize = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="minimize",
+    )
+    engine = FakeEngine({("submitted", "latency"): 2.5})
+    (tmp_path / "submission.json").write_text(
+        Submission(candidate=candidate).model_dump_json(),
+        encoding="utf-8",
+    )
+    verifier = CanonicalVerifier(
+        engine=engine,
+        selection=VerificationSelection(mode="submit", baseline_floor=False),
+        targets=[
+            VerificationTarget(
+                reward_key="latency_reward",
+                backend_id="backend",
+                evaluation_set=EvaluationSet(name="latency"),
+                objective=minimize,
+                reward_scale=-1.0,
+                max_attempts=1,
+            )
+        ],
+        admin_volume=tmp_path,
+        score_baseline=False,
+    )
+
+    result = await verifier.finalize()
+
+    assert result.rewards == {"latency_reward": -2.5}

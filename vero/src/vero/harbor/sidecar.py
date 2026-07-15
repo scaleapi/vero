@@ -44,6 +44,9 @@ class EvaluationAccessPolicy(EvaluationModel):
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     agent_evaluable: bool = True
     min_aggregate_cases: int = Field(default=5, ge=1)
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    allowed_parameters: list[str] = Field(default_factory=list)
+    limits: EvaluationLimits | None = None
 
     @field_validator("backend_id", "evaluation_set_name")
     @classmethod
@@ -62,6 +65,22 @@ class EvaluationAccessPolicy(EvaluationModel):
     @property
     def key(self) -> tuple[str, str, str | None]:
         return (self.backend_id, self.evaluation_set_name, self.partition)
+
+    @model_validator(mode="after")
+    def validate_parameters(self) -> EvaluationAccessPolicy:
+        if any(not name.strip() for name in self.parameters):
+            raise ValueError("fixed evaluation parameter names must not be empty")
+        if len(self.allowed_parameters) != len(set(self.allowed_parameters)):
+            raise ValueError("allowed evaluation parameters must be unique")
+        if any(not name.strip() for name in self.allowed_parameters):
+            raise ValueError("allowed evaluation parameter names must not be empty")
+        overlap = set(self.parameters) & set(self.allowed_parameters)
+        if overlap:
+            raise ValueError(
+                "fixed and agent-controlled parameters overlap: "
+                + ", ".join(sorted(overlap))
+            )
+        return self
 
 
 class SidecarEvaluationRequest(EvaluationModel):
@@ -119,6 +138,8 @@ class EvaluationAccessStatus(EvaluationModel):
     partition: str | None
     disclosure: DisclosureLevel
     min_aggregate_cases: int
+    allowed_parameters: list[str]
+    limits: EvaluationLimits | None = None
     budget: EvaluationBudget | None = None
 
 
@@ -218,13 +239,22 @@ class EvaluationSidecar:
         request: SidecarEvaluationRequest,
     ) -> SidecarEvaluationResult:
         policy = self._policy(request.backend_id, request.evaluation_set)
+        unknown_parameters = sorted(
+            set(request.parameters) - set(policy.allowed_parameters)
+        )
+        if unknown_parameters:
+            raise EvaluationAccessError(
+                "evaluation parameters are not agent-controllable: "
+                + ", ".join(unknown_parameters)
+            )
         await self._enforce_aggregate_floor(policy, request.evaluation_set)
         candidate = await self.candidate_transport.import_candidate(request.version)
+        parameters = {**policy.parameters, **request.parameters}
         canonical_request = EvaluationRequest(
             candidate=candidate,
             evaluation_set=request.evaluation_set,
-            parameters=request.parameters,
-            limits=request.limits,
+            parameters=parameters,
+            limits=policy.limits or request.limits,
             seed=request.seed,
         )
         result = await self.engine.evaluate(
@@ -276,6 +306,8 @@ class EvaluationSidecar:
                     partition=policy.partition,
                     disclosure=policy.disclosure,
                     min_aggregate_cases=policy.min_aggregate_cases,
+                    allowed_parameters=list(policy.allowed_parameters),
+                    limits=policy.limits,
                     budget=budget,
                 )
             )

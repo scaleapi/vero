@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import shutil
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -72,6 +76,75 @@ def _parameters(values: tuple[str, ...]) -> dict:
 @click.group()
 def harbor() -> None:
     """Run VeRO across a Harbor sidecar boundary."""
+
+
+@harbor.command("build")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+)
+@click.option(
+    "--output",
+    required=True,
+    type=click.Path(path_type=Path, file_okay=False),
+)
+def build_command(config_path, output):
+    """Compile a build YAML into a runnable Harbor task directory."""
+    from vero.harbor.build import compile_harbor_task, load_harbor_build_config
+
+    compiled = compile_harbor_task(
+        load_harbor_build_config(config_path),
+        output,
+    )
+    click.echo(f"Compiled Harbor task: {compiled}")
+
+
+@harbor.command(
+    "run",
+    context_settings={"ignore_unknown_options": True},
+)
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+)
+@click.option("--agent", required=True, help="Harbor optimizer agent.")
+@click.option("--model", help="Model used by the optimizer agent.")
+@click.option("--environment", default="docker", show_default=True)
+@click.argument("extra", nargs=-1, type=click.UNPROCESSED)
+def run_command(config_path, agent, model, environment, extra):
+    """Compile to a temporary directory and invoke `harbor run`."""
+    from vero.harbor.build import compile_harbor_task, load_harbor_build_config
+
+    uvx = shutil.which("uvx")
+    if uvx is None:
+        raise click.ClickException("uvx is required to run a compiled Harbor task")
+    with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
+        task = compile_harbor_task(
+            load_harbor_build_config(config_path),
+            Path(temporary) / "task",
+        )
+        command = [
+            uvx,
+            "harbor",
+            "run",
+            "-p",
+            str(task),
+            "-a",
+            agent,
+            "-e",
+            environment,
+        ]
+        if model is not None:
+            command.extend(["-m", model])
+        command.extend(extra)
+        click.echo(shlex.join(command))
+        completed = subprocess.run(command)
+        if completed.returncode:
+            raise SystemExit(completed.returncode)
 
 
 @harbor.command("serve")

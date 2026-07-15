@@ -1,0 +1,25 @@
+# Trusted evaluation sidecar: baselines, cases, task source, ledger, and secrets.
+FROM {{ base_image_sidecar }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+{% if use_local_vero %}
+COPY vero /opt/vero
+RUN uv pip install --system "/opt/vero[harbor]"
+{% else %}
+RUN uv pip install --system "{{ vero_requirement }}"
+{% endif %}
+
+COPY agent-baseline /opt/agent-baseline
+COPY sidecar/cases /opt/cases
+COPY sidecar/serve.json /opt/serve.json
+{% if local_task_source %}
+COPY sidecar/task-source /opt/task-source
+{% endif %}
+
+RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
+RUN git config --system --add safe.directory '*'
+
+WORKDIR /opt

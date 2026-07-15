@@ -175,9 +175,15 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     ]
     assert report.cases[1].metrics["score"] == 0.0
     assert report.cases[1].errors[0].code == "harbor_no_reward"
-    assert sandbox.command[:7] == [
+    assert sandbox.command[:13] == [
         sys.executable,
         "run",
+        "--no-config",
+        "--no-env-file",
+        "--default-index",
+        "https://pypi.org/simple",
+        "--index-strategy",
+        "first-index",
         "--project",
         str(tmp_path / "target"),
         "--with",

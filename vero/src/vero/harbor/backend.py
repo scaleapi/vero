@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
@@ -76,6 +77,7 @@ class HarborBackendConfig(EvaluationModel):
     feedback_max_bytes: int = Field(default=3000, ge=0)
     expose_attempt_detail: bool = False
     uv_executable: str = Field(default_factory=_default_uv)
+    default_index: str = "https://pypi.org/simple"
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
     extra_args: list[str] = Field(default_factory=list)
@@ -93,11 +95,23 @@ class HarborBackendConfig(EvaluationModel):
         "harbor_requirement",
         "evaluation_set_name",
         "environment_name",
+        "default_index",
     )
     @classmethod
     def validate_identity(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Harbor backend identity must not be empty")
+        return value
+
+    @field_validator("harbor_requirement")
+    @classmethod
+    def validate_pinned_harbor_requirement(cls, value: str) -> str:
+        exact = re.search(r"(?:^|\s)harbor\s*==\s*[^*\s,;]+", value)
+        pinned_git = re.search(r"@[0-9a-f]{7,64}(?:#.*)?$", value)
+        if exact is None and pinned_git is None:
+            raise ValueError(
+                "harbor_requirement must pin an exact version or Git commit"
+            )
         return value
 
     @field_validator("partition", "model", "reward_key")
@@ -302,6 +316,12 @@ class HarborBackend:
         command = [
             self.config.uv_executable,
             "run",
+            "--no-config",
+            "--no-env-file",
+            "--default-index",
+            self.config.default_index,
+            "--index-strategy",
+            "first-index",
             "--project",
             workspace,
             "--with",

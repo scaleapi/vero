@@ -1,0 +1,438 @@
+"""Compile a trusted VeRO configuration into a runnable Harbor task."""
+
+from __future__ import annotations
+
+import io
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
+import tarfile
+from importlib.metadata import version as distribution_version
+from pathlib import Path, PurePosixPath
+
+from vero.evaluation import EvaluationBudget, EvaluationLimits, EvaluationSet
+from vero.harbor.build.config import HarborBuildConfig
+
+logger = logging.getLogger(__name__)
+
+_TEMPLATES = Path(__file__).parent / "templates"
+_VERO_COPY = ("pyproject.toml", "README.md", "uv.lock", "src")
+
+VERO_DIR = "/opt/vero"
+TRUSTED_REPO = "/opt/agent-baseline"
+AGENT_REPO = "/work/agent"
+CASES_DIR = "/opt/cases"
+TASK_SOURCE_DIR = "/opt/task-source"
+SERVE_CONFIG = "/opt/serve.json"
+AGENT_VOLUME = "/state/agent-results"
+ADMIN_VOLUME = "/state/admin"
+SESSION_DIR = "/state/admin/session"
+TOKEN_PATH = "/state/token/admin.token"
+SESSION_ID = "trial"
+
+
+def _backend_id(partition: str) -> str:
+    return f"harbor-{partition}"
+
+
+def _is_vero_source(vero_root: Path) -> bool:
+    return (vero_root / "pyproject.toml").is_file() and (
+        vero_root / "src/vero"
+    ).is_dir()
+
+
+def _copy_vero_source(vero_root: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for name in _VERO_COPY:
+        source = vero_root / name
+        if not source.exists():
+            continue
+        if source.is_dir():
+            shutil.copytree(source, destination / name, dirs_exist_ok=True)
+        else:
+            shutil.copy2(source, destination / name)
+
+
+def _rewrite_vero_path(pyproject: Path) -> None:
+    if not pyproject.exists():
+        return
+    original = pyproject.read_text(encoding="utf-8")
+    rewritten = re.sub(
+        r'(scale-vero\s*=\s*\{[^}]*?path\s*=\s*")[^"]*(")',
+        rf"\g<1>{VERO_DIR}\g<2>",
+        original,
+    )
+    if rewritten != original:
+        pyproject.write_text(rewritten, encoding="utf-8")
+
+
+def _safe_extract_tar(payload: bytes, destination: Path) -> None:
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+        for member in archive.getmembers():
+            path = PurePosixPath(member.name)
+            if path.is_absolute() or ".." in path.parts:
+                raise ValueError(f"unsafe path in Git archive: {member.name!r}")
+            if member.issym() or member.islnk():
+                link = PurePosixPath(member.linkname)
+                if link.is_absolute() or ".." in link.parts:
+                    raise ValueError(
+                        f"unsafe link in Git archive: {member.linkname!r}"
+                    )
+        archive.extractall(destination)
+
+
+def _prepare_baseline_repo(
+    source: Path,
+    destination: Path,
+    *,
+    rewrite_vero_path: bool,
+) -> str:
+    destination.mkdir(parents=True, exist_ok=True)
+    repository = subprocess.run(
+        ["git", "-C", str(source), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+    )
+    if repository.returncode == 0:
+        root = Path(repository.stdout.strip())
+        relative = source.relative_to(root)
+        treeish = "HEAD" if str(relative) == "." else f"HEAD:{relative.as_posix()}"
+        archived = subprocess.run(
+            ["git", "-C", str(root), "archive", "--format=tar", treeish],
+            capture_output=True,
+        )
+        if archived.returncode != 0:
+            raise RuntimeError(
+                "git archive failed: "
+                + archived.stderr.decode("utf-8", errors="replace").strip()
+            )
+        _safe_extract_tar(archived.stdout, destination)
+    else:
+        shutil.copytree(
+            source,
+            destination,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git"),
+        )
+    if rewrite_vero_path:
+        _rewrite_vero_path(destination / "pyproject.toml")
+
+    def git(*arguments: str) -> str:
+        result = subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=vero",
+                "-c",
+                "user.email=vero@localhost",
+                "-C",
+                str(destination),
+                *arguments,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.strip()
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "baseline")
+    return git("rev-parse", "HEAD")
+
+
+def _write_cases(config: HarborBuildConfig, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for partition, tasks in config.partitions.items():
+        path = destination / f"{partition}.jsonl"
+        lines = [
+            json.dumps({"id": task, "task_name": task}, ensure_ascii=False)
+            for task in tasks
+        ]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _deployment_config(
+    config: HarborBuildConfig,
+    *,
+    baseline_version: str,
+    local_task_source: bool,
+) -> dict:
+    task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
+    backends = {}
+    for partition in config.partitions:
+        backends[_backend_id(partition)] = {
+            "task_source": task_source,
+            "agent_import_path": config.agent_import_path,
+            "cases_path": f"{CASES_DIR}/{partition}.jsonl",
+            "harbor_requirement": config.harbor_requirement,
+            "evaluation_set_name": config.evaluation_set_name,
+            "partition": partition,
+            "model": config.model,
+            "environment_name": config.environment_name,
+            "default_index": config.default_index,
+            "n_attempts": config.n_attempts,
+            "max_retries": config.max_retries,
+            "reward_key": config.reward_key,
+            "aggregate_attempts": config.aggregate_attempts,
+            "feedback_transcripts": config.feedback_transcripts,
+            "feedback_max_bytes": config.feedback_max_bytes,
+            "expose_attempt_detail": config.expose_attempt_detail,
+            "passthrough_environment": config.secrets,
+            "extra_args": config.extra_harbor_args,
+        }
+
+    limits = EvaluationLimits(
+        timeout_seconds=config.timeout_seconds,
+        case_timeout_seconds=config.case_timeout_seconds,
+        max_concurrency=config.max_concurrency,
+    )
+    policies = []
+    budgets = []
+    for access in config.agent_access:
+        backend_id = _backend_id(access.partition)
+        evaluation_set = EvaluationSet(
+            name=config.evaluation_set_name,
+            partition=access.partition,
+        )
+        policies.append(
+            {
+                "backend_id": backend_id,
+                "evaluation_set_name": config.evaluation_set_name,
+                "partition": access.partition,
+                "objective": config.objective.model_dump(mode="json"),
+                "disclosure": access.disclosure.value,
+                "agent_evaluable": True,
+                "min_aggregate_cases": access.min_aggregate_cases,
+                "parameters": {},
+                "allowed_parameters": [],
+                "limits": limits.model_dump(mode="json"),
+            }
+        )
+        if (
+            access.total_runs is not None
+            or access.total_cases is not None
+            or access.max_cases_per_run is not None
+        ):
+            budgets.append(
+                EvaluationBudget(
+                    backend_id=backend_id,
+                    evaluation_set_key=evaluation_set.budget_key(backend_id),
+                    total_runs=access.total_runs,
+                    total_cases=access.total_cases,
+                    max_cases_per_run=access.max_cases_per_run,
+                ).model_dump(mode="json")
+            )
+
+    selection_backend = _backend_id(config.selection_partition)
+    selection_set = EvaluationSet(
+        name=config.evaluation_set_name,
+        partition=config.selection_partition,
+    )
+    targets = []
+    for target in config.targets:
+        parameters = dict(target.parameters)
+        if target.model is not None:
+            parameters["harbor_model_override"] = target.model
+        targets.append(
+            {
+                "reward_key": target.reward_key,
+                "backend_id": _backend_id(target.partition),
+                "evaluation_set": EvaluationSet(
+                    name=config.evaluation_set_name,
+                    partition=target.partition,
+                ).model_dump(mode="json"),
+                "objective": config.objective.model_dump(mode="json"),
+                "parameters": parameters,
+                "limits": limits.model_dump(mode="json"),
+                "failure_value": target.failure_value,
+                "reward_scale": (
+                    1.0 if config.objective.direction == "maximize" else -1.0
+                ),
+                "max_attempts": target.max_attempts,
+            }
+        )
+    return {
+        "repo_path": TRUSTED_REPO,
+        "agent_repo_path": AGENT_REPO,
+        "session_dir": SESSION_DIR,
+        "session_id": SESSION_ID,
+        "backends": backends,
+        "access_policies": policies,
+        "budgets": budgets,
+        "selection": {
+            "mode": config.reward_mode,
+            "backend_id": selection_backend if config.reward_mode == "auto_best" else None,
+            "evaluation_set": (
+                selection_set.model_dump(mode="json")
+                if config.reward_mode == "auto_best"
+                else None
+            ),
+            "objective": (
+                config.objective.model_dump(mode="json")
+                if config.reward_mode == "auto_best"
+                else None
+            ),
+            "baseline_version": baseline_version,
+            "parameters": {},
+            "limits": limits.model_dump(mode="json"),
+            "rescore_top_k": config.rescore_top_k,
+            "rescore_attempts": config.rescore_attempts,
+            "baseline_floor": config.baseline_floor,
+        },
+        "targets": targets,
+        "agent_volume": AGENT_VOLUME,
+        "admin_volume": ADMIN_VOLUME,
+        "submit_enabled": config.reward_mode == "submit",
+        "score_baseline": config.score_baseline,
+        "use_evaluation_copies": config.use_evaluation_copies,
+    }
+
+
+def _render(template: str, destination: Path, **context) -> None:
+    try:
+        from jinja2 import Environment, FileSystemLoader, StrictUndefined
+    except ImportError as error:
+        raise RuntimeError("install scale-vero[harbor] to compile Harbor tasks") from error
+    environment = Environment(
+        loader=FileSystemLoader(str(_TEMPLATES)),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+        trim_blocks=True,
+        lstrip_blocks=True,
+        autoescape=False,
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        environment.get_template(template).render(**context),
+        encoding="utf-8",
+    )
+
+
+def compile_harbor_task(
+    config: HarborBuildConfig,
+    output_dir: Path | str,
+    *,
+    vero_root: Path | None = None,
+) -> Path:
+    """Emit a self-contained Harbor task directory from validated config."""
+    output = Path(output_dir).expanduser().resolve()
+    source_root = (vero_root or Path(__file__).parents[4]).resolve()
+    use_local_vero = _is_vero_source(source_root)
+    if vero_root is not None and not use_local_vero:
+        raise ValueError(
+            f"vero_root {source_root} is not a scale-vero source checkout"
+        )
+    protected = [Path(config.agent_repo).resolve()]
+    if use_local_vero:
+        protected.append(source_root)
+    task_source_path = Path(config.task_source)
+    if task_source_path.exists():
+        protected.append(task_source_path.resolve())
+    for path in protected:
+        if output == path or output.is_relative_to(path) or path.is_relative_to(output):
+            raise ValueError(
+                f"output directory {output} overlaps protected source {path}"
+            )
+    if os.environ.get("VERO_SKIP_SECRET_CHECK") is None:
+        missing = [name for name in config.secrets if not os.environ.get(name)]
+        if missing:
+            raise ValueError(
+                "declared sidecar secrets are missing: " + ", ".join(missing)
+            )
+    if output.exists():
+        shutil.rmtree(output)
+    environment_dir = output / "environment"
+    sidecar_dir = environment_dir / "sidecar"
+    environment_dir.mkdir(parents=True)
+    if use_local_vero:
+        _copy_vero_source(source_root, environment_dir / "vero")
+
+    baseline = _prepare_baseline_repo(
+        Path(config.agent_repo),
+        environment_dir / "agent-baseline",
+        rewrite_vero_path=use_local_vero,
+    )
+    shutil.copytree(
+        environment_dir / "agent-baseline",
+        environment_dir / "agent-seed",
+    )
+    _write_cases(config, sidecar_dir / "cases")
+    local_task_source = Path(config.task_source).exists()
+    if local_task_source:
+        shutil.copytree(
+            Path(config.task_source),
+            sidecar_dir / "task-source",
+        )
+    deployment = _deployment_config(
+        config,
+        baseline_version=baseline,
+        local_task_source=local_task_source,
+    )
+    (sidecar_dir / "serve.json").write_text(
+        json.dumps(deployment, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    selection_access = next(
+        access
+        for access in config.agent_access
+        if access.partition == config.selection_partition
+    )
+    context = {
+        "name_toml": json.dumps(config.name, ensure_ascii=False),
+        "description_toml": json.dumps(config.description, ensure_ascii=False),
+        "base_image_main": config.base_image_main,
+        "base_image_sidecar": config.base_image_sidecar,
+        "use_local_vero": use_local_vero,
+        "vero_requirement": (
+            None
+            if use_local_vero
+            else f"scale-vero[harbor]=={distribution_version('scale-vero')}"
+        ),
+        "secrets": config.secrets,
+        "read_only_paths": config.read_only_paths,
+        "local_task_source": local_task_source,
+        "selection_backend": _backend_id(config.selection_partition),
+        "evaluation_set_name": config.evaluation_set_name,
+        "selection_partition": config.selection_partition,
+        "submit_enabled": config.reward_mode == "submit",
+        "multifidelity": config.instruct_multifidelity,
+        "minimum_subset_cases": (
+            selection_access.min_aggregate_cases
+            if selection_access.disclosure == "aggregate"
+            else 1
+        ),
+        "exhaust_budget": config.instruct_exhaust_budget,
+        "verifier_timeout": (
+            config.verifier_timeout_seconds
+            or max(1, int(config.timeout_seconds))
+        ),
+    }
+    _render("task.toml.j2", output / "task.toml", **context)
+    _render("instruction.md.j2", output / "instruction.md", **context)
+    _render("Dockerfile.main.j2", environment_dir / "Dockerfile", **context)
+    _render(
+        "Dockerfile.sidecar.j2",
+        sidecar_dir / "Dockerfile",
+        **context,
+    )
+    _render(
+        "docker-compose.yaml.j2",
+        environment_dir / "docker-compose.yaml",
+        **context,
+    )
+    _render("seed.sh.j2", environment_dir / "main/seed.sh", **context)
+    _render("test.sh.j2", output / "tests/test.sh", **context)
+    _render("solve.sh.j2", output / "solution/solve.sh", **context)
+    for script in (
+        environment_dir / "main/seed.sh",
+        output / "tests/test.sh",
+        output / "solution/solve.sh",
+    ):
+        script.chmod(0o755)
+    logger.info("Compiled Harbor task at %s from baseline %s", output, baseline)
+    return output

@@ -79,7 +79,7 @@ class GitCandidateTransport:
             raise CandidateTransferError(message)
         return result.stdout.strip()
 
-    async def _resolve_source(self, version: str) -> str:
+    async def _resolve_ref(self, version: str, *, repository: str) -> str:
         value = await self._run(
             [
                 "git",
@@ -90,12 +90,27 @@ class GitCandidateTransport:
                 "--end-of-options",
                 f"{version}^{{commit}}",
             ],
-            cwd=self.agent_repo_path,
+            cwd=repository,
             timeout=30,
         )
         if self._OBJECT_ID.fullmatch(value) is None:
             raise CandidateTransferError("source ref did not resolve to a Git object ID")
         return value
+
+    async def trusted_candidate(self, version: str | None = None) -> Candidate:
+        """Resolve an existing commit already owned by the trusted workspace."""
+        source_version = version or "HEAD"
+        if not source_version.strip() or "\x00" in source_version:
+            raise CandidateTransferError("candidate version must not be empty")
+        object_id = await self._resolve_ref(
+            source_version,
+            repository=self.workspace.root,
+        )
+        cached = self._candidates.get(object_id)
+        if cached is None:
+            cached = await self._candidate_metadata(object_id)
+            self._candidates[object_id] = cached
+        return cached
 
     async def _candidate_metadata(self, object_id: str) -> Candidate:
         value = await self._run(
@@ -136,7 +151,10 @@ class GitCandidateTransport:
         source_version = version or "HEAD"
         if not source_version.strip() or "\x00" in source_version:
             raise CandidateTransferError("candidate version must not be empty")
-        object_id = await self._resolve_source(source_version)
+        object_id = await self._resolve_ref(
+            source_version,
+            repository=self.agent_repo_path,
+        )
         cached = self._candidates.get(object_id)
         if cached is not None:
             return cached

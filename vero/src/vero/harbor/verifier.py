@@ -40,7 +40,11 @@ class VerificationTarget(EvaluationModel):
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
     failure_value: float = 0.0
-    max_attempts: int = Field(default=2, ge=1)
+    reward_scale: float = 1.0
+    reward_offset: float = 0.0
+    # Keep one attempt by default for adversarial candidates. Retrying an
+    # unmeasurable candidate-controlled run creates a one-sided re-roll.
+    max_attempts: int = Field(default=1, ge=1)
 
     @field_validator("reward_key", "backend_id")
     @classmethod
@@ -49,11 +53,11 @@ class VerificationTarget(EvaluationModel):
             raise ValueError("verification target identity must not be empty")
         return value
 
-    @field_validator("failure_value")
+    @field_validator("failure_value", "reward_scale", "reward_offset")
     @classmethod
     def validate_failure_value(cls, value: float) -> float:
         if not math.isfinite(value):
-            raise ValueError("verification failure_value must be finite")
+            raise ValueError("verification reward values must be finite")
         return value
 
 
@@ -65,8 +69,10 @@ class VerificationSelection(EvaluationModel):
     evaluation_set: EvaluationSet | None = None
     objective: ObjectiveSpec | None = None
     baseline_candidate: Candidate | None = None
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
     rescore_top_k: int = Field(default=3, ge=1)
-    rescore_attempts: int = Field(default=2, ge=1)
+    rescore_attempts: int = Field(default=1, ge=1)
     baseline_floor: bool = True
 
     @model_validator(mode="after")
@@ -190,13 +196,12 @@ class CanonicalVerifier:
         pooled: list[tuple[float, Candidate]] = []
         for group in by_content.values():
             values = [record.objective.value for record in group]
-            representative = max(
+            representative = min(
                 (record.request.candidate for record in group),
-                key=lambda candidate: (candidate.created_at, candidate.id),
+                key=lambda candidate: candidate.id,
             )
             pooled.append((statistics.fmean(values), representative))
         pooled.sort(key=lambda item: item[1].id)
-        pooled.sort(key=lambda item: item[1].created_at, reverse=True)
         pooled.sort(
             key=lambda item: item[0],
             reverse=self.selection.objective.direction == "maximize",
@@ -260,8 +265,8 @@ class CanonicalVerifier:
             backend_id=self.selection.backend_id,
             evaluation_set=self.selection.evaluation_set,
             objective=self.selection.objective,
-            parameters={},
-            limits=EvaluationLimits(),
+            parameters=self.selection.parameters,
+            limits=self.selection.limits,
             max_attempts=self.selection.rescore_attempts,
         )
 
@@ -290,10 +295,6 @@ class CanonicalVerifier:
             raise NoCandidateError("no shortlisted candidate survived admin re-scoring")
         assert self.selection.objective is not None
         rescored.sort(key=lambda record: record.request.candidate.id)
-        rescored.sort(
-            key=lambda record: record.request.candidate.created_at,
-            reverse=True,
-        )
         rescored.sort(
             key=lambda record: record.objective.value,
             reverse=self.selection.objective.direction == "maximize",
@@ -329,7 +330,11 @@ class CanonicalVerifier:
         if record is None:
             return target.failure_value, None, error
         assert record.objective is not None and record.objective.value is not None
-        return float(record.objective.value), record.id, None
+        reward = (
+            target.reward_scale * float(record.objective.value)
+            + target.reward_offset
+        )
+        return reward, record.id, None
 
     async def _finalize(self) -> VerificationResult:
         try:

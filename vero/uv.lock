@@ -4287,6 +4287,8 @@ evaluate = [
 ]
 harbor = [
     { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 jupyter = [
@@ -4347,6 +4349,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'harbor'", specifier = ">=0.110" },
     { name = "haikunator", marker = "extra == 'evaluate'", specifier = ">=2.1.0" },
     { name = "haikunator", marker = "extra == 'optimize'", specifier = ">=2.1.0" },
+    { name = "jinja2", marker = "extra == 'harbor'", specifier = ">=3.1.6" },
     { name = "jinja2", marker = "extra == 'optimize'", specifier = ">=3.1.6" },
     { name = "jupyter", marker = "extra == 'jupyter'", specifier = ">=1.1.1" },
     { name = "jupyterlab", marker = "extra == 'notebook'", specifier = ">=4.5.2" },
@@ -4359,6 +4362,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.7" },
     { name = "pypdf", marker = "extra == 'optimize'", specifier = ">=6.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
+    { name = "pyyaml", marker = "extra == 'harbor'", specifier = ">=6.0.2" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "rich", marker = "extra == 'evaluate'", specifier = ">=13.9.4" },
     { name = "rich", marker = "extra == 'optimize'", specifier = ">=13.9.4" },
