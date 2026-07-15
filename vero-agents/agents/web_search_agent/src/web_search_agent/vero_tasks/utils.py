@@ -6,8 +6,7 @@ from enum import Enum
 from typing import Literal, NamedTuple
 
 from pydantic import BaseModel
-from vero.core.db.result import TaskOutput
-from vero.core.evaluation import EvaluationParameters, TaskParameters
+from vero_tasks import TaskContext, TaskOutput, TaskParameters
 
 from agents import Agent, Runner, RunResult
 from agents.exceptions import MaxTurnsExceeded
@@ -240,7 +239,7 @@ async def grade_answer(
 
 async def run_inference(
     task: dict,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """
     Run inference on a single task using the web search agent.

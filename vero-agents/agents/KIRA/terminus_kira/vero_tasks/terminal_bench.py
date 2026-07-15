@@ -10,9 +10,7 @@ Evaluation is batched: all tasks in a batch are run as a single Harbor Job.
 from __future__ import annotations
 
 from harbor import Job
-from vero.core.db.result import TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import create_task
+from vero_tasks import TaskContext, TaskResult, create_task
 
 from terminus_kira.vero_tasks.utils import (
     TerminalBenchTask,
@@ -25,7 +23,7 @@ terminal_bench_2 = create_task("terminal_bench_2.0", required_env_vars=["LITELLM
 
 
 @terminal_bench_2("run_inference")
-async def run_inference(task: TerminalBenchTask, evaluation_parameters: EvaluationParameters):
+async def run_inference(task: TerminalBenchTask, evaluation_parameters: TaskContext):
     """No-op — Harbor handles inference and evaluation together."""
     return None
 
@@ -34,7 +32,7 @@ async def run_inference(task: TerminalBenchTask, evaluation_parameters: Evaluati
 async def run_evaluation(
     tasks: list[TerminalBenchTask],
     outputs: list[None],
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> list[TaskResult]:
     """Run a Harbor Job for a batch of Terminal-Bench tasks.
 

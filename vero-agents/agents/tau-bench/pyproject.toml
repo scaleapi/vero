@@ -15,6 +15,7 @@ dependencies = [
     "mistralai>=0.4.0",
     "numpy>=1.26.4",
     "openai>=1.13.3",
+    "scale-vero-tasks>=0.1.0",
     "tenacity>=8.3.0",
     "termcolor>=2.4.0",
     "tqdm>=4.66.0",
@@ -28,9 +29,4 @@ license = {text = "MIT"}
 distribution = false
 
 [tool.uv.sources]
-scale-vero = { path = "../../../vero", editable = true }
-
-[dependency-groups]
-dev = [
-    "scale-vero[evaluate]",
-]
+scale-vero-tasks = { path = "../../../vero-tasks", editable = true }

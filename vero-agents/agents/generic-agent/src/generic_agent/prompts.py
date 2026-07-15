@@ -1,12 +1,10 @@
 from collections.abc import Callable
 from typing import Any
 
-from vero.core.resource import resource
 
 PromptFormatter = Callable[..., str]
 
 
-@resource(namespace="gsm8k", name="prompt")
 def get_gsm8k_prompt(question: str, **kwargs: Any) -> str:
     """Format prompt for GSM8K benchmark."""
     GSM8K_DEFAULT_PROMPT = """{question}
@@ -14,7 +12,6 @@ Generate an answer to this question. At the end, provide the final answer in the
     return GSM8K_DEFAULT_PROMPT.format(question=question)
 
 
-@resource(namespace="math", name="prompt")
 def get_math_prompt(question: str, **kwargs: Any) -> str:
     """Format prompt for MATH benchmark."""
     MATH_DEFAULT_PROMPT = """{question}
@@ -22,14 +19,12 @@ Please generate a solution for the problem. At the end, provide the final answer
     return MATH_DEFAULT_PROMPT.format(question=question)
 
 
-@resource(namespace="hotpotqa", name="prompt")
 def get_hotpotqa_prompt(question: str, context: str, **kwargs: Any) -> str:
     """Format prompt for HotpotQA benchmark."""
     HOTPOTQA_DEFAULT_PROMPT = "Context: {context}\n\nQuestion: {question}\n\nAnswer:"
     return HOTPOTQA_DEFAULT_PROMPT.format(question=question, context=context)
 
 
-@resource(namespace="drop", name="prompt")
 def get_drop_prompt(question: str, passage: str, **kwargs: Any) -> str:
     """Format prompt for DROP benchmark."""
     DROP_DEFAULT_PROMPT = """Given a question and a passage, please answer the question.
@@ -40,7 +35,6 @@ The relevant passage: {passage}"""
     return DROP_DEFAULT_PROMPT.format(question=question, passage=passage)
 
 
-@resource(namespace="humaneval", name="prompt")
 def get_humaneval_prompt(question: str, **kwargs: Any) -> str:
     """Format prompt for HumanEval benchmark."""
     HUMANEVAL_DEFAULT_PROMPT = """{question}
@@ -48,14 +42,12 @@ Generate an answer to this question, without any additional test cases."""
     return HUMANEVAL_DEFAULT_PROMPT.format(question=question)
 
 
-@resource(namespace="mbpp", name="prompt")
 def get_mbpp_prompt(question: str, test_list: str, **kwargs: Any) -> str:
     """Format prompt for MBPP benchmark."""
     MBPP_DEFAULT_PROMPT = """You are an expert Python programmer, and here is your task: {question} Your code should pass these tests:\n\n{test_list}\n"""
     return MBPP_DEFAULT_PROMPT.format(question=question, test_list=test_list)
 
 
-@resource(namespace="gpqa", name="prompt")
 def get_gpqa_prompt(question: str, options: str, **kwargs: Any) -> str:
     """Format prompt for GPQA benchmark."""
     GPQA_TEMPLATE = """Answer the following multiple choice question. The last line of your response should be of the following format: ‘Answer: $LETTER’ (without quotes) where LETTER is one of ABCD. Think step by step before answering.
@@ -72,7 +64,6 @@ D) {D}"""
     return GPQA_TEMPLATE.format(**kwargs)
 
 
-@resource(namespace="gaia", name="prompt")
 def get_gaia_prompt(question: str, file_path: str | None = None, **kwargs: Any) -> str:
     """
     Format prompt for GAIA benchmark.
@@ -94,7 +85,6 @@ def get_gaia_prompt(question: str, file_path: str | None = None, **kwargs: Any) 
     return prompt
 
 
-@resource(namespace="default", name="prompt")
 def get_default_prompt(**kwargs: Any) -> str:
     """
     Default formatting function.

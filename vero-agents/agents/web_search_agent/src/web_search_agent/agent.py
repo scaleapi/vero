@@ -1,6 +1,5 @@
 import os
 
-from vero.core.resource import resource
 
 from agents import Agent, ModelSettings, Runner, RunResult, function_tool
 from agents.extensions.models.litellm_model import LitellmModel
@@ -14,17 +13,14 @@ default_model = LitellmModel(
 )
 
 
-@resource(namespace="web_search_agent", name="search_tool_description")
 def search_tool_description() -> str | None:
     return None
 
 
-@resource(namespace="web_search_agent", name="wikipedia_page_tool_description")
 def wikipedia_page_tool_description() -> str | None:
     return None
 
 
-@resource(namespace="web_search_agent", name="wikipedia_search_tool")
 @function_tool(strict_mode=True, description_override=search_tool_description())
 async def wikipedia_search_tool(query: str, results: int = 10) -> list[str]:
     """
@@ -41,7 +37,6 @@ async def wikipedia_search_tool(query: str, results: int = 10) -> list[str]:
     return search_results
 
 
-@resource(namespace="web_search_agent", name="get_wikipedia_page_tool")
 @function_tool(strict_mode=True, description_override=wikipedia_page_tool_description())
 async def get_wikipedia_page_tool(page_title: str) -> str:
     """
@@ -67,7 +62,6 @@ def get_temperature(model: str | LitellmModel) -> float | None:
     return 0.0
 
 
-@resource(namespace="web_search_agent", name="get_system_prompt")
 def get_system_prompt(input: str) -> str:
     """Get the system prompt for the web search agent."""
 

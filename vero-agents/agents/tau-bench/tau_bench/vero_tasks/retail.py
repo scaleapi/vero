@@ -3,9 +3,7 @@
 This file defines the evaluation tasks and dataset generation for vero optimization.
 """
 
-from vero.core.db.result import TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import create_task
+from vero_tasks import TaskContext, TaskResult, create_task
 
 from tau_bench.run import run
 from tau_bench.types import EnvRunResult
@@ -15,7 +13,7 @@ retail_task = create_task("retail", required_env_vars=["LITELLM_BASE_URL", "LITE
 
 
 @retail_task("run_inference")
-async def run_inference(task: TauBenchTask, evaluation_parameters: EvaluationParameters):
+async def run_inference(task: TauBenchTask, evaluation_parameters: TaskContext):
     """Run inference on a single task. For TauBench, we use canonical inference + evaluation logic defined under run.py"""
     return None
 
@@ -24,7 +22,7 @@ async def run_inference(task: TauBenchTask, evaluation_parameters: EvaluationPar
 async def run_evaluation(
     tasks: list[TauBenchTask],
     outputs: list[None],  # run_inferences doesn't return anything
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult:
     """Evaluate the inference output for a single task.
 

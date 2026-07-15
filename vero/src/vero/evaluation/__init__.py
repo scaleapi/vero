@@ -66,6 +66,7 @@ from vero.evaluation.persistence import (
     EvaluationStore,
     RunningEvaluationManifest,
 )
+from vero.evaluation.python_task import PythonTaskBackend, PythonTaskBackendConfig
 
 __all__ = [
     "AllCases",
@@ -117,6 +118,8 @@ __all__ = [
     "MetricSelector",
     "ObjectiveResult",
     "ObjectiveSpec",
+    "PythonTaskBackend",
+    "PythonTaskBackendConfig",
     "RetryPolicy",
     "RunningEvaluationManifest",
     "UnknownBackendError",

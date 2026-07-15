@@ -3,7 +3,6 @@
 import json
 from typing import TYPE_CHECKING, Any
 
-from vero.core.resource import resource
 
 from .base import Agent
 
@@ -11,7 +10,6 @@ if TYPE_CHECKING:
     from tau_bench.types import RunConfig
 
 
-@resource(namespace="tau-bench", name="system-prompt")
 def get_wiki(wiki: str, agent_strategy: str | None = None) -> str:
     return wiki
 

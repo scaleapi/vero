@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.14.2",
     "openai-agents[litellm]>=0.6.4",
+    "scale-vero-tasks>=0.1.0",
 ]
 
 [project.scripts]
@@ -26,12 +27,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
-scale-vero = { path = "../../../vero", editable = true }
+scale-vero-tasks = { path = "../../../vero-tasks", editable = true }
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-json-report>=1.5.0",
-    "scale-vero",
 ]

@@ -1,6 +1,12 @@
-# Vero Agents
+# VeRO benchmark targets
 
-A collection of Python-based agent implementations optimizable with [VeRO](../vero/). Each agent is a self-contained `uv` package with its own dependencies and evaluation tasks.
+This directory is VeRO's benchmark corpus: Python programs used as optimization
+targets in the paper and in end-to-end tests. Agents are one important kind of
+target program, but they are not part of the optimizer runtime.
+
+Each target is a self-contained uv project. It depends on the narrow
+[`scale-vero-tasks`](../vero-tasks/) protocol for Python evaluation ergonomics,
+not on `scale-vero` itself.
 
 ## Agents
 
@@ -25,24 +31,26 @@ vero-agents/
 └── pyproject.toml
 ```
 
-Each agent contains:
-- `pyproject.toml` with dependencies and a dev dependency on `scale-vero`
-- Source code under `src/<agent_name>/` or `<agent_name>/`
-- A `vero_tasks/` module defining evaluation tasks for VeRO
+Each target contains:
 
-## Adding a New Agent
+- `pyproject.toml` with its own runtime dependencies and `scale-vero-tasks`
+- Source code under `src/<agent_name>/` or `<agent_name>/`
+- A `vero_tasks/` module defining inference and scoring functions
+
+## Adding a new target
 
 1. Create a directory under `agents/`
 2. Initialize a `uv` package with `pyproject.toml`
-3. Add `scale-vero` as a dev dependency:
+3. Add the task protocol:
+
    ```toml
-   [dependency-groups]
-   dev = ["scale-vero[evaluate]"]
+   [project]
+   dependencies = ["scale-vero-tasks>=0.1.0"]
 
    [tool.uv.sources]
-   scale-vero = { path = "../../../vero", editable = true }
+   scale-vero-tasks = { path = "../../../vero-tasks", editable = true }
    ```
-4. Create a `vero_tasks/` module with inference and evaluation functions (see `vero init tasks`)
+4. Create a `vero_tasks/` module with inference and evaluation functions
 5. Register the task in `vero-benchmarking/src/vero_benchmarking/tasks/`
 
 ## Running Evaluations

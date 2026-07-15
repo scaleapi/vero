@@ -1,8 +1,6 @@
 """HLE benchmark task definition."""
 
-from vero.core.db.result import TaskOutput, TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import TaskT, create_task
+from vero_tasks import TaskContext, TaskOutput, TaskResult, TaskT, create_task
 
 from .utils import TaskType, grade_answer, run_inference
 
@@ -12,7 +10,7 @@ hle_task = create_task("hle", required_env_vars=["LITELLM_BASE_URL", "LITELLM_AP
 @hle_task("run_inference")
 async def hle_run_inference(
     task: TaskT,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """Run inference on a single HLE task."""
     return await run_inference(task, evaluation_parameters)
@@ -22,7 +20,7 @@ async def hle_run_inference(
 async def evaluate_sample(
     task: TaskT,
     output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult | Exception:
     """Evaluate the inference output for a single HLE task."""
     score, feedback = await grade_answer(

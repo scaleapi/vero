@@ -17,8 +17,7 @@ from harbor.models.registry import RemoteRegistryInfo
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig
 from harbor.models.trial.result import TrialResult
 from pydantic import Field
-from vero.core.db.result import TaskResult
-from vero.core.evaluation import EvaluationParameters, TaskParameters
+from vero_tasks import TaskContext, TaskParameters, TaskResult
 
 
 def load_trial_results(job_dir: Path) -> list[TrialResult]:
@@ -65,7 +64,7 @@ class KiraParameters(TaskParameters):
 
 def build_job_config(
     tasks: list[TerminalBenchTask],
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> JobConfig:
     """Build a Harbor JobConfig from vero evaluation parameters.
 

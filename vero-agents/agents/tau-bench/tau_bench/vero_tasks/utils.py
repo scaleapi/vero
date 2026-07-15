@@ -2,8 +2,7 @@ import json
 from typing import Literal, TypedDict
 
 from datasets import Dataset, DatasetDict
-from vero.core.db.result import TaskResult
-from vero.core.evaluation import EvaluationParameters, TaskParameters
+from vero_tasks import TaskContext, TaskParameters, TaskResult
 
 from tau_bench.constants import DEFAULT_AGENT_STRATEGY
 from tau_bench.types import EnvRunResult, RunConfig
@@ -32,7 +31,7 @@ class TauBenchParameters(TaskParameters):
 
 
 def build_run_config(
-    env: Literal["retail", "airline"], tasks: list[TauBenchTask], evaluation_parameters: EvaluationParameters
+    env: Literal["retail", "airline"], tasks: list[TauBenchTask], evaluation_parameters: TaskContext
 ) -> RunConfig:
     params = evaluation_parameters.parse_task_params(TauBenchParameters)
     task_split = tasks[0]["task_split"]

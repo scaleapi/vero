@@ -1,8 +1,6 @@
 """SimpleQA benchmark task definition."""
 
-from vero.core.db.result import TaskOutput, TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import TaskT, create_task
+from vero_tasks import TaskContext, TaskOutput, TaskResult, TaskT, create_task
 
 from .utils import TaskType, grade_answer, run_inference
 
@@ -12,7 +10,7 @@ simple_qa_task = create_task("simple_qa", required_env_vars=["LITELLM_BASE_URL",
 @simple_qa_task("run_inference")
 async def simple_qa_run_inference(
     task: dict[str, str],
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """Run inference on a single SimpleQA task."""
     return await run_inference(task, evaluation_parameters)
@@ -22,7 +20,7 @@ async def simple_qa_run_inference(
 async def evaluate_sample(
     task: TaskT,
     output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult | Exception:
     """Evaluate the inference output for a single SimpleQA task."""
     score, feedback = await grade_answer(

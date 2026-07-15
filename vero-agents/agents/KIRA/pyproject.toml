@@ -9,13 +9,9 @@ dependencies = [
     "datasets",
     "harbor",
     "litellm",
+    "scale-vero-tasks>=0.1.0",
     "tenacity",
 ]
 
-[dependency-groups]
-dev = [
-    "scale-vero[evaluate]",
-]
-
 [tool.uv.sources]
-scale-vero = { path = "../../../vero", editable = true }
+scale-vero-tasks = { path = "../../../vero-tasks", editable = true }

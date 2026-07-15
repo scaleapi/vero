@@ -132,6 +132,44 @@ result = await session.run()
 print(result.best.request.candidate.version, result.best.objective.value)
 ```
 
+### Python benchmark tasks
+
+Python targets can use the optional `scale-vero-tasks` package instead of
+writing the JSON command contract directly. It provides only task definition
+and execution types; target programs do not depend on the VeRO optimizer.
+
+```python
+# my_program/benchmark.py
+from vero_tasks import TaskOutput, TaskResult, create_task
+
+task = create_task("quality")
+
+@task.inference()
+async def run(case, context):
+    return TaskOutput(output=my_program(case["input"]))
+
+@task.evaluation()
+async def score(case, output, context):
+    return TaskResult.from_task_output(
+        output,
+        score=float(output.output == case["expected"]),
+    )
+```
+
+Connect it with `PythonTaskBackend`, which runs the task inside each isolated
+candidate's uv project. Cases remain outside the editable target.
+
+```python
+from vero.evaluation import PythonTaskBackend, PythonTaskBackendConfig
+
+backend = PythonTaskBackend(PythonTaskBackendConfig(
+    harness_root=str(Path("../evaluation-state").resolve()),
+    cases_path=str(Path("../cases.jsonl").resolve()),
+    module="benchmark",
+    task="quality",
+))
+```
+
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
 a non-Git version store, an evolutionary search algorithm, or an orchestrator

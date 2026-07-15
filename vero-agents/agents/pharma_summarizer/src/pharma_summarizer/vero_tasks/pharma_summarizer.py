@@ -1,8 +1,6 @@
 """Pharma Summarizer benchmark task definition."""
 
-from vero.core.db.result import TaskOutput, TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import TaskT, create_task
+from vero_tasks import TaskContext, TaskOutput, TaskResult, TaskT, create_task
 
 from pharma_summarizer.agent import run_agent
 
@@ -14,7 +12,7 @@ pharma_summarizer_task = create_task("pharma_summarizer", required_env_vars=["LI
 @pharma_summarizer_task("run_inference")
 async def run_inference(
     task: TaskT,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """Run inference on a single task.
 
@@ -37,7 +35,7 @@ async def run_inference(
 async def evaluate_sample(
     task: TaskT,
     output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult | Exception:
     """Evaluate the inference output for a single task.
 

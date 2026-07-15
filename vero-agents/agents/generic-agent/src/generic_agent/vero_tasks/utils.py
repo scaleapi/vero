@@ -4,8 +4,7 @@ from typing import Any, Literal, TypeVar
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
-from vero.core.db.result import TaskOutput
-from vero.core.evaluation import TaskParameters
+from vero_tasks import TaskOutput, TaskParameters
 
 from agents import RunErrorDetails, RunResult
 from agents.exceptions import AgentsException

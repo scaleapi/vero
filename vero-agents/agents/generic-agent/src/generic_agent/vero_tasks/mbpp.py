@@ -6,9 +6,7 @@ import re
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Optional, TypedDict
 
-from vero.core.db.result import TaskOutput, TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import create_task
+from vero_tasks import TaskContext, TaskOutput, TaskResult, create_task
 
 from .utils import (
     EXECUTION_TIMEOUT,
@@ -95,7 +93,7 @@ async def check_solution(
 @mbpp_task("run_inference")
 async def run_inference(
     task: MbppTaskT,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """Run inference on a single task."""
     params = evaluation_parameters.parse_task_params(GenericAgentParameters)
@@ -113,7 +111,7 @@ async def run_inference(
 async def evaluate_sample(
     task: MbppTaskT,
     output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult | Exception:
     """Evaluate the inference output for a single task."""
     if output.error is not None:

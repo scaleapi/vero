@@ -1,8 +1,6 @@
 """GSM8K benchmark task definition."""
 
-from vero.core.db.result import TaskOutput, TaskResult
-from vero.core.evaluation import EvaluationParameters
-from vero.core.task import create_task
+from vero_tasks import TaskContext, TaskOutput, TaskResult, create_task
 
 from .utils import (
     EXTRACT_AND_JUDGE_TEMPLATE,
@@ -18,7 +16,7 @@ gsm8k_task = create_task("gsm8k", required_env_vars=["LITELLM_BASE_URL", "LITELL
 @gsm8k_task("run_inference")
 async def run_inference(
     task: dict,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskOutput:
     """Run inference on a single task.
 
@@ -39,7 +37,7 @@ async def run_inference(
 async def evaluate_sample(
     task: dict,
     output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
+    evaluation_parameters: TaskContext,
 ) -> TaskResult | Exception:
     """Evaluate the inference output for a single task.
 
