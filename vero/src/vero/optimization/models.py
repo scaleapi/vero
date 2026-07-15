@@ -59,6 +59,7 @@ class CandidateChange(EvaluationModel):
 
 @dataclass(frozen=True)
 class OptimizationContext:
+    session_id: str
     round: int
     workspace: Workspace
     baseline: EvaluationRecord

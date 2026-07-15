@@ -11,11 +11,14 @@ from pydantic import JsonValue
 
 from vero.candidate import Candidate
 from vero.evaluation import (
+    EvaluationAcknowledgement,
+    EvaluationBudget,
     EvaluationEngine,
     EvaluationLimits,
     EvaluationRecord,
     EvaluationRequest,
     EvaluationSet,
+    EvaluationSummary,
     ObjectiveSpec,
 )
 from vero.optimization.models import (
@@ -25,11 +28,116 @@ from vero.optimization.models import (
 )
 from vero.optimization.protocols import (
     CandidateProducer,
+    CandidateEvaluationGateway,
     OptimizationStrategy,
     SelectionPolicy,
 )
 from vero.optimization.strategy import ObjectiveSelectionPolicy
 from vero.workspace import Workspace
+
+
+@dataclass(frozen=True)
+class _ProductionOutcome:
+    """Candidates and evaluations created while executing one proposal."""
+
+    candidate: Candidate | None
+    trial_candidates: tuple[Candidate, ...]
+    trial_evaluations: tuple[EvaluationRecord, ...]
+
+    @property
+    def candidates(self) -> tuple[Candidate, ...]:
+        if self.candidate is None:
+            return self.trial_candidates
+        return (*self.trial_candidates, self.candidate)
+
+
+class _ScopedEvaluationGateway(CandidateEvaluationGateway):
+    def __init__(
+        self,
+        *,
+        optimizer: Optimizer,
+        proposal: CandidateProposal,
+        parent: Candidate,
+        workspace: Workspace,
+    ):
+        self.optimizer = optimizer
+        self.proposal = proposal
+        self.parent = parent
+        self.workspace = workspace
+        self._count = 0
+        self._last_candidate_id = parent.id
+        self._trial_candidates: list[Candidate] = []
+        self._trial_evaluations: list[EvaluationRecord] = []
+
+    @property
+    def last_candidate_id(self) -> str:
+        return self._last_candidate_id
+
+    @property
+    def last_candidate_version(self) -> str | None:
+        if not self._trial_candidates:
+            return None
+        return self._trial_candidates[-1].version
+
+    @property
+    def trial_candidates(self) -> tuple[Candidate, ...]:
+        return tuple(self._trial_candidates)
+
+    @property
+    def trial_evaluations(self) -> tuple[EvaluationRecord, ...]:
+        return tuple(self._trial_evaluations)
+
+    async def evaluate_current(
+        self,
+        *,
+        description: str = "Evaluate agent checkpoint",
+    ) -> EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement:
+        if not description.strip():
+            raise ValueError("checkpoint description must not be empty")
+        version = (
+            await self.workspace.save(description)
+            if await self.workspace.is_dirty()
+            else await self.workspace.current_version()
+        )
+        self._count += 1
+        candidate = Candidate(
+            id=f"{self.proposal.id}:trial:{self._count}",
+            version=version,
+            parent_id=self._last_candidate_id,
+            created_at=datetime.now(UTC),
+            description=description,
+            metadata={
+                **self.proposal.metadata,
+                "producer_id": self.proposal.producer_id,
+                "trial": self._count,
+            },
+        )
+        result = await self.optimizer.engine.evaluate(
+            backend_id=self.optimizer.backend_id,
+            request=self.optimizer._request(candidate),
+            objective_spec=self.optimizer.objective,
+        )
+        evaluation_id = (
+            result.id if isinstance(result, EvaluationRecord) else result.evaluation_id
+        )
+        record = self.optimizer.engine.database.get_evaluation(evaluation_id)
+        if record is None:
+            raise RuntimeError(
+                f"evaluation engine did not index completed evaluation {evaluation_id!r}"
+            )
+        self._last_candidate_id = candidate.id
+        self._trial_candidates.append(candidate)
+        self._trial_evaluations.append(record)
+        return result
+
+    def budget(self) -> EvaluationBudget | None:
+        ledger = self.optimizer.engine.budget_ledger
+        if ledger is None:
+            return None
+        return ledger.get(
+            self.optimizer.backend_id,
+            self.optimizer.evaluation_set,
+        )
 
 
 @dataclass
@@ -50,20 +158,24 @@ class Optimizer:
     max_candidates: int = 1
     max_rounds: int = 100
     max_concurrency: int = 1
+    session_id: str | None = None
 
     def _best(self, records: list[EvaluationRecord]) -> EvaluationRecord | None:
         return self.selection.select(records, self.objective)
 
+    def _request(self, candidate: Candidate) -> EvaluationRequest:
+        return EvaluationRequest(
+            candidate=candidate,
+            evaluation_set=self.evaluation_set,
+            parameters=self.parameters,
+            limits=self.limits,
+            seed=self.seed,
+        )
+
     async def evaluate_candidate(self, candidate: Candidate) -> EvaluationRecord:
         return await self.engine.evaluate_record(
             backend_id=self.backend_id,
-            request=EvaluationRequest(
-                candidate=candidate,
-                evaluation_set=self.evaluation_set,
-                parameters=self.parameters,
-                limits=self.limits,
-                seed=self.seed,
-            ),
+            request=self._request(candidate),
             objective_spec=self.objective,
         )
 
@@ -78,7 +190,7 @@ class Optimizer:
         proposal: CandidateProposal,
         context: OptimizationContext,
         parent: Candidate,
-    ) -> Candidate | None:
+    ) -> _ProductionOutcome:
         try:
             producer = self.producers[proposal.producer_id]
         except KeyError as error:
@@ -98,32 +210,58 @@ class Optimizer:
             )
 
         try:
+            evaluation = _ScopedEvaluationGateway(
+                optimizer=self,
+                proposal=proposal,
+                parent=parent,
+                workspace=candidate_workspace,
+            )
             change = await producer.produce(
                 proposal=proposal,
                 context=context,
                 workspace=candidate_workspace,
+                evaluation=evaluation,
             )
             if change is None:
                 await candidate_workspace.destroy()
-                return None
+                return _ProductionOutcome(
+                    candidate=None,
+                    trial_candidates=evaluation.trial_candidates,
+                    trial_evaluations=evaluation.trial_evaluations,
+                )
             version = (
                 await candidate_workspace.save(change.description)
                 if await candidate_workspace.is_dirty()
                 else await candidate_workspace.current_version()
             )
-            if version == parent.version:
+            if version == parent.version and not evaluation.trial_candidates:
                 await candidate_workspace.destroy()
-                return None
+                return _ProductionOutcome(
+                    candidate=None,
+                    trial_candidates=(),
+                    trial_evaluations=(),
+                )
+            if version == evaluation.last_candidate_version:
+                await candidate_workspace.destroy()
+                return _ProductionOutcome(
+                    candidate=None,
+                    trial_candidates=evaluation.trial_candidates,
+                    trial_evaluations=evaluation.trial_evaluations,
+                )
             metadata = dict(proposal.metadata)
             metadata.update(change.metadata)
             metadata["producer_id"] = proposal.producer_id
-            return Candidate(
-                id=proposal.id,
-                version=version,
-                parent_id=parent.id,
-                created_at=datetime.now(UTC),
-                description=change.description,
-                metadata=metadata,
+            return _ProductionOutcome(
+                candidate=Candidate(
+                    id=proposal.id,
+                    version=version,
+                    parent_id=evaluation.last_candidate_id,
+                    created_at=datetime.now(UTC),
+                    description=change.description,
+                    metadata=metadata,
+                ),
+                trial_candidates=evaluation.trial_candidates,
+                trial_evaluations=evaluation.trial_evaluations,
             )
         except BaseException:
             await candidate_workspace.destroy()
@@ -176,6 +314,7 @@ class Optimizer:
                 break
             best = self._best(evaluations)
             context = OptimizationContext(
+                session_id=self.session_id or self.engine.evaluator.session_dir.name,
                 round=round_number,
                 workspace=self.workspace,
                 baseline=baseline_record,
@@ -194,7 +333,7 @@ class Optimizer:
             if any(proposal_id in candidates for proposal_id in proposal_ids):
                 raise ValueError("strategy reused an existing candidate ID")
 
-            async def produce(proposal: CandidateProposal) -> Candidate | None:
+            async def produce(proposal: CandidateProposal) -> _ProductionOutcome:
                 parent_id = proposal.parent_id or (
                     best.request.candidate.id if best is not None else baseline.id
                 )
@@ -211,18 +350,27 @@ class Optimizer:
                         parent=parent,
                     )
 
-            produced = [
-                candidate
-                for candidate in await asyncio.gather(
-                    *(produce(proposal) for proposal in proposals)
-                )
-                if candidate is not None
-            ]
-            if not produced:
+            outcomes = await asyncio.gather(
+                *(produce(proposal) for proposal in proposals)
+            )
+            meaningful_outcomes = [outcome for outcome in outcomes if outcome.candidates]
+            if not meaningful_outcomes:
                 break
-            generated += len(produced)
-            for candidate in produced:
-                candidates[candidate.id] = candidate
+            generated += len(meaningful_outcomes)
+            for outcome in meaningful_outcomes:
+                evaluations.extend(outcome.trial_evaluations)
+                for candidate in outcome.candidates:
+                    if candidate.id in candidates:
+                        raise ValueError(
+                            f"candidate producer reused candidate ID {candidate.id!r}"
+                        )
+                    candidates[candidate.id] = candidate
+
+            produced = [
+                outcome.candidate
+                for outcome in meaningful_outcomes
+                if outcome.candidate is not None
+            ]
 
             async def evaluate(candidate: Candidate) -> EvaluationRecord:
                 async with semaphore:

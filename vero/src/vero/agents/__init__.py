@@ -1,7 +1,13 @@
 from .base import BaseAgent  # noqa: E402
+from .producer import AgentCandidateProducer
+from .protocol import AgentContext, AgentRunResult, CodingAgent
 
 __all__ = [
     "BaseAgent",
+    "AgentCandidateProducer",
+    "AgentContext",
+    "AgentRunResult",
+    "CodingAgent",
 ]
 
 

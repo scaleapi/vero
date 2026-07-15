@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from typing import Protocol, Sequence, runtime_checkable
 
-from vero.evaluation import EvaluationRecord, ObjectiveSpec
+from vero.evaluation import (
+    EvaluationAcknowledgement,
+    EvaluationBudget,
+    EvaluationRecord,
+    EvaluationSummary,
+    ObjectiveSpec,
+)
 from vero.optimization.models import (
     CandidateChange,
     CandidateProposal,
@@ -22,6 +28,19 @@ class OptimizationStrategy(Protocol):
 
 
 @runtime_checkable
+class CandidateEvaluationGateway(Protocol):
+    """Evaluation capability scoped to one producer workspace."""
+
+    async def evaluate_current(
+        self,
+        *,
+        description: str = "Evaluate agent checkpoint",
+    ) -> EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement: ...
+
+    def budget(self) -> EvaluationBudget | None: ...
+
+
+@runtime_checkable
 class CandidateProducer(Protocol):
     async def produce(
         self,
@@ -29,6 +48,7 @@ class CandidateProducer(Protocol):
         proposal: CandidateProposal,
         context: OptimizationContext,
         workspace: Workspace,
+        evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None: ...
 
 

@@ -14,6 +14,7 @@ from vero.optimization.models import (
     CandidateProposal,
     OptimizationContext,
 )
+from vero.optimization.protocols import CandidateEvaluationGateway
 from vero.workspace import Workspace
 
 _PLACEHOLDERS = {
@@ -116,6 +117,7 @@ class CommandCandidateProducer:
         proposal: CandidateProposal,
         context: OptimizationContext,
         workspace: Workspace,
+        evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
         root = Path(self.config.root).resolve()
         target = Path(workspace.project_path).resolve()
