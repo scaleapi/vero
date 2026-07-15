@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import AsyncIterator
 from uuid import uuid4
@@ -108,7 +108,7 @@ class Evaluator:
             objective_spec=objective_spec,
             objective=objective,
             created_at=created_at,
-            completed_at=datetime.now(),
+            completed_at=datetime.now(UTC),
         )
         await store.save(record)
         return record
@@ -123,7 +123,7 @@ class Evaluator:
         use_copy: bool | None = None,
     ) -> EvaluationRecord:
         evaluation_id = str(uuid4())
-        created_at = datetime.now()
+        created_at = datetime.now(UTC)
         result_dir = self.evaluations_dir / evaluation_id
         store = EvaluationStore(result_dir)
         result_dir.mkdir(parents=True, exist_ok=False)
@@ -179,7 +179,7 @@ class Evaluator:
                 objective_spec=objective_spec,
                 objective=objective,
                 created_at=created_at,
-                completed_at=datetime.now(),
+                completed_at=datetime.now(UTC),
             )
             await store.save(record)
             return record

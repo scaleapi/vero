@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -242,3 +242,17 @@ def test_equal_objectives_use_created_at_then_commit_tie_breaks():
         ).request.candidate.commit
         == "a"
     )
+
+
+def test_equal_objectives_normalize_mixed_timestamp_awareness():
+    same_naive = datetime(2026, 1, 1)
+    same_aware = datetime(2026, 1, 1, tzinfo=UTC)
+
+    winner = select_best_evaluation(
+        [
+            _record(commit="b", value=1.0, candidate_created_at=same_naive),
+            _record(commit="a", value=1.0, candidate_created_at=same_aware),
+        ]
+    )
+
+    assert winner.request.candidate.commit == "a"

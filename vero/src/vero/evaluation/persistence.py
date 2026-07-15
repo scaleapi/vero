@@ -332,7 +332,7 @@ class EvaluationDatabase:
         reverse: bool = False,
         filter_fn: Callable[[EvaluationRecord], bool] | None = None,
     ) -> list[EvaluationRecord]:
-        ids = evaluation_ids or list(self.evaluations)
+        ids = list(self.evaluations) if evaluation_ids is None else evaluation_ids
         records = [self.evaluations[evaluation_id] for evaluation_id in ids]
         if filter_fn is not None:
             records = [record for record in records if filter_fn(record)]

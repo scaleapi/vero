@@ -1216,7 +1216,7 @@ class Policy:
         objective: ObjectiveSpec | None = None,
     ) -> EvaluationRecord:
         """Evaluate a versioned program through an approved canonical backend."""
-        from datetime import datetime
+        from datetime import UTC, datetime
 
         from vero.core.db.candidate import Candidate
         from vero.evaluation import EvaluationLimits, EvaluationRequest
@@ -1245,7 +1245,7 @@ class Policy:
             candidate = Candidate(
                 commit=commit,
                 repo_name=workspace.name,
-                created_at=datetime.now(),
+                created_at=datetime.now(UTC),
             )
         selected_parameters = (
             parameters

@@ -222,6 +222,15 @@ def test_evaluation_database_round_trips_schema_v2_and_selects_best(tmp_path: Pa
     assert frame.loc[faster.id, "metric/score"] == 1.0
 
 
+def test_evaluation_database_distinguishes_no_id_filter_from_empty_id_filter():
+    database = EvaluationDatabase(id="session")
+    record = _record()
+    database.add_evaluation(record)
+
+    assert database.get_evaluations() == [record]
+    assert database.get_evaluations([]) == []
+
+
 def test_database_concurrent_inserts_and_atomic_saves_do_not_lose_records(
     tmp_path: Path,
 ):

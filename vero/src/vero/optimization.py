@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -241,7 +241,7 @@ class ProgramPolicy:
             repo_name=self.workspace.name,
             parent_commit=parent_commit,
             message=message,
-            created_at=datetime.now(),
+            created_at=datetime.now(UTC),
         )
 
     async def evaluate_candidate(

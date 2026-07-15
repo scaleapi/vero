@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
+from datetime import UTC, datetime
 from functools import cmp_to_key
 from typing import Iterable
 
@@ -139,8 +140,13 @@ def compare_evaluation_records(left: EvaluationRecord, right: EvaluationRecord) 
     if comparison:
         return comparison
 
-    left_created = left.request.candidate.created_at
-    right_created = right.request.candidate.created_at
+    def normalized(timestamp: datetime) -> datetime:
+        if timestamp.tzinfo is None:
+            return timestamp.replace(tzinfo=UTC)
+        return timestamp.astimezone(UTC)
+
+    left_created = normalized(left.request.candidate.created_at)
+    right_created = normalized(right.request.candidate.created_at)
     if left_created != right_created:
         return 1 if left_created > right_created else -1
 
