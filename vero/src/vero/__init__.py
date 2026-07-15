@@ -1,23 +1,26 @@
-from .core.cli import main
-from .core.db import (
-    Candidate,
-    DatasetSample,
-    DatasetSubset,
-    Experiment,
-    ExperimentDatabase,
-    ExperimentResult,
-    ExperimentRun,
+"""VeRO's public program-optimization API."""
+
+from vero.candidate import Candidate
+from vero.evaluation import (
+    EvaluationBackend,
+    EvaluationRecord,
+    EvaluationReport,
+    EvaluationSet,
+    ObjectiveSpec,
 )
-from .core.sessions import load_json_from_cache
+from vero.optimization import CandidateProducer, OptimizationStrategy, Optimizer
+from vero.runtime import OptimizationSession, create_local_optimization_session
 
 __all__ = [
-    "main",
     "Candidate",
-    "Experiment",
-    "ExperimentDatabase",
-    "ExperimentRun",
-    "ExperimentResult",
-    "DatasetSample",
-    "DatasetSubset",
-    "load_json_from_cache",
+    "CandidateProducer",
+    "EvaluationBackend",
+    "EvaluationRecord",
+    "EvaluationReport",
+    "EvaluationSet",
+    "ObjectiveSpec",
+    "OptimizationSession",
+    "OptimizationStrategy",
+    "Optimizer",
+    "create_local_optimization_session",
 ]

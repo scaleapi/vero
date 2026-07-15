@@ -94,6 +94,10 @@ class OptimizationSession:
         if optimizer_session_id is not None and optimizer_session_id != self.id:
             raise ValueError("optimizer session ID does not match OptimizationSession")
         self.optimizer.session_id = self.id
+        evaluator_session_id = getattr(self.optimizer.engine.evaluator, "session_id", None)
+        if evaluator_session_id is not None and evaluator_session_id != self.id:
+            raise ValueError("evaluator session ID does not match OptimizationSession")
+        self.optimizer.engine.evaluator.session_id = self.id
         self.session_dir.mkdir(parents=True, exist_ok=True)
         if self.events is None:
             self.events = EventBus([JsonlEventSink(self.events_path)])
@@ -146,18 +150,23 @@ class OptimizationSession:
         baseline: Candidate | None = None,
         skip_baseline_evaluation: bool = False,
     ) -> OptimizationResult:
+        manifest = self.load_manifest() if self.manifest_path.exists() else None
+        current_version = await self.optimizer.workspace.current_version()
         if baseline is None:
-            baseline = Candidate.from_version(
-                await self.optimizer.workspace.current_version()
-            )
-        manifest = (
-            self.load_manifest()
-            if self.manifest_path.exists()
-            else self._initial_manifest(baseline)
-        )
+            if manifest is not None and manifest.baseline is not None:
+                baseline = manifest.baseline
+            else:
+                baseline = Candidate.from_version(current_version)
+        if baseline.version != current_version:
+            raise ValueError("session baseline does not match the current workspace version")
+        if manifest is None:
+            manifest = self._initial_manifest(baseline)
         if manifest.id != self.id:
             raise ValueError("session manifest ID does not match runtime session")
-        if manifest.baseline != baseline:
+        if manifest.baseline is None or (
+            manifest.baseline.id,
+            manifest.baseline.version,
+        ) != (baseline.id, baseline.version):
             raise ValueError("session baseline does not match the persisted manifest")
 
         manifest = manifest.model_copy(

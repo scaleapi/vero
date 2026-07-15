@@ -33,10 +33,12 @@ class Evaluator:
         *,
         workspace: Workspace,
         session_dir: Path,
+        session_id: str | None = None,
         use_copy: bool = True,
     ):
         self.workspace = workspace
         self.session_dir = session_dir
+        self.session_id = session_id or session_dir.name
         self.use_copy = use_copy
 
     @property
@@ -141,7 +143,7 @@ class Evaluator:
                     raise ValueError("candidate workspace must be clean before evaluation")
                 context = EvaluationContext(
                     workspace=candidate_workspace,
-                    session_id=self.session_dir.name,
+                    session_id=self.session_id,
                     evaluation_id=evaluation_id,
                     result_dir=result_dir,
                     artifact_dir=store.artifact_dir,
