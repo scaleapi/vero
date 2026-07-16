@@ -57,6 +57,10 @@ ref = "HEAD"
 harness_root = "../my-evaluator"
 command = ["python3", "evaluate.py", "{workspace}", "{report}"]
 evaluation_set = "performance"
+agent_context_inputs = ["cases"]
+
+[evaluation.staged_inputs]
+cases = "../my-evaluator/cases.json"
 
 [evaluation.retry]
 max_attempts = 3
@@ -150,8 +154,14 @@ Commands are parsed into argument vectors, not executed through a shell. Use
 absolute executable paths when the executable is not on the standard system
 `PATH`. Available evaluation placeholders are `{workspace}`, `{request}`,
 `{report}`, `{artifacts}`, and `{harness}`. External producers additionally get
-`{producer}`. The latter two resolve to staged sandbox paths when the target is
-not host-visible.
+`{producer}` and `{context}`; `VERO_CONTEXT_PATH` contains the same context path.
+The harness and producer roots resolve to staged sandbox paths when the target
+is not host-visible.
+
+`staged_inputs` are trusted evaluator inputs available to the evaluation
+command through `{input:NAME}` placeholders. They remain hidden from candidate
+producers unless their names are also explicitly listed in
+`agent_context_inputs`, as in the example above.
 
 The flag-based `vero optimize` command exposes the same objective constraints,
 case selection, target ref, timeouts, environments, and concurrency controls;
@@ -430,6 +440,7 @@ partitions:
 agent_access:
   - partition: validation
     disclosure: aggregate
+    expose_case_resources: true
     total_runs: 10
     total_cases: 50
     max_cases_per_run: 5
@@ -484,11 +495,38 @@ that delegates proposals to several specialized producers.
 | `OptimizationSession` | Owns lifecycle, events, artifacts, budgets, and durable state |
 
 Coding agents receive a scoped `AgentContext`. They can edit only their supplied
-workspace and request evaluation through `evaluate_current()`. Authorization,
-budgeting, and disclosure are enforced by the evaluation engine; an agent may
-receive a full record, an aggregate summary, or only an acknowledgement.
-Intermediate checkpoints are real candidates and remain eligible for selection,
-even if the agent later makes the program worse.
+workspace and request evaluation through `evaluate_current()`. That call returns
+a compact receipt with the evaluation ID, status, approved summary, and path to
+the filesystem result. Large case records, traces, and artifacts are kept out of
+the tool response. Intermediate checkpoints are real candidates and remain
+eligible for selection, even if the agent later makes the program worse.
+
+Each producer workspace contains a generated, read-only `.vero/` directory:
+
+```text
+.vero/
+├── README.md
+├── manifest.json
+├── cases/          # only backend-approved case resources
+├── candidates/     # metadata, parent patches, and repository-native refs
+└── evaluations/    # authorized summaries or full case/trace/artifact trees
+```
+
+The agent can inspect this with ordinary filesystem and Git commands. Full
+evaluation disclosure splits potentially long traces into separate files;
+aggregate disclosure includes only aggregate metrics and counts; none includes
+only status. Candidate history includes durable Git refs, so siblings do not
+need to be ancestors of the current checkout. A proposal sees the candidates
+from the start of its generation, then immediately sees its own evaluated
+checkpoints. Parallel siblings become visible in the next generation.
+
+The directory is excluded from Git, protected by workspace read rules and file
+permissions, and rejected if a candidate force-adds it anyway. Its contents are
+a disposable view: durable candidate and evaluation stores remain the trusted
+source. In Harbor, the sidecar owns the writable volume and the coding-agent
+container mounts the same directory read-only. Case resources are exported only
+when the evaluation authorization explicitly permits them and the backend
+provides a safe export.
 
 Strategies can propose a batch of candidates and route each proposal to a named
 producer. Set `max_concurrency` to produce and evaluate independent candidates in
@@ -535,6 +573,8 @@ vero session inspect ~/.vero/sessions/<session-id>
 - Command execution uses argument vectors and an explicit environment.
 - Evaluation secrets are passed through backend configuration and redacted from
   diagnostics; they cannot be embedded in evaluation parameters.
+- Agent-visible cases, histories, and evaluation details are projected into a
+  generated `.vero/` view according to the same authorization boundary.
 - Budgets are reserved atomically before backend execution.
 
 ## Paper and reproduction

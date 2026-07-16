@@ -198,6 +198,35 @@ async def test_harbor_backend_resolves_canonical_case_selections(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_harbor_backend_exports_case_manifest_without_task_source(tmp_path):
+    backend = HarborBackend(_config(tmp_path))
+    destination = tmp_path / "context"
+    destination.mkdir()
+
+    await backend.export_case_resources(
+        evaluation_set=EvaluationSet(
+            name="harbor-bench",
+            partition="test",
+            selection=CaseIds(ids=["case-b"]),
+        ),
+        destination=str(destination),
+        sandbox=await LocalSandbox.create(root=tmp_path),
+    )
+
+    index = json.loads((destination / "index.json").read_text())
+    assert index["task_source_exposed"] is False
+    assert [item["case_id"] for item in index["cases"]] == ["case-b"]
+    exported = json.loads((destination / index["cases"][0]["path"]).read_text())
+    assert exported == {
+        "id": "case-b",
+        "task_name": "example/beta",
+        "result_task_name": None,
+        "metadata": {},
+    }
+    assert "example/tasks@1.0" not in json.dumps(index)
+
+
+@pytest.mark.asyncio
 async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     sandbox = FakeSandbox(
         tmp_path,

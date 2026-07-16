@@ -546,10 +546,53 @@ class EvaluationAcknowledgement(EvaluationModel):
     status: EvaluationStatus
 
 
+class EvaluationReceipt(EvaluationModel):
+    """Bounded agent-facing pointer to filesystem evaluation feedback."""
+
+    evaluation_id: str
+    status: EvaluationStatus
+    disclosure: DisclosureLevel
+    result: EvaluationSummary | EvaluationAcknowledgement
+    result_path: str
+
+    @field_validator("evaluation_id")
+    @classmethod
+    def validate_evaluation_id(cls, value: str) -> str:
+        return _non_empty(value, "evaluation ID")
+
+    @field_validator("result_path")
+    @classmethod
+    def validate_result_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if (
+            not value
+            or "\\" in value
+            or path.is_absolute()
+            or any(part in {"", ".", ".."} for part in value.split("/"))
+        ):
+            raise ValueError("receipt result_path must be a safe relative POSIX path")
+        return value
+
+    @model_validator(mode="after")
+    def validate_projection(self) -> EvaluationReceipt:
+        if self.disclosure == DisclosureLevel.NONE:
+            if not isinstance(self.result, EvaluationAcknowledgement):
+                raise ValueError("none disclosure requires an acknowledgement")
+        elif not isinstance(self.result, EvaluationSummary):
+            raise ValueError("aggregate and full disclosure require a summary")
+        if (
+            self.result.evaluation_id != self.evaluation_id
+            or self.result.status != self.status
+        ):
+            raise ValueError("receipt identity and status must match its result")
+        return self
+
+
 class EvaluationAuthorization(EvaluationModel):
     may_evaluate: bool
     meter_budget: bool = True
     disclosure: DisclosureLevel = DisclosureLevel.FULL
+    expose_case_resources: bool = False
     reason: str | None = None
 
     @field_validator("reason")

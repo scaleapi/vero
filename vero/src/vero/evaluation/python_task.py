@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import Field, field_validator, model_validator
 
@@ -21,6 +22,7 @@ from vero.evaluation.models import (
     EvaluationRequest,
     EvaluationSet,
 )
+from vero.sandbox import Sandbox
 
 
 def _default_uv() -> str:
@@ -168,6 +170,54 @@ class PythonTaskBackend:
             raise ValueError("Python task case IDs must be unique")
         return case_ids
 
+    def _selected_cases(
+        self, evaluation_set: EvaluationSet
+    ) -> list[tuple[str, object]]:
+        self._validate_evaluation_set(evaluation_set)
+        cases = self._cases()
+        case_ids = self._case_ids()
+        selection = evaluation_set.selection
+        if isinstance(selection, AllCases):
+            indexes = list(range(len(cases)))
+        elif isinstance(selection, CaseRange):
+            indexes = list(range(selection.start, selection.stop))
+        elif isinstance(selection, CaseIds):
+            by_id = {case_id: index for index, case_id in enumerate(case_ids)}
+            indexes = [by_id[case_id] for case_id in selection.ids]
+        else:  # pragma: no cover - closed discriminated union
+            raise AssertionError(f"unsupported case selection: {selection}")
+        return [(case_ids[index], cases[index]) for index in indexes]
+
+    async def export_case_resources(
+        self,
+        *,
+        evaluation_set: EvaluationSet,
+        destination: str,
+        sandbox: Sandbox,
+    ) -> None:
+        index = []
+        for case_id, case in self._selected_cases(evaluation_set):
+            digest = hashlib.sha256(case_id.encode()).hexdigest()
+            filename = f"{digest}.json"
+            await sandbox.write_file(
+                str(PurePosixPath(destination) / filename),
+                json.dumps(case, ensure_ascii=False, indent=2, default=str) + "\n",
+            )
+            index.append({"case_id": case_id, "path": filename})
+        await sandbox.write_file(
+            str(PurePosixPath(destination) / "index.json"),
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
+                    "cases": index,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
+
     def _validate_evaluation_set(self, evaluation_set: EvaluationSet) -> None:
         if evaluation_set.name != self.config.evaluation_set_name:
             raise ValueError(
@@ -216,10 +266,14 @@ class PythonTaskBackend:
         context: EvaluationContext,
         request: EvaluationRequest,
     ) -> EvaluationReport:
-        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        target_root = context.workspace.sandbox.host_path(
+            context.workspace.project_path
+        )
         if target_root is not None:
             target_root = target_root.resolve()
             cases_path = Path(self.config.cases_path).resolve()
             if cases_path == target_root or cases_path.is_relative_to(target_root):
-                raise ValueError("Python task cases must live outside the editable target")
+                raise ValueError(
+                    "Python task cases must live outside the editable target"
+                )
         return await self._command.evaluate(context=context, request=request)

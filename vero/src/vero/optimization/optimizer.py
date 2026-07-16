@@ -6,16 +6,20 @@ import asyncio
 import hashlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
 from vero.candidate import Candidate
 from vero.candidate_repository import CandidateRepository
 from vero.evaluation import (
-    EvaluationAcknowledgement,
+    DisclosureLevel,
     EvaluationBudget,
+    EvaluationCancelledError,
     EvaluationEngine,
+    EvaluationExecutionError,
     EvaluationLimits,
+    EvaluationReceipt,
     EvaluationRecord,
     EvaluationRequest,
     EvaluationSet,
@@ -35,6 +39,9 @@ from vero.optimization.protocols import (
 )
 from vero.optimization.strategy import ObjectiveSelectionPolicy
 from vero.workspace import Workspace
+
+if TYPE_CHECKING:
+    from vero.runtime.context import AgentDisclosureLedger, WorkspaceContextManager
 
 
 @dataclass(frozen=True)
@@ -60,12 +67,14 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         proposal: CandidateProposal,
         parent: Candidate,
         workspace: Workspace,
+        workspace_context: WorkspaceContextManager,
         round_number: int,
     ):
         self.optimizer = optimizer
         self.proposal = proposal
         self.parent = parent
         self.workspace = workspace
+        self.workspace_context = workspace_context
         self.round_number = round_number
         self._count = 0
         self._last_candidate_id = parent.id
@@ -94,7 +103,7 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         self,
         *,
         description: str = "Evaluate agent checkpoint",
-    ) -> EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement:
+    ) -> EvaluationReceipt:
         if not description.strip():
             raise ValueError("checkpoint description must not be empty")
         version = (
@@ -118,11 +127,28 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
             },
         )
         await self.optimizer._capture_candidate(candidate, self.workspace)
-        result = await self.optimizer.engine.evaluate(
-            backend_id=self.optimizer.backend_id,
-            request=self.optimizer._request(candidate),
-            objective_spec=self.optimizer.objective,
-        )
+        request = self.optimizer._request(candidate)
+        try:
+            result = await self.optimizer.engine.evaluate(
+                backend_id=self.optimizer.backend_id,
+                request=request,
+                objective_spec=self.optimizer.objective,
+            )
+        except (EvaluationExecutionError, EvaluationCancelledError) as error:
+            record = self.optimizer.engine.database.get_evaluation(error.evaluation_id)
+            if record is not None:
+                decision = await self.optimizer.engine.authorize(
+                    self.optimizer.backend_id,
+                    request,
+                )
+                if decision.may_evaluate:
+                    await asyncio.shield(
+                        self.workspace_context.add_evaluation(
+                            record,
+                            decision.disclosure,
+                        )
+                    )
+            raise
         evaluation_id = (
             result.id if isinstance(result, EvaluationRecord) else result.evaluation_id
         )
@@ -135,7 +161,16 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         self._last_candidate_id = candidate.id
         self._trial_candidates.append(candidate)
         self._trial_evaluations.append(record)
-        return result
+        disclosure = (
+            DisclosureLevel.FULL
+            if isinstance(result, EvaluationRecord)
+            else (
+                DisclosureLevel.AGGREGATE
+                if isinstance(result, EvaluationSummary)
+                else DisclosureLevel.NONE
+            )
+        )
+        return await self.workspace_context.add_evaluation(record, disclosure)
 
     def budget(self) -> EvaluationBudget | None:
         ledger = self.optimizer.engine.budget_ledger
@@ -167,6 +202,11 @@ class Optimizer:
     max_rounds: int = 100
     max_concurrency: int = 1
     session_id: str | None = None
+    _context_ledger: AgentDisclosureLedger | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def _best(self, records: list[EvaluationRecord]) -> EvaluationRecord | None:
         return self.selection.select(records, self.objective)
@@ -218,17 +258,44 @@ class Optimizer:
             sandbox=self.workspace.sandbox,
             name=self._workspace_name(proposal),
         ) as candidate_workspace:
+            if proposal.parent_id is None:
+                proposal = proposal.model_copy(update={"parent_id": parent.id})
             before = await candidate_workspace.current_version()
             if before != parent.version:
                 raise ValueError(
                     f"candidate workspace is at {before!r}, "
                     f"expected parent {parent.version!r}"
                 )
+            if self._context_ledger is None:
+                from vero.runtime.context import AgentDisclosureLedger
+
+                self._context_ledger = AgentDisclosureLedger(
+                    self.engine.evaluator.session_dir / "agent-context.json"
+                )
+            from vero.runtime.context import WorkspaceContextManager
+
+            workspace_context = WorkspaceContextManager(
+                session_id=context.session_id,
+                session_dir=self.engine.evaluator.session_dir,
+                round_number=context.round,
+                proposal_id=proposal.id,
+                parent=parent,
+                workspace=candidate_workspace,
+                candidate_repository=self.candidate_repository,
+                engine=self.engine,
+                backend_id=self.backend_id,
+                request=self._request(parent),
+                candidates=tuple(context.candidates.values()),
+                evaluations=context.evaluations,
+                ledger=self._context_ledger,
+            )
+            await workspace_context.initialize()
             evaluation = _ScopedEvaluationGateway(
                 optimizer=self,
                 proposal=proposal,
                 parent=parent,
                 workspace=candidate_workspace,
+                workspace_context=workspace_context,
                 round_number=context.round,
             )
             change = await producer.produce(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import tempfile
@@ -11,22 +12,19 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from typing import AsyncIterator, Literal
+from typing import AsyncIterator, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from vero.candidate import Candidate
-from vero.candidate_repository.base import CandidateRepository
+from vero.candidate_repository.base import CandidateRepository, CandidateRepositoryError
 from vero.evaluation.persistence import _atomic_write_json
 from vero.sandbox import LocalSandbox, Sandbox
 from vero.workspace import GitWorkspace, Workspace
 
 
 _OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-
-
-class CandidateRepositoryError(RuntimeError):
-    """Raised when durable candidate state is invalid or cannot be transferred."""
+_AGENT_CONTEXT_DIRECTORY = ".vero"
 
 
 class _GitRepositoryConfig(BaseModel):
@@ -40,12 +38,7 @@ class _GitRepositoryConfig(BaseModel):
     @classmethod
     def validate_project_subpath(cls, value: str) -> str:
         path = PurePosixPath(value)
-        if (
-            not value
-            or path.is_absolute()
-            or ".." in path.parts
-            or "\\" in value
-        ):
+        if not value or path.is_absolute() or ".." in path.parts or "\\" in value:
             raise ValueError("project_subpath must stay within the Git repository")
         return value
 
@@ -65,9 +58,7 @@ def _safe_prefix(name: str | None) -> str:
     if name is None:
         return "vero-candidate-"
     value = "".join(
-        character
-        for character in name
-        if character.isalnum() or character in "-_"
+        character for character in name if character.isalnum() or character in "-_"
     )
     return f"{value[:48] or 'vero-candidate'}-"
 
@@ -191,6 +182,15 @@ class GitCandidateRepository(CandidateRepository[GitWorkspace]):
 
     def _candidate_ref(self, candidate_id: str) -> str:
         return f"refs/vero/candidates/{_candidate_digest(candidate_id)}"
+
+    def _context_ref(self, candidate_id: str) -> str:
+        return f"refs/vero/context/{_candidate_digest(candidate_id)}"
+
+    @property
+    def _reserved_context_path(self) -> str:
+        if self.project_subpath == ".":
+            return _AGENT_CONTEXT_DIRECTORY
+        return str(PurePosixPath(self.project_subpath) / _AGENT_CONTEXT_DIRECTORY)
 
     async def _host_git(self, *arguments: str, timeout: int = 120) -> str:
         result = await self._host.run(
@@ -474,6 +474,20 @@ class GitCandidateRepository(CandidateRepository[GitWorkspace]):
                     raise CandidateRepositoryError(
                         "imported Git object does not match candidate version"
                     )
+                tracked_context = await self._host_git(
+                    "ls-tree",
+                    "-r",
+                    "--name-only",
+                    temporary_ref,
+                    "--",
+                    self._reserved_context_path,
+                    timeout=30,
+                )
+                if tracked_context:
+                    raise CandidateRepositoryError(
+                        f"candidate tracks reserved agent context path "
+                        f"{self._reserved_context_path!r}"
+                    )
                 await self._host_git(
                     "update-ref", stable_ref, candidate.version, timeout=30
                 )
@@ -514,6 +528,167 @@ class GitCandidateRepository(CandidateRepository[GitWorkspace]):
             await self._fetch_from_workspace(candidate, workspace, temporary_ref)
 
         return await self._persist_import(candidate, fetch)
+
+    async def _exclude_agent_context(self, workspace: GitWorkspace) -> None:
+        git_directory = await self._source_git(
+            workspace,
+            "rev-parse",
+            "--absolute-git-dir",
+            timeout=30,
+        )
+        exclude_path = str(PurePosixPath(git_directory) / "info" / "exclude")
+        pattern = f"/{self._reserved_context_path}/"
+        existing = (
+            await workspace.sandbox.read_file(exclude_path)
+            if await workspace.sandbox.exists(exclude_path)
+            else ""
+        )
+        lines = existing.splitlines()
+        if pattern not in lines:
+            value = existing
+            if value and not value.endswith("\n"):
+                value += "\n"
+            value += pattern + "\n"
+            await workspace.sandbox.write_file(exclude_path, value)
+
+    async def _bundle_candidates(
+        self,
+        candidates: Sequence[Candidate],
+        destination: Path,
+    ) -> None:
+        refs = [self._candidate_ref(candidate.id) for candidate in candidates]
+        await self._host_git("bundle", "create", str(destination), *refs)
+
+    async def materialize_agent_history(
+        self,
+        candidates: Sequence[Candidate],
+        *,
+        workspace: GitWorkspace,
+        destination: str,
+    ) -> None:
+        if not self.supports(workspace):
+            raise TypeError(
+                "Git candidate repository requires a compatible GitWorkspace"
+            )
+        visible = sorted(candidates, key=lambda item: (item.created_at, item.id))
+        for candidate in visible:
+            stored = self.get(candidate.id)
+            if stored != candidate:
+                raise ValueError(
+                    f"candidate {candidate.id!r} is not present in durable storage"
+                )
+
+        await self._exclude_agent_context(workspace)
+        existing_refs = await self._source_git(
+            workspace,
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/vero/context",
+            timeout=30,
+        )
+        for reference in existing_refs.splitlines():
+            if reference:
+                await self._source_git(
+                    workspace,
+                    "update-ref",
+                    "-d",
+                    reference,
+                    timeout=30,
+                )
+
+        if visible:
+            refspecs = [
+                f"+{self._candidate_ref(candidate.id)}:{self._context_ref(candidate.id)}"
+                for candidate in visible
+            ]
+            if workspace.sandbox.host_path(workspace.root) is not None:
+                await self._source_git(
+                    workspace,
+                    "-c",
+                    "protocol.file.allow=always",
+                    "fetch",
+                    "--force",
+                    "--no-tags",
+                    "--no-recurse-submodules",
+                    str(self.repository_path),
+                    *refspecs,
+                )
+            else:
+                with tempfile.TemporaryDirectory(
+                    prefix="vero-context-bundle-"
+                ) as directory:
+                    local_bundle = Path(directory) / "candidates.bundle"
+                    await self._bundle_candidates(visible, local_bundle)
+                    async with workspace.sandbox.temporary_directory(
+                        prefix="vero-context-import-"
+                    ) as remote_directory:
+                        remote_bundle = str(
+                            PurePosixPath(remote_directory) / "candidates.bundle"
+                        )
+                        await workspace.sandbox.upload(
+                            str(local_bundle),
+                            remote_bundle,
+                        )
+                        await self._source_git(
+                            workspace,
+                            "fetch",
+                            "--force",
+                            "--no-tags",
+                            "--no-recurse-submodules",
+                            remote_bundle,
+                            *refspecs,
+                        )
+
+        if await workspace.sandbox.exists(destination):
+            await workspace.sandbox.remove(destination, recursive=True)
+        await workspace.sandbox.mkdir(destination)
+        by_id = {candidate.id: candidate for candidate in visible}
+        index = []
+        for candidate in visible:
+            digest = _candidate_digest(candidate.id)
+            candidate_dir = str(PurePosixPath(destination) / digest)
+            await workspace.sandbox.mkdir(candidate_dir)
+            native_ref = self._context_ref(candidate.id)
+            await workspace.sandbox.write_file(
+                str(PurePosixPath(candidate_dir) / "candidate.json"),
+                candidate.model_dump_json(indent=2) + "\n",
+            )
+            patch_path = None
+            parent = by_id.get(candidate.parent_id) if candidate.parent_id else None
+            if parent is not None:
+                arguments = [
+                    "diff",
+                    "--binary",
+                    parent.version,
+                    candidate.version,
+                ]
+                if self.project_subpath != ".":
+                    arguments.extend(["--", self.project_subpath])
+                patch = await self._source_git(workspace, *arguments)
+                patch_path = f"{digest}/parent.patch"
+                await workspace.sandbox.write_file(
+                    str(PurePosixPath(destination) / patch_path),
+                    patch + ("\n" if patch and not patch.endswith("\n") else ""),
+                )
+            index.append(
+                {
+                    "candidate_id": candidate.id,
+                    "version": candidate.version,
+                    "parent_id": candidate.parent_id,
+                    "native_ref": native_ref,
+                    "metadata_path": f"{digest}/candidate.json",
+                    "parent_patch_path": patch_path,
+                }
+            )
+        await workspace.sandbox.write_file(
+            str(PurePosixPath(destination) / "index.json"),
+            json.dumps(
+                {"schema_version": 1, "candidates": index},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
 
     async def import_candidate(
         self,
@@ -671,4 +846,21 @@ class GitCandidateRepository(CandidateRepository[GitWorkspace]):
                 raise CandidateRepositoryError(
                     "candidate checkout is unexpectedly dirty"
                 )
-            yield workspace
+            try:
+                yield workspace
+            finally:
+                context_path = str(
+                    PurePosixPath(workspace.project_path) / _AGENT_CONTEXT_DIRECTORY
+                )
+                if await workspace.sandbox.exists(context_path):
+                    result = await asyncio.shield(
+                        workspace.sandbox.run(
+                            ["chmod", "-R", "u+w", context_path],
+                            timeout=30,
+                        )
+                    )
+                    if result.returncode != 0:
+                        raise CandidateRepositoryError(
+                            result.stderr
+                            or f"failed to unseal agent context {context_path}"
+                        )

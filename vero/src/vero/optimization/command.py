@@ -21,6 +21,7 @@ from vero.workspace import Workspace
 
 _PLACEHOLDERS = {
     "workspace",
+    "context",
     "producer",
     "round",
     "instruction",
@@ -127,7 +128,9 @@ class CommandCandidateProducer:
         if target is not None:
             target = target.resolve()
             if root == target or root.is_relative_to(target):
-                raise ValueError("candidate producer must live outside the editable target")
+                raise ValueError(
+                    "candidate producer must live outside the editable target"
+                )
 
         best = context.best
         async with SandboxStagingArea(
@@ -144,6 +147,7 @@ class CommandCandidateProducer:
             )
             values = {
                 "workspace": workspace.project_path,
+                "context": posixpath.join(workspace.project_path, ".vero"),
                 "producer": producer_root,
                 "round": str(context.round),
                 "instruction": proposal.instruction or "",
@@ -164,11 +168,13 @@ class CommandCandidateProducer:
                     expanded = expanded.replace(f"{{{placeholder}}}", value)
                 command.append(expanded)
 
+            environment = self._environment()
+            environment["VERO_CONTEXT_PATH"] = values["context"]
             result = await workspace.sandbox.run(
                 command,
                 cwd=working_directory,
                 timeout=self.config.timeout_seconds,
-                env=self._environment(),
+                env=environment,
             )
         if result.returncode != 0:
             raise RuntimeError(

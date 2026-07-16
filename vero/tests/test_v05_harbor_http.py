@@ -14,7 +14,9 @@ from vero.evaluation import (
     DisclosureLevel,
     EvaluationAcknowledgement,
     EvaluationDatabase,
+    EvaluationReceipt,
     EvaluationRequestError,
+    EvaluationStatus,
 )
 from vero.harbor.app import create_app
 from vero.harbor.auth import (
@@ -46,9 +48,15 @@ class FakeSidecar:
         self.requests.append(request)
         return SidecarEvaluationResult(
             disclosure=DisclosureLevel.NONE,
-            result=EvaluationAcknowledgement(
+            receipt=EvaluationReceipt(
                 evaluation_id="evaluation",
-                status="success",
+                status=EvaluationStatus.SUCCESS,
+                disclosure=DisclosureLevel.NONE,
+                result=EvaluationAcknowledgement(
+                    evaluation_id="evaluation",
+                    status=EvaluationStatus.SUCCESS,
+                ),
+                result_path=".vero/evaluations/evaluation/evaluation.json",
             ),
         )
 

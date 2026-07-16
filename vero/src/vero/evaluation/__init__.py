@@ -2,6 +2,7 @@
 
 from vero.evaluation.backend import (
     BackendRegistry,
+    CaseResourceExporter,
     CaseStore,
     EvaluationBackend,
     EvaluationContext,
@@ -46,6 +47,7 @@ from vero.evaluation.models import (
     EvaluationLimits,
     EvaluationModel,
     EvaluationRecord,
+    EvaluationReceipt,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
@@ -82,6 +84,7 @@ __all__ = [
     "CaseError",
     "CaseIds",
     "CaseRange",
+    "CaseResourceExporter",
     "CaseResult",
     "CaseSelection",
     "CaseStatus",
@@ -113,6 +116,7 @@ __all__ = [
     "EvaluationManifest",
     "EvaluationModel",
     "EvaluationRecord",
+    "EvaluationReceipt",
     "EvaluationRequestError",
     "EvaluationReport",
     "EvaluationRequest",

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -35,6 +36,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.staging import SandboxStagingArea
+from vero.sandbox import Sandbox
 
 
 def _default_uv() -> str:
@@ -291,6 +293,39 @@ class HarborBackend:
 
     async def resolve_cost(self, evaluation_set: EvaluationSet) -> EvaluationCost:
         return EvaluationCost(cases=len(self._selected_cases(evaluation_set)))
+
+    async def export_case_resources(
+        self,
+        *,
+        evaluation_set: EvaluationSet,
+        destination: str,
+        sandbox: Sandbox,
+    ) -> None:
+        """Expose configured case identities, never the hidden task source."""
+
+        index = []
+        for case in self._selected_cases(evaluation_set):
+            digest = hashlib.sha256(case.id.encode()).hexdigest()
+            filename = f"{digest}.json"
+            await sandbox.write_file(
+                str(PurePosixPath(destination) / filename),
+                case.model_dump_json(indent=2) + "\n",
+            )
+            index.append({"case_id": case.id, "path": filename})
+        await sandbox.write_file(
+            str(PurePosixPath(destination) / "index.json"),
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
+                    "cases": index,
+                    "task_source_exposed": False,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
 
     def _secrets(self) -> list[str]:
         values = list(self.config.environment.values())

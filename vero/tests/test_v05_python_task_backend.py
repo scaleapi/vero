@@ -22,6 +22,7 @@ from vero.optimization import (
     CommandCandidateProducerConfig,
 )
 from vero.runtime import create_local_optimization_session
+from vero.sandbox import LocalSandbox
 
 
 def initialize_repository(path: Path) -> None:
@@ -109,6 +110,48 @@ def test_python_task_backend_requires_external_case_file(tmp_path: Path):
             cases_path=str(missing),
             uv_executable=sys.executable,
         )
+
+
+@pytest.mark.asyncio
+async def test_python_task_backend_exports_only_selected_cases(tmp_path: Path):
+    cases = tmp_path / "cases.json"
+    cases.write_text(
+        json.dumps(
+            [
+                {"id": "a", "prompt": "alpha"},
+                {"id": "b", "prompt": "beta"},
+                {"id": "c", "prompt": "gamma"},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    destination = tmp_path / "context"
+    destination.mkdir()
+    backend = PythonTaskBackend(
+        PythonTaskBackendConfig(
+            harness_root=str(tmp_path),
+            module="target.tasks",
+            task="quality",
+            cases_path=str(cases),
+            uv_executable=sys.executable,
+        )
+    )
+
+    await backend.export_case_resources(
+        evaluation_set=EvaluationSet(selection=CaseIds(ids=["c", "a"])),
+        destination=str(destination),
+        sandbox=await LocalSandbox.create(root=tmp_path),
+    )
+
+    index = json.loads((destination / "index.json").read_text())
+    assert [item["case_id"] for item in index["cases"]] == ["c", "a"]
+    exported = [
+        json.loads((destination / item["path"]).read_text()) for item in index["cases"]
+    ]
+    assert exported == [
+        {"id": "c", "prompt": "gamma"},
+        {"id": "a", "prompt": "alpha"},
+    ]
 
 
 @pytest.mark.asyncio

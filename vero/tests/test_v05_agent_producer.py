@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -17,8 +18,8 @@ from vero.evaluation import (
     EvaluationAuthorization,
     EvaluationDatabase,
     EvaluationEngine,
+    EvaluationReceipt,
     EvaluationSet,
-    EvaluationSummary,
     Evaluator,
     MetricSelector,
     ObjectiveSpec,
@@ -68,25 +69,66 @@ def initialize_repository(path: Path) -> str:
 
 class CheckpointingCodingAgent:
     def __init__(self):
-        self.feedback: EvaluationSummary | None = None
+        self.feedback: EvaluationReceipt | None = None
+        self.initial_candidate_ids: set[str] = set()
+        self.initial_evaluation_count = 0
+        self.case_resource = None
 
     async def run(self, *, context, prompt, max_turns, on_event=None):
         assert prompt == "Make the program faster"
         assert max_turns == 5
+        context_root = Path(context.workspace.project_path) / ".vero"
+        assert not await context.workspace.is_dirty()
+        assert context.workspace.can_read(".vero/manifest.json")
+        assert not context.workspace.can_write(".vero")
+        assert not context.workspace.can_write(".vero/manifest.json")
+        manifest = json.loads((context_root / "manifest.json").read_text())
+        assert manifest["parent_candidate_id"] == context.parent.id
+        candidate_index = json.loads(
+            (context_root / "candidates" / "index.json").read_text()
+        )
+        self.initial_candidate_ids = {
+            candidate["candidate_id"] for candidate in candidate_index["candidates"]
+        }
+        evaluation_index = json.loads(
+            (context_root / "evaluations" / "index.json").read_text()
+        )
+        self.initial_evaluation_count = len(evaluation_index["evaluations"])
+        cases_index = json.loads((context_root / "cases" / "index.json").read_text())
+        resource_path = cases_index["case_resources"][0]["path"]
+        resource_index = json.loads(
+            (
+                context_root / "cases" / resource_path / "resources" / "index.json"
+            ).read_text()
+        )
+        self.case_resource = json.loads(
+            (
+                context_root
+                / "cases"
+                / resource_path
+                / "resources"
+                / resource_index["resources"][0]["path"]
+            ).read_text()
+        )
         program = Path(context.workspace.project_path) / "program.txt"
         program.write_text("fast\n", encoding="utf-8")
         feedback = await context.evaluation.evaluate_current(
             description="Try the fast implementation"
         )
-        assert isinstance(feedback, EvaluationSummary)
+        assert isinstance(feedback, EvaluationReceipt)
         self.feedback = feedback
+        assert (Path(context.workspace.project_path) / feedback.result_path).is_file()
+        refreshed = json.loads(
+            (context_root / "evaluations" / "index.json").read_text()
+        )
+        assert len(refreshed["evaluations"]) == self.initial_evaluation_count + 1
 
         # A later edit regresses. The evaluated checkpoint must remain selectable.
         program.write_text("slow\n", encoding="utf-8")
         return AgentRunResult(
             description="Finish agent attempt",
             state={"turn": 2},
-            trace=[{"objective": feedback.objective.value}],
+            trace=[{"objective": feedback.result.objective.value}],
             metadata={"provider": "test"},
         )
 
@@ -137,6 +179,11 @@ report_path.write_text(json.dumps({
 """,
         encoding="utf-8",
     )
+    cases = harness / "cases.json"
+    cases.write_text(
+        json.dumps([{"id": "case-1", "size": 128}]) + "\n",
+        encoding="utf-8",
+    )
 
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(target))
@@ -150,6 +197,7 @@ report_path.write_text(json.dumps({
         return EvaluationAuthorization(
             may_evaluate=True,
             disclosure=DisclosureLevel.AGGREGATE,
+            expose_case_resources=True,
         )
 
     engine = EvaluationEngine(
@@ -169,6 +217,8 @@ report_path.write_text(json.dumps({
                             "{workspace}",
                             "{report}",
                         ],
+                        staged_inputs={"cases": str(cases)},
+                        agent_context_inputs=["cases"],
                     )
                 )
             }
@@ -203,7 +253,11 @@ report_path.write_text(json.dumps({
     result = await optimizer.run()
 
     assert agent.feedback is not None
-    assert agent.feedback.objective.value == 1.0
+    assert agent.feedback.result.objective.value == 1.0
+    assert agent.feedback.result_path.startswith(".vero/evaluations/")
+    assert agent.initial_candidate_ids == {baseline_version}
+    assert agent.initial_evaluation_count == 1
+    assert agent.case_resource == [{"id": "case-1", "size": 128}]
     assert len(result.evaluations) == 3
     assert len(result.candidates) == 3
     assert result.best.objective.value == 1.0

@@ -261,6 +261,35 @@ async def test_command_backend_resolves_cost(tmp_path: Path, selection, expected
     assert cost.cases == expected
 
 
+@pytest.mark.asyncio
+async def test_command_backend_exports_only_allowlisted_agent_inputs(tmp_path: Path):
+    visible = tmp_path / "visible.json"
+    visible.write_text('{"visible": true}\n', encoding="utf-8")
+    hidden = tmp_path / "hidden.json"
+    hidden.write_text('{"hidden": true}\n', encoding="utf-8")
+    destination = tmp_path / "context"
+    destination.mkdir()
+    backend = CommandBackend(
+        CommandBackendConfig(
+            harness_root=str(tmp_path),
+            command=["run"],
+            staged_inputs={"visible": str(visible), "hidden": str(hidden)},
+            agent_context_inputs=["visible"],
+        )
+    )
+
+    await backend.export_case_resources(
+        evaluation_set=EvaluationSet(name="validation"),
+        destination=str(destination),
+        sandbox=await LocalSandbox.create(root=tmp_path),
+    )
+
+    index = json.loads((destination / "index.json").read_text())
+    assert index["resources"] == [{"name": "visible", "path": "visible"}]
+    assert json.loads((destination / "visible").read_text()) == {"visible": True}
+    assert not (destination / "hidden").exists()
+
+
 def test_command_config_rejects_unsafe_shapes(tmp_path: Path):
     with pytest.raises(ValidationError, match="must be absolute"):
         CommandBackendConfig(harness_root="relative", command=["run"])
@@ -277,6 +306,12 @@ def test_command_config_rejects_unsafe_shapes(tmp_path: Path):
             command=["run"],
             environment={"TOKEN": "value"},
             passthrough_environment=["TOKEN"],
+        )
+    with pytest.raises(ValidationError, match="unknown staged inputs"):
+        CommandBackendConfig(
+            harness_root=str(tmp_path),
+            command=["run"],
+            agent_context_inputs=["missing"],
         )
 
 

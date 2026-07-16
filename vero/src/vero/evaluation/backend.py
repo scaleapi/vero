@@ -14,6 +14,7 @@ from vero.evaluation.models import (
     EvaluationSet,
     CaseResult,
 )
+from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
 
@@ -53,6 +54,19 @@ class EvaluationBackend(Protocol):
     ) -> EvaluationReport: ...
 
 
+@runtime_checkable
+class CaseResourceExporter(Protocol):
+    """Optional trusted export of an agent-visible evaluation-set view."""
+
+    async def export_case_resources(
+        self,
+        *,
+        evaluation_set: EvaluationSet,
+        destination: str,
+        sandbox: Sandbox,
+    ) -> None: ...
+
+
 class BackendRegistry:
     """Registry of trusted, preconfigured evaluation backends."""
 
@@ -76,7 +90,9 @@ class BackendRegistry:
         try:
             return self._backends[backend_id]
         except KeyError as error:
-            raise UnknownBackendError(f"unknown evaluation backend: {backend_id!r}") from error
+            raise UnknownBackendError(
+                f"unknown evaluation backend: {backend_id!r}"
+            ) from error
 
     def __contains__(self, backend_id: str) -> bool:
         return backend_id in self._backends

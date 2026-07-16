@@ -71,6 +71,7 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
         "agent_access": [
             AgentAccessSpec(
                 partition="validation",
+                expose_case_resources=True,
                 total_runs=5,
                 total_cases=25,
                 max_cases_per_run=5,
@@ -147,6 +148,7 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     )
     assert set(serve["backends"]) == {"harbor-validation", "harbor-test"}
     assert serve["access_policies"][0]["disclosure"] == "aggregate"
+    assert serve["access_policies"][0]["expose_case_resources"] is True
     assert serve["budgets"][0]["total_runs"] == 5
     assert serve["selection"]["backend_id"] == "harbor-validation"
     assert serve["targets"][0]["backend_id"] == "harbor-test"
@@ -180,7 +182,12 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     compose = (output / "environment/docker-compose.yaml").read_text()
     assert "vero.harbor.deployment:build_harbor_components" in compose
     assert "admin_state:/state/admin" in compose
+    assert "agent_context:/work/agent/.vero:ro" in compose
+    assert "agent_context:/state/agent-context" in compose
     assert set(yaml.safe_load(compose)["services"]) == {"main", "eval-sidecar"}
+    seed = (output / "environment/main/seed.sh").read_text()
+    assert "-path /work/agent/.vero -prune" in seed
+    assert "'/.vero/' >> /work/agent/.git/info/exclude" in seed
     assert (output / "tests/test.sh").stat().st_mode & 0o111
 
 
@@ -216,6 +223,17 @@ def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
         compile_harbor_task(
             safe,
             safe.agent_repo,
+            vero_root=Path(__file__).parents[1],
+        )
+
+    (Path(safe.agent_repo) / ".vero").mkdir()
+    (Path(safe.agent_repo) / ".vero" / "context.json").write_text("{}\n")
+    _git(Path(safe.agent_repo), "add", "-f", ".vero/context.json")
+    _git(Path(safe.agent_repo), "commit", "-q", "-m", "reserved context")
+    with pytest.raises(ValueError, match="reserved path"):
+        compile_harbor_task(
+            safe,
+            tmp_path / "reserved-context",
             vero_root=Path(__file__).parents[1],
         )
 

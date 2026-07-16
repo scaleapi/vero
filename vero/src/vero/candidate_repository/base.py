@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Generic, TypeVar
+from typing import AsyncIterator, Generic, Sequence, TypeVar
 
 from vero.candidate import Candidate
 from vero.sandbox import Sandbox
@@ -12,6 +12,10 @@ from vero.workspace import Workspace
 
 
 WorkspaceT = TypeVar("WorkspaceT", bound=Workspace)
+
+
+class CandidateRepositoryError(RuntimeError):
+    """Raised when durable candidate state is invalid or cannot be transferred."""
 
 
 class CandidateRepository(ABC, Generic[WorkspaceT]):
@@ -41,6 +45,22 @@ class CandidateRepository(ABC, Generic[WorkspaceT]):
         workspace: WorkspaceT,
     ) -> Candidate:
         """Durably record a clean workspace at the candidate's version."""
+        ...
+
+    @abstractmethod
+    async def materialize_agent_history(
+        self,
+        candidates: Sequence[Candidate],
+        *,
+        workspace: WorkspaceT,
+        destination: str,
+    ) -> None:
+        """Expose a repository-native view of the visible candidates.
+
+        ``destination`` is a sandbox path reserved for generated agent context.
+        Implementations may install disposable native references in the supplied
+        workspace, but must never mutate durable candidate state.
+        """
         ...
 
     @abstractmethod

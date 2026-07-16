@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import posixpath
 from pathlib import Path
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -10,21 +11,34 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from vero.candidate import Candidate
 from vero.evaluation import (
     AllCases,
+    CaseResourceExporter,
     DisclosureLevel,
     EvaluationAcknowledgement,
     EvaluationAuthorization,
     EvaluationBudget,
+    EvaluationCancelledError,
+    EvaluationExecutionError,
     EvaluationLimits,
     EvaluationModel,
     EvaluationRecord,
+    EvaluationReceipt,
     EvaluationRequest,
     EvaluationSet,
     EvaluationSummary,
     ObjectiveSpec,
+    project_evaluation,
 )
 from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.persistence import _atomic_write_json
+from vero.runtime.context import (
+    AgentContextDirectory,
+    AgentDisclosureLedger,
+    context_digest,
+    make_evaluation_receipt,
+    narrower_disclosure,
+)
 from vero.harbor.transport import CandidateTransport
+from vero.sandbox import LocalSandbox
 
 
 class EvaluationAccessError(RuntimeError):
@@ -43,6 +57,7 @@ class EvaluationAccessPolicy(EvaluationModel):
     partition: str | None = None
     objective: ObjectiveSpec | None = None
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
+    expose_case_resources: bool = False
     agent_evaluable: bool = True
     min_aggregate_cases: int = Field(default=5, ge=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
@@ -114,20 +129,12 @@ EvaluationProjection = EvaluationRecord | EvaluationSummary | EvaluationAcknowle
 
 class SidecarEvaluationResult(EvaluationModel):
     disclosure: DisclosureLevel
-    result: EvaluationProjection
-    result_path: str | None = None
+    receipt: EvaluationReceipt
 
     @model_validator(mode="after")
     def validate_projection(self) -> SidecarEvaluationResult:
-        expected = {
-            DisclosureLevel.FULL: EvaluationRecord,
-            DisclosureLevel.AGGREGATE: EvaluationSummary,
-            DisclosureLevel.NONE: EvaluationAcknowledgement,
-        }[self.disclosure]
-        if not isinstance(self.result, expected):
-            raise ValueError(
-                f"{self.disclosure.value} disclosure requires {expected.__name__}"
-            )
+        if self.receipt.disclosure != self.disclosure:
+            raise ValueError("sidecar disclosure must match its receipt")
         return self
 
 
@@ -136,6 +143,7 @@ class EvaluationAccessStatus(EvaluationModel):
     evaluation_set_name: str
     partition: str | None
     disclosure: DisclosureLevel
+    expose_case_resources: bool
     min_aggregate_cases: int
     allowed_parameters: list[str]
     limits: EvaluationLimits | None = None
@@ -174,6 +182,20 @@ class EvaluationSidecar:
         self.agent_volume = Path(agent_volume) if agent_volume is not None else None
         self.admin_volume = Path(admin_volume) if admin_volume is not None else None
         self.submit_enabled = submit_enabled
+        self._context_lock = asyncio.Lock()
+        self._context_initialized = False
+        self._disclosures = AgentDisclosureLedger(
+            self.engine.evaluator.session_dir / "agent-context.json"
+        )
+        self._context_directory = (
+            AgentContextDirectory(
+                sandbox=LocalSandbox(self.agent_volume.parent),
+                root=str(self.agent_volume),
+                session_dir=self.engine.evaluator.session_dir,
+            )
+            if self.agent_volume is not None
+            else None
+        )
         self._policies: dict[tuple[str, str, str | None], EvaluationAccessPolicy] = {}
         for policy in access_policies:
             if policy.key in self._policies:
@@ -220,22 +242,153 @@ class EvaluationSidecar:
                 f"{policy.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
-    async def _write_projection(
+    def _visible_projections(
         self,
-        result: EvaluationProjection,
-    ) -> str | None:
-        if self.agent_volume is None:
-            return None
-        evaluation_id = (
-            result.id if isinstance(result, EvaluationRecord) else result.evaluation_id
+    ) -> list[tuple[EvaluationRecord, DisclosureLevel, EvaluationProjection]]:
+        projections = []
+        for evaluation_id, entry in self._disclosures.model.evaluations.items():
+            record = self.engine.database.get_evaluation(evaluation_id)
+            if record is None:
+                continue
+            policy = self._policies.get(
+                (
+                    record.backend_id,
+                    record.request.evaluation_set.name,
+                    record.request.evaluation_set.partition,
+                )
+            )
+            if policy is None or not policy.agent_evaluable:
+                continue
+            disclosure = narrower_disclosure(
+                entry.maximum_disclosure,
+                policy.disclosure,
+            )
+            projections.append(
+                (record, disclosure, project_evaluation(record, disclosure))
+            )
+        return projections
+
+    async def _write_candidate_index(
+        self,
+        projections: list[
+            tuple[EvaluationRecord, DisclosureLevel, EvaluationProjection]
+        ],
+    ) -> None:
+        assert self._context_directory is not None
+        root = self._context_directory.path("candidates")
+        sandbox = self._context_directory.sandbox
+        if await sandbox.exists(root):
+            await sandbox.remove(root, recursive=True)
+        await sandbox.mkdir(root)
+        candidates = {
+            record.request.candidate.id: record.request.candidate
+            for record, _, _ in projections
+        }
+        index = []
+        for candidate in sorted(
+            candidates.values(),
+            key=lambda item: (item.created_at, item.id),
+        ):
+            digest = context_digest(candidate.id)
+            directory = self._context_directory.path("candidates", digest)
+            await sandbox.mkdir(directory)
+            await sandbox.write_file(
+                posixpath.join(directory, "candidate.json"),
+                candidate.model_dump_json(indent=2) + "\n",
+            )
+            index.append(
+                {
+                    "candidate_id": candidate.id,
+                    "version": candidate.version,
+                    "parent_id": candidate.parent_id,
+                    "native_ref": candidate.version,
+                    "metadata_path": f"{digest}/candidate.json",
+                    "parent_patch_path": None,
+                }
+            )
+        await self._context_directory.write_json(
+            self._context_directory.path("candidates", "index.json"),
+            {"schema_version": 1, "candidates": index},
         )
-        destination = self.agent_volume / "results" / f"{evaluation_id}.json"
-        await asyncio.to_thread(
-            _atomic_write_json,
-            destination,
-            result.model_dump(mode="json"),
+
+    async def _write_case_resources(self) -> None:
+        assert self._context_directory is not None
+        root = self._context_directory.path("cases")
+        sandbox = self._context_directory.sandbox
+        if await sandbox.exists(root):
+            await sandbox.remove(root, recursive=True)
+        await sandbox.mkdir(root)
+        index = []
+        for policy in self._policies.values():
+            backend = self.engine.backends.resolve(policy.backend_id)
+            if (
+                not policy.agent_evaluable
+                or not policy.expose_case_resources
+                or not isinstance(backend, CaseResourceExporter)
+            ):
+                continue
+            evaluation_set = EvaluationSet(
+                name=policy.evaluation_set_name,
+                partition=policy.partition,
+            )
+            digest = context_digest(evaluation_set.budget_key(policy.backend_id))
+            resource_root = self._context_directory.path("cases", digest)
+            await sandbox.mkdir(resource_root)
+            await self._context_directory.write_json(
+                posixpath.join(resource_root, "manifest.json"),
+                {
+                    "schema_version": 1,
+                    "backend_id": policy.backend_id,
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
+                    "resources_path": "resources",
+                },
+            )
+            resources = posixpath.join(resource_root, "resources")
+            await sandbox.mkdir(resources)
+            await backend.export_case_resources(
+                evaluation_set=evaluation_set,
+                destination=resources,
+                sandbox=sandbox,
+            )
+            index.append(
+                {
+                    "backend_id": policy.backend_id,
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
+                    "path": digest,
+                }
+            )
+        await self._context_directory.write_json(
+            self._context_directory.path("cases", "index.json"),
+            {"schema_version": 1, "case_resources": index},
         )
-        return str(destination)
+
+    async def initialize_context(self) -> None:
+        if self._context_directory is None:
+            return
+        async with self._context_lock:
+            await self._context_directory.reset()
+            await self._context_directory.write_header(
+                session_id=self.engine.evaluator.session_id,
+                round_number=None,
+                proposal_id=None,
+                parent_candidate_id=None,
+            )
+            projections = self._visible_projections()
+            await self._write_candidate_index(projections)
+            await self._context_directory.write_evaluations(projections)
+            await self._write_case_resources()
+            self._context_initialized = True
+
+    async def _refresh_context(self) -> None:
+        if self._context_directory is None:
+            return
+        if not self._context_initialized:
+            await self.initialize_context()
+            return
+        async with self._context_lock:
+            projections = self._visible_projections()
+            await self._write_candidate_index(projections)
+            await self._context_directory.write_evaluations(projections)
 
     async def evaluate(
         self,
@@ -265,20 +418,38 @@ class EvaluationSidecar:
             limits=policy.limits or request.limits or EvaluationLimits(),
             seed=request.seed,
         )
-        result = await self.engine.evaluate(
-            backend_id=request.backend_id,
-            request=canonical_request,
-            objective_spec=policy.objective,
-            authorization=EvaluationAuthorization(
-                may_evaluate=True,
-                meter_budget=True,
-                disclosure=policy.disclosure,
-            ),
+        try:
+            result = await self.engine.evaluate(
+                backend_id=request.backend_id,
+                request=canonical_request,
+                objective_spec=policy.objective,
+                authorization=EvaluationAuthorization(
+                    may_evaluate=True,
+                    meter_budget=True,
+                    disclosure=policy.disclosure,
+                    expose_case_resources=policy.expose_case_resources,
+                ),
+            )
+        except (EvaluationExecutionError, EvaluationCancelledError) as error:
+            record = self.engine.database.get_evaluation(error.evaluation_id)
+            if record is not None:
+                await self._disclosures.remember(record.id, policy.disclosure)
+                await asyncio.shield(self._refresh_context())
+            raise
+        evaluation_id = (
+            result.id if isinstance(result, EvaluationRecord) else result.evaluation_id
         )
+        record = self.engine.database.get_evaluation(evaluation_id)
+        if record is None:
+            raise RuntimeError(
+                f"evaluation engine did not index completed evaluation {evaluation_id!r}"
+            )
+        maximum = await self._disclosures.remember(record.id, policy.disclosure)
+        disclosure = narrower_disclosure(maximum, policy.disclosure)
+        await self._refresh_context()
         return SidecarEvaluationResult(
-            disclosure=policy.disclosure,
-            result=result,
-            result_path=await self._write_projection(result),
+            disclosure=disclosure,
+            receipt=make_evaluation_receipt(record, disclosure),
         )
 
     async def submit(self, version: str | None = None) -> Submission:
@@ -314,6 +485,7 @@ class EvaluationSidecar:
                     evaluation_set_name=policy.evaluation_set_name,
                     partition=policy.partition,
                     disclosure=policy.disclosure,
+                    expose_case_resources=policy.expose_case_resources,
                     min_aggregate_cases=policy.min_aggregate_cases,
                     allowed_parameters=list(policy.allowed_parameters),
                     limits=policy.limits,

@@ -5,10 +5,9 @@ from __future__ import annotations
 from typing import Protocol, Sequence, runtime_checkable
 
 from vero.evaluation import (
-    EvaluationAcknowledgement,
     EvaluationBudget,
+    EvaluationReceipt,
     EvaluationRecord,
-    EvaluationSummary,
     ObjectiveSpec,
 )
 from vero.optimization.models import (
@@ -35,7 +34,7 @@ class CandidateEvaluationGateway(Protocol):
         self,
         *,
         description: str = "Evaluate agent checkpoint",
-    ) -> EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement: ...
+    ) -> EvaluationReceipt: ...
 
     def budget(self) -> EvaluationBudget | None: ...
 

@@ -32,15 +32,14 @@ class EvaluationTools:
         self,
         description: str = "Evaluate agent checkpoint",
     ) -> str:
-        """Save and evaluate the current program, returning authorized feedback.
+        """Save and evaluate the current program, returning a feedback receipt.
 
         Args:
             description: A short description of the program changes being evaluated.
 
         Returns:
-            A JSON evaluation record, aggregate summary, or acknowledgement. The
-            available detail is controlled by the evaluation backend's disclosure
-            policy.
+            A bounded JSON receipt with an authorized summary and the path to the
+            complete permitted feedback under ``.vero/evaluations``.
         """
 
         result = await self._gateway().evaluate_current(description=description)

@@ -226,6 +226,7 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         admin_volume=Path(parsed.admin_volume),
         submit_enabled=parsed.submit_enabled,
     )
+    await sidecar.initialize_context()
     verifier = CanonicalVerifier(
         engine=engine,
         selection=selection,

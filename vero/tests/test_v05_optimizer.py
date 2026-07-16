@@ -103,10 +103,16 @@ report_path.write_text(json.dumps({
     producer_script = producer_root / "optimize.py"
     producer_script.write_text(
         """
+import json
+import os
 import sys
 from pathlib import Path
 
 workspace = Path(sys.argv[1])
+context = Path(sys.argv[2])
+assert Path(os.environ["VERO_CONTEXT_PATH"]) == context
+evaluations = json.loads((context / "evaluations/index.json").read_text())
+assert len(evaluations["evaluations"]) == 1
 (workspace / "program.txt").write_text("fast\\n")
 """
     )
@@ -162,6 +168,7 @@ workspace = Path(sys.argv[1])
                         sys.executable,
                         str(producer_script),
                         "{workspace}",
+                        "{context}",
                     ],
                     description="Use fast implementation",
                 )

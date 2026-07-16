@@ -42,7 +42,10 @@ def allow_all_evaluations(
 ) -> EvaluationAuthorization:
     """Explicit resolver for trusted runtimes without an evaluation boundary."""
 
-    return EvaluationAuthorization(may_evaluate=True)
+    return EvaluationAuthorization(
+        may_evaluate=True,
+        expose_case_resources=True,
+    )
 
 
 class EvaluationEngine:
@@ -67,12 +70,14 @@ class EvaluationEngine:
         self.listeners: list[Callable[[EvaluationRecord], object]] = []
         self._record_lock = asyncio.Lock()
 
-    async def _authorization(
+    async def authorize(
         self,
         backend_id: str,
         request: EvaluationRequest,
-        supplied: EvaluationAuthorization | None,
+        supplied: EvaluationAuthorization | None = None,
     ) -> EvaluationAuthorization:
+        """Resolve the trusted access decision without executing an evaluation."""
+
         if supplied is not None:
             return supplied
         if self.authorization_resolver is None:
@@ -94,7 +99,7 @@ class EvaluationEngine:
         authorization: EvaluationAuthorization | None,
     ) -> tuple[EvaluationRecord, EvaluationAuthorization]:
         backend = self.backends.resolve(backend_id)
-        decision = await self._authorization(backend_id, request, authorization)
+        decision = await self.authorize(backend_id, request, authorization)
         if not decision.may_evaluate:
             raise EvaluationDeniedError(
                 decision.reason or "evaluation is not authorized"

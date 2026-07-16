@@ -33,7 +33,7 @@ AGENT_REPO = "/work/agent"
 CASES_DIR = "/opt/cases"
 TASK_SOURCE_DIR = "/opt/task-source"
 SERVE_CONFIG = "/opt/serve.json"
-AGENT_VOLUME = "/state/agent-results"
+AGENT_VOLUME = "/state/agent-context"
 ADMIN_VOLUME = "/state/admin"
 SESSION_DIR = "/state/admin/session"
 TOKEN_PATH = "/state/token/admin.token"
@@ -123,6 +123,8 @@ def _prepare_baseline_repo(
         )
     if rewrite_vero_path:
         _rewrite_vero_path(destination / "pyproject.toml")
+    if (destination / ".vero").exists():
+        raise ValueError("agent baseline contains reserved path '.vero'")
 
     def git(*arguments: str) -> str:
         result = subprocess.run(
@@ -252,6 +254,7 @@ def _deployment_config(
                 "partition": access.partition,
                 "objective": config.objective.model_dump(mode="json"),
                 "disclosure": access.disclosure.value,
+                "expose_case_resources": access.expose_case_resources,
                 "agent_evaluable": True,
                 "min_aggregate_cases": access.min_aggregate_cases,
                 "parameters": {},

@@ -116,6 +116,10 @@ async def test_standard_deployment_factory_builds_one_canonical_runtime(tmp_path
     assert components.verifier.selection.baseline_candidate.version == baseline
     assert components.sidecar.status().evaluation_access[0].budget.remaining_runs == 4
     assert (tmp_path / "state/session/budgets.json").is_file()
+    assert (tmp_path / "state/agent/manifest.json").is_file()
+    assert json.loads(
+        (tmp_path / "state/agent/evaluations/index.json").read_text()
+    ) == {"schema_version": 1, "evaluations": []}
 
 
 @pytest.mark.asyncio

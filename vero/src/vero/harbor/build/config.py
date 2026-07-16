@@ -20,6 +20,7 @@ from vero.evaluation import (
 class AgentAccessSpec(EvaluationModel):
     partition: str
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
+    expose_case_resources: bool = False
     min_aggregate_cases: int = Field(default=5, ge=1)
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)

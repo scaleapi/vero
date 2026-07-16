@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
+from vero.candidate import Candidate
 from vero.optimization import (
     CandidateEvaluationGateway,
     CandidateProposal,
-    OptimizationContext,
 )
-from vero.runtime import ArtifactStore
+from vero.runtime.context import AGENT_CONTEXT_DIRECTORY
 from vero.workspace import Workspace
 
 
@@ -31,9 +31,8 @@ class AgentContext:
     session_id: str
     workspace: Workspace
     proposal: CandidateProposal
-    optimization: OptimizationContext
+    parent: Candidate
     evaluation: CandidateEvaluationGateway
-    artifacts: ArtifactStore | None = None
 
     @property
     def project_path(self) -> Path:
@@ -47,17 +46,28 @@ class AgentContext:
         return self.workspace.project_path
 
     @property
-    def instructions(self) -> str | None:
-        return self.proposal.instruction
+    def context_path(self) -> str:
+        return str(PurePosixPath(self.workspace.project_path) / AGENT_CONTEXT_DIRECTORY)
+
+    @property
+    def relative_context_path(self) -> str:
+        return AGENT_CONTEXT_DIRECTORY
+
+    @property
+    def instructions(self) -> str:
+        context = (
+            f"VeRO has placed read-only optimization context in "
+            f"`{AGENT_CONTEXT_DIRECTORY}/`. Inspect its README, cases, prior "
+            "candidates, and evaluation feedback when useful. Do not modify or "
+            "commit that directory."
+        )
+        if self.proposal.instruction:
+            return f"{self.proposal.instruction}\n\n{context}"
+        return context
 
     @property
     def base_version(self) -> str:
-        parent_id = self.proposal.parent_id
-        if parent_id is not None:
-            parent = self.optimization.candidates.get(parent_id)
-            if parent is not None:
-                return parent.version
-        return self.optimization.baseline.request.candidate.version
+        return self.parent.version
 
 
 class AgentRunResult(BaseModel):

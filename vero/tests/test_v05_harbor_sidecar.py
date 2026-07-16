@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 from contextlib import asynccontextmanager
@@ -22,8 +23,10 @@ from vero.evaluation import (
     EvaluationCost,
     EvaluationDatabase,
     EvaluationEngine,
+    EvaluationAuthorization,
     EvaluationLimits,
     EvaluationReport,
+    EvaluationRequest,
     EvaluationSet,
     EvaluationStatus,
     Evaluator,
@@ -39,6 +42,7 @@ from vero.harbor import (
     SidecarEvaluationRequest,
     SubmissionDisabledError,
 )
+from vero.runtime.context import context_digest
 from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace, Workspace
 
@@ -238,10 +242,20 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
     )
 
     assert response.disclosure == DisclosureLevel.AGGREGATE
-    assert response.result.metrics == {"score": 0.75}
-    assert response.result.total_cases == 5
+    assert response.receipt.result.metrics == {"score": 0.75}
+    assert response.receipt.result.total_cases == 5
     assert transport.calls == ["HEAD"]
-    assert Path(response.result_path).is_file()
+    assert response.receipt.result_path == (
+        f".vero/evaluations/{context_digest(response.receipt.evaluation_id)}/"
+        "evaluation.json"
+    )
+    assert (
+        tmp_path
+        / "agent-volume"
+        / "evaluations"
+        / context_digest(response.receipt.evaluation_id)
+        / "evaluation.json"
+    ).is_file()
     budget = ledger.get("primary", evaluation_set)
     assert budget.remaining_runs == 2
     assert budget.remaining_cases == 15
@@ -250,6 +264,53 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
         "primary",
         "secondary",
     ]
+    assert status.evaluation_access[0].expose_case_resources is False
+
+
+@pytest.mark.asyncio
+async def test_sidecar_context_survives_restart_without_disclosing_admin_runs(
+    tmp_path: Path,
+):
+    sidecar, transport, _ = _sidecar(tmp_path)
+    admin = await sidecar.engine.evaluate_record(
+        backend_id="secondary",
+        request=EvaluationRequest(
+            candidate=transport.candidate,
+            evaluation_set=EvaluationSet(name="public"),
+        ),
+        authorization=EvaluationAuthorization(
+            may_evaluate=True,
+            meter_budget=False,
+            disclosure=DisclosureLevel.FULL,
+        ),
+    )
+    response = await sidecar.evaluate(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(
+                name="benchmark",
+                partition="validation",
+                selection=CaseIds(ids=[f"case-{index}" for index in range(5)]),
+            ),
+        )
+    )
+
+    restarted = EvaluationSidecar(
+        engine=sidecar.engine,
+        candidate_transport=transport,
+        access_policies=list(sidecar._policies.values()),
+        agent_volume=tmp_path / "agent-volume",
+        admin_volume=tmp_path / "admin-volume",
+    )
+    await restarted.initialize_context()
+
+    index = json.loads((tmp_path / "agent-volume/evaluations/index.json").read_text())[
+        "evaluations"
+    ]
+    assert [entry["evaluation_id"] for entry in index] == [
+        response.receipt.evaluation_id
+    ]
+    assert admin.id not in json.dumps(index)
 
 
 @pytest.mark.asyncio

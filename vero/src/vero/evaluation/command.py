@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import posixpath
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydantic import Field, field_validator, model_validator
 
@@ -28,6 +29,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.staging import SandboxStagingArea
+from vero.sandbox import Sandbox
 
 _PLACEHOLDERS = {"workspace", "harness", "request", "report", "artifacts"}
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
@@ -41,6 +43,7 @@ class CommandBackendConfig(EvaluationModel):
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
     staged_inputs: dict[str, str] = Field(default_factory=dict)
+    agent_context_inputs: list[str] = Field(default_factory=list)
 
     @field_validator("harness_root")
     @classmethod
@@ -103,7 +106,9 @@ class CommandBackendConfig(EvaluationModel):
                 + ", ".join(sorted(overlap))
             )
         invalid = sorted(
-            name for name in self.staged_inputs if not _INPUT_NAME_PATTERN.fullmatch(name)
+            name
+            for name in self.staged_inputs
+            if not _INPUT_NAME_PATTERN.fullmatch(name)
         )
         if invalid:
             raise ValueError(f"invalid staged input names: {', '.join(invalid)}")
@@ -116,6 +121,16 @@ class CommandBackendConfig(EvaluationModel):
         unknown = sorted(referenced - set(self.staged_inputs))
         if unknown:
             raise ValueError(f"unknown staged command inputs: {', '.join(unknown)}")
+        if len(self.agent_context_inputs) != len(set(self.agent_context_inputs)):
+            raise ValueError("agent_context_inputs names must be unique")
+        unknown_context = sorted(
+            set(self.agent_context_inputs) - set(self.staged_inputs)
+        )
+        if unknown_context:
+            raise ValueError(
+                "agent_context_inputs reference unknown staged inputs: "
+                + ", ".join(unknown_context)
+            )
         return self
 
 
@@ -145,6 +160,39 @@ class CommandBackend:
         if isinstance(selection, AllCases):
             return EvaluationCost(cases=None)
         raise AssertionError(f"unsupported case selection: {selection}")
+
+    async def export_case_resources(
+        self,
+        *,
+        evaluation_set: EvaluationSet,
+        destination: str,
+        sandbox: Sandbox,
+    ) -> None:
+        """Copy only explicitly allowlisted staged inputs into agent context."""
+
+        resources = []
+        for name in self.config.agent_context_inputs:
+            source = Path(self.config.staged_inputs[name]).resolve()
+            if not source.exists():
+                raise ValueError(
+                    f"agent context input {name!r} does not exist: {source}"
+                )
+            target = str(PurePosixPath(destination) / name)
+            await sandbox.upload(str(source), target)
+            resources.append({"name": name, "path": name})
+        await sandbox.write_file(
+            str(PurePosixPath(destination) / "index.json"),
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
+                    "resources": resources,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+        )
 
     def _working_directory(self, harness_root: str) -> str:
         return posixpath.normpath(
@@ -218,11 +266,17 @@ class CommandBackend:
         request: EvaluationRequest,
     ) -> EvaluationReport:
         harness_source = Path(self.config.harness_root).resolve()
-        target_root = context.workspace.sandbox.host_path(context.workspace.project_path)
+        target_root = context.workspace.sandbox.host_path(
+            context.workspace.project_path
+        )
         if target_root is not None:
             target_root = target_root.resolve()
-            if harness_source == target_root or harness_source.is_relative_to(target_root):
-                raise ValueError("command harness must live outside the editable target")
+            if harness_source == target_root or harness_source.is_relative_to(
+                target_root
+            ):
+                raise ValueError(
+                    "command harness must live outside the editable target"
+                )
 
         capture_dir = context.artifact_dir / "command"
         capture_dir.mkdir(parents=True, exist_ok=True)
@@ -291,7 +345,10 @@ class CommandBackend:
 
         if result.returncode != 0:
             code = "command_timeout" if result.returncode == -1 else "command_failed"
-            message = stderr.strip() or f"evaluation command exited with status {result.returncode}"
+            message = (
+                stderr.strip()
+                or f"evaluation command exited with status {result.returncode}"
+            )
             return self._failure_report(
                 code=code,
                 message=message,
@@ -304,9 +361,7 @@ class CommandBackend:
                 artifacts=capture_artifacts,
             )
         try:
-            report = EvaluationReport.model_validate_json(
-                report_payload
-            )
+            report = EvaluationReport.model_validate_json(report_payload)
         except Exception as error:
             return self._failure_report(
                 code="invalid_report",

@@ -78,14 +78,20 @@ class AgentCandidateProducer:
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
         self.validate_workspace(workspace)
+        parent = (
+            context.candidates.get(proposal.parent_id)
+            if proposal.parent_id is not None
+            else None
+        )
+        if parent is None:
+            parent = context.baseline.request.candidate
         result = await self.agent.run(
             context=AgentContext(
                 session_id=context.session_id,
                 workspace=workspace,
                 proposal=proposal,
-                optimization=context,
+                parent=parent,
                 evaluation=evaluation,
-                artifacts=self.artifacts,
             ),
             prompt=proposal.instruction or self.prompt,
             max_turns=self.max_turns,

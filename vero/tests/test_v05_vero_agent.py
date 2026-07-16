@@ -57,17 +57,11 @@ def agent_context(tmp_path: Path, gateway: StubEvaluationGateway) -> AgentContex
         parent_id=baseline.id,
         instruction="Optimize matrix multiplication",
     )
-    optimization = SimpleNamespace(
-        baseline=SimpleNamespace(
-            request=SimpleNamespace(candidate=baseline),
-        ),
-        candidates={baseline.id: baseline},
-    )
     return AgentContext(
         session_id="session-1",
         workspace=StubWorkspace(tmp_path),
         proposal=proposal,
-        optimization=optimization,
+        parent=baseline,
         evaluation=gateway,
     )
 
@@ -101,9 +95,7 @@ async def test_vero_agent_implements_canonical_coding_agent_contract(
     )
 
     assert isinstance(agent, CodingAgent)
-    assert captured["input"] == [
-        {"role": "user", "content": "Try a tiled kernel"}
-    ]
+    assert captured["input"] == [{"role": "user", "content": "Try a tiled kernel"}]
     assert captured["max_turns"] == 7
     assert captured["run_config"].workflow_name == "vero::session-1"
     assert evaluation_tools.evaluation is gateway

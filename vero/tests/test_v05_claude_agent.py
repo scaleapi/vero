@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 
 pytest.importorskip("claude_agent_sdk")
@@ -56,9 +54,7 @@ class FakeClaudeClient:
 
 
 def test_default_tools_use_canonical_evaluation_capability():
-    assert [type(tool).__name__ for tool in default_tool_sets()] == [
-        "EvaluationTools"
-    ]
+    assert [type(tool).__name__ for tool in default_tool_sets()] == ["EvaluationTools"]
 
 
 def agent_context(tmp_path: Path, gateway: StubEvaluationGateway) -> AgentContext:
@@ -68,17 +64,11 @@ def agent_context(tmp_path: Path, gateway: StubEvaluationGateway) -> AgentContex
         parent_id=baseline.id,
         instruction="Optimize matrix multiplication",
     )
-    optimization = SimpleNamespace(
-        baseline=SimpleNamespace(
-            request=SimpleNamespace(candidate=baseline),
-        ),
-        candidates={baseline.id: baseline},
-    )
     return AgentContext(
         session_id="session-1",
         workspace=StubWorkspace(tmp_path),
         proposal=proposal,
-        optimization=optimization,
+        parent=baseline,
         evaluation=gateway,
     )
 
@@ -124,5 +114,6 @@ async def test_claude_agent_implements_canonical_coding_agent_contract(
     assert result.state == {"session_id": "claude-session"}
     assert result.metadata["usage"]["input_tokens"] == 10
     assert context.project_path == tmp_path
-    assert context.instructions == "Optimize matrix multiplication"
+    assert context.instructions.startswith("Optimize matrix multiplication\n\n")
+    assert "read-only optimization context in `.vero/`" in context.instructions
     assert context.base_version == "baseline-version"

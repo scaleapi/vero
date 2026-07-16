@@ -52,6 +52,8 @@ class EvaluationConfig(EvaluationModel):
     working_directory: str = "."
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
+    staged_inputs: dict[str, str] = Field(default_factory=dict)
+    agent_context_inputs: list[str] = Field(default_factory=list)
     evaluation_set: str = "default"
     partition: str | None = None
     case_ids: list[str] | None = None
@@ -208,7 +210,11 @@ def load_config(path: Path | str = Path("vero.toml")) -> VeroConfig:
         ),
         "evaluation": config.evaluation.model_copy(
             update={
-                "harness_root": str((base / config.evaluation.harness_root).resolve())
+                "harness_root": str((base / config.evaluation.harness_root).resolve()),
+                "staged_inputs": {
+                    name: str((base / source).resolve())
+                    for name, source in config.evaluation.staged_inputs.items()
+                },
             }
         ),
     }
@@ -304,6 +310,8 @@ async def build_configured_runtime(
             working_directory=config.evaluation.working_directory,
             environment=config.evaluation.environment,
             passthrough_environment=config.evaluation.passthrough_environment,
+            staged_inputs=config.evaluation.staged_inputs,
+            agent_context_inputs=config.evaluation.agent_context_inputs,
         )
     )
     session = await create_local_optimization_session(

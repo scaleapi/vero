@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from vero.config import AgentOptimizerConfig, VeroConfig
+from vero.config import AgentOptimizerConfig, VeroConfig, load_config
 
 
 def _config(optimizer: dict) -> dict:
@@ -71,3 +71,33 @@ def test_config_wires_retry_policy_into_evaluation_limits():
 
     assert config.evaluation.to_limits().retry.max_attempts == 5
     assert config.evaluation.to_limits().retry.initial_delay_seconds == 0.5
+
+
+def test_config_resolves_agent_context_inputs_with_staged_inputs(tmp_path):
+    config_path = tmp_path / "vero.toml"
+    config_path.write_text(
+        """
+[target]
+root = "target"
+
+[evaluation]
+harness_root = "harness"
+command = ["run", "{input:cases}"]
+agent_context_inputs = ["cases"]
+
+[evaluation.staged_inputs]
+cases = "data/cases.json"
+
+[objective]
+metric = "score"
+direction = "maximize"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.evaluation.agent_context_inputs == ["cases"]
+    assert config.evaluation.staged_inputs == {
+        "cases": str((tmp_path / "data/cases.json").resolve())
+    }

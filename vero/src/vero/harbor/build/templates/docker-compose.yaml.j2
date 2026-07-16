@@ -6,7 +6,7 @@ services:
       VERO_EVAL_URL: "http://eval-sidecar:8000"
     volumes:
       - agent_repo:/work/agent
-      - agent_results:/state/agent-results:ro
+      - agent_context:/work/agent/.vero:ro
       - token_state:/state/token:ro
     depends_on:
       eval-sidecar:
@@ -36,7 +36,7 @@ services:
 {% endif %}
     volumes:
       - agent_repo:/work/agent:ro
-      - agent_results:/state/agent-results
+      - agent_context:/state/agent-context
       - admin_state:/state/admin
       - token_state:/state/token
     healthcheck:
@@ -48,6 +48,6 @@ services:
 
 volumes:
   agent_repo:
-  agent_results:
+  agent_context:
   admin_state:
   token_state:
