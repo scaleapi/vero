@@ -172,20 +172,39 @@ class Workspace(ABC):
         """Resolve path and check write access. Raises AccessDeniedError."""
         return self._fs.validate_write(path)
 
+    async def _canonical_access_policy(self) -> WorkspaceAccessPolicy:
+        """Return the current policy rooted at the sandbox-canonical project path.
+
+        Sandbox paths can have equivalent spellings (for example, macOS maps
+        ``/tmp`` to ``/private/tmp``).  Canonical paths must be checked against
+        an equally canonical root or valid paths appear to leave the workspace.
+        The original policy is still checked first by the callers below, so a
+        symlink cannot be used to enter the workspace from an unauthorized path.
+        """
+
+        canonical_root = await self.sandbox.canonicalize(self._fs.root)
+        return WorkspaceAccessPolicy(
+            root=canonical_root,
+            accesses=self._fs.accesses,
+            default_access=self._fs.default_access,
+        )
+
     async def validate_read_path(self, path: str) -> str:
         """Validate read access after resolving sandbox symlinks."""
 
         resolved = self._fs.validate_read(path)
         canonical = await self.sandbox.canonicalize(resolved)
-        return self._fs.validate_read(canonical)
+        canonical_policy = await self._canonical_access_policy()
+        return canonical_policy.validate_read(canonical)
 
     async def validate_write_path(self, path: str) -> str:
         """Validate write access after resolving existing sandbox ancestors."""
 
         resolved = self._fs.validate_write(path)
+        canonical_policy = await self._canonical_access_policy()
         if await self.sandbox.exists(resolved):
             canonical = await self.sandbox.canonicalize(resolved)
-            return self._fs.validate_write(canonical)
+            return canonical_policy.validate_write(canonical)
 
         current = PurePosixPath(resolved)
         missing: list[str] = []
@@ -197,7 +216,7 @@ class Workspace(ABC):
         canonical = PurePosixPath(await self.sandbox.canonicalize(current.as_posix()))
         for component in reversed(missing):
             canonical /= component
-        return self._fs.validate_write(canonical.as_posix())
+        return canonical_policy.validate_write(canonical.as_posix())
 
     def get_access(self, path: str) -> AccessType:
         """Get the access level for a path."""

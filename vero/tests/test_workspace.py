@@ -199,6 +199,26 @@ class TestSubdirProject:
 
 class TestDirtyState:
     @pytest.mark.asyncio
+    async def test_canonical_validation_accepts_equivalent_workspace_root(
+        self, tmp_path
+    ):
+        actual = tmp_path / "actual"
+        actual.mkdir()
+        (actual / "main.py").write_text("x = 1\n", encoding="utf-8")
+        alias = tmp_path / "alias"
+        alias.symlink_to(actual, target_is_directory=True)
+
+        sandbox = LocalSandbox(root=tmp_path)
+        workspace = GitWorkspace(
+            sandbox=sandbox,
+            root=str(alias),
+            project_path=str(alias),
+        )
+
+        assert await workspace.validate_read_path("main.py") == str(actual / "main.py")
+        assert await workspace.validate_write_path("new.py") == str(actual / "new.py")
+
+    @pytest.mark.asyncio
     async def test_canonical_validation_rejects_symlink_escape(
         self, workspace, tmp_path
     ):
@@ -272,6 +292,7 @@ class TestCopies:
 
         async with workspace.temp_copy(from_version=v1) as copy_ws:
             assert copy_ws.root != workspace.root
+            assert copy_ws.root == str(Path(copy_ws.root).resolve())
             # The copy is a separate git worktree
             assert Path(copy_ws.root).exists()
             # main.py should exist in the copy

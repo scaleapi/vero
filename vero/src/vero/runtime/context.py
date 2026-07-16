@@ -164,8 +164,11 @@ class AgentContextDirectory:
 
     async def reset(self) -> None:
         if await self.sandbox.exists(self.root):
-            await self.sandbox.remove(self.root, recursive=True)
-        await self.sandbox.mkdir(self.root)
+            await self.unseal()
+            for name in await self.sandbox.list_dir(self.root):
+                await self.sandbox.remove(self.path(name), recursive=True)
+        else:
+            await self.sandbox.mkdir(self.root)
 
     async def unseal(self) -> None:
         if not await self.sandbox.exists(self.root):

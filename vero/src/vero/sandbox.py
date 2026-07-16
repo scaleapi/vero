@@ -232,7 +232,7 @@ class Sandbox(ABC):
             raise RuntimeError(
                 result.stderr or "failed to create sandbox temporary directory"
             )
-        path = result.stdout.strip()
+        path = await self.canonicalize(result.stdout.strip())
         try:
             yield path
         finally:

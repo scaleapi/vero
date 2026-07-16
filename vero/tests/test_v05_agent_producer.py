@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -24,7 +25,7 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveSpec,
 )
-from vero.optimization import Optimizer, SequentialStrategy
+from vero.optimization import CandidateProposal, Optimizer, SequentialStrategy
 from vero.runtime import ArtifactStore
 from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace
@@ -150,6 +151,46 @@ def test_host_native_agent_rejects_isolated_workspace():
                 sandbox=IsolatedSandbox(),
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_failed_agent_run_persists_state_and_trace(tmp_path: Path):
+    class FailingAgent:
+        async def run(self, **kwargs):
+            raise RuntimeError("turn limit reached")
+
+        def serialize_state(self):
+            return {"turn": 5}
+
+        def serialize_trace(self):
+            return [{"tool": "file_read"}]
+
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    producer = AgentCandidateProducer(FailingAgent(), artifacts=artifacts)
+    proposal = CandidateProposal(id="proposal", producer_id="default")
+    baseline = SimpleNamespace(request=SimpleNamespace(candidate=object()))
+    context = SimpleNamespace(
+        session_id="session",
+        candidates={},
+        baseline=baseline,
+    )
+
+    with pytest.raises(RuntimeError, match="turn limit reached"):
+        await producer.produce(
+            proposal=proposal,
+            context=context,
+            workspace=SimpleNamespace(),
+            evaluation=SimpleNamespace(),
+        )
+
+    digest = hashlib.sha256(proposal.id.encode()).hexdigest()[:16]
+    assert artifacts.read_json(f"agents/{digest}/state.json") == {"turn": 5}
+    assert artifacts.read_json(f"agents/{digest}/trace.json") == [{"tool": "file_read"}]
+    assert artifacts.read_json(f"agents/{digest}/failure.json") == {
+        "type": "RuntimeError",
+        "message": "turn limit reached",
+    }
+    assert artifacts.read_json(producer._producer_state_path("default")) == {"turn": 5}
 
 
 @pytest.mark.asyncio

@@ -199,6 +199,35 @@ async def test_agent_context_splits_full_traces_and_honors_disclosure(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_agent_context_reset_preserves_mounted_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "agent-context"
+    root.mkdir()
+    (root / "stale.txt").write_text("stale\n", encoding="utf-8")
+    sandbox = await LocalSandbox.create(root=tmp_path)
+    remove = sandbox.remove
+
+    async def reject_root_removal(path: str, *, recursive: bool = False) -> None:
+        if Path(path).resolve() == root.resolve():
+            raise AssertionError("context mount root must not be removed")
+        await remove(path, recursive=recursive)
+
+    monkeypatch.setattr(sandbox, "remove", reject_root_removal)
+    directory = AgentContextDirectory(
+        sandbox=sandbox,
+        root=str(root),
+        session_dir=tmp_path / "session",
+    )
+    await directory.seal()
+
+    await directory.reset()
+
+    assert root.is_dir()
+    assert list(root.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_disclosure_ledger_survives_restart_and_never_broadens(tmp_path: Path):
     path = tmp_path / "agent-context.json"
     ledger = AgentDisclosureLedger(path)

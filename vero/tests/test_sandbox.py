@@ -61,6 +61,7 @@ class TestProperties:
         async with sandbox.temporary_directory("vero-test-") as directory:
             assert await sandbox.is_dir(directory)
             assert Path(directory).name.startswith("vero-test-")
+            assert directory == str(Path(directory).resolve())
         assert not await sandbox.exists(directory)
 
 

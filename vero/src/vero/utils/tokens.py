@@ -21,7 +21,7 @@ def run_result_to_messages(
         for key in ["output", "content"]:
             if key in item:
                 if isinstance(item[key], list):
-                    item[key] = item[key][0]
+                    item[key] = item[key][0] if item[key] else ""
         return item
 
     return [process_item(item) for item in result]

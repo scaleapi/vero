@@ -299,6 +299,8 @@ class GitWorkspace(Workspace):
             await asyncio.shield(self._sandbox.remove(temporary_root, recursive=True))
             raise
 
+        target_path = await self._sandbox.canonicalize(target_path)
+
         copied = GitWorkspace(
             sandbox=self._sandbox,
             root=target_path,
