@@ -77,7 +77,10 @@ class GitWorkspace(Workspace):
 
     async def _git(self, *args: str) -> str:
         """Run a git command via sandbox.run(), returning stdout. Raises on non-zero exit."""
-        result = await self._sandbox.run(["git", *args], cwd=self._root)
+        result = await self._sandbox.run(
+            ["git", "-c", f"safe.directory={self._root}", *args],
+            cwd=self._root,
+        )
         if result.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr}")
         return result.stdout
@@ -349,13 +352,6 @@ class GitWorkspace(Workspace):
             )
             await owner._remove_worktree(self._root)
             self._worktree_owner_root = None
-
-    async def retain_version(self, version_id: str, ref_name: str) -> None:
-        """Keep a candidate commit under VeRO's hidden ref namespace."""
-
-        ref = f"refs/vero/{ref_name}"
-        await self._git("check-ref-format", ref)
-        await self._git("update-ref", ref, version_id)
 
     # ── Git-specific helpers (used by Policy and git tools) ─────────
 

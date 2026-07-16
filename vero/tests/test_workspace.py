@@ -328,7 +328,7 @@ class TestCopies:
             await persistent.destroy()
 
     @pytest.mark.asyncio
-    async def test_persistent_copy_uses_hidden_ref_without_branch_leak(
+    async def test_persistent_copy_does_not_leak_a_branch(
         self,
         workspace,
     ):
@@ -340,21 +340,13 @@ class TestCopies:
             str(Path(copied.root) / "candidate.txt"),
             "candidate\n",
         )
-        version = await copied.save("candidate")
-        await workspace.retain_version(
-            version,
-            "sessions/test/candidates/candidate",
-        )
+        await copied.save("candidate")
         await copied.destroy()
 
         branches_after = await workspace._git(
             "for-each-ref", "--format=%(refname)", "refs/heads"
         )
-        retained = await workspace._git(
-            "for-each-ref", "--format=%(objectname)", "refs/vero/sessions"
-        )
         assert branches_after == branches_before
-        assert version in retained.splitlines()
         assert not Path(copied.root).exists()
 
     @pytest.mark.asyncio
@@ -369,7 +361,11 @@ class TestCopies:
         async def cancel_after_add(command, **kwargs):
             nonlocal injected
             result = await original_run(command, **kwargs)
-            if command[:3] == ["git", "worktree", "add"] and not injected:
+            if (
+                "worktree" in command
+                and command[command.index("worktree") + 1] == "add"
+                and not injected
+            ):
                 injected = True
                 raise asyncio.CancelledError
             return result

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     BackendRegistry,
     CommandBackend,
@@ -113,12 +114,15 @@ workspace = Path(sys.argv[1])
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(target))
     session_dir = tmp_path / "sessions" / "optimization"
+    candidate_repository = await GitCandidateRepository.create(
+        session_dir / "candidates", workspace=workspace
+    )
     database = EvaluationDatabase(id="optimization")
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=candidate_repository,
+            sandbox=workspace.sandbox,
             session_dir=session_dir,
-            use_copy=True,
         ),
         backends=BackendRegistry(
             {
@@ -141,6 +145,7 @@ workspace = Path(sys.argv[1])
     )
     optimizer = Optimizer(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
         evaluation_set=EvaluationSet(name="performance"),
@@ -198,20 +203,9 @@ workspace = Path(sys.argv[1])
         capture_output=True,
         text=True,
     ).stdout
-    retained = subprocess.run(
-        [
-            "git",
-            "for-each-ref",
-            "--format=%(refname)",
-            "refs/vero/sessions",
-        ],
-        cwd=target,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
     assert candidate_branches == ""
-    assert retained.strip()
+    assert len(candidate_repository.list()) == 2
+    assert (candidate_repository.repository_path / "HEAD").exists()
 
 
 class ReusedIdStrategy:
@@ -283,9 +277,13 @@ Path(sys.argv[1]).write_text(json.dumps({
     producer_script.write_text("pass\n")
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(target))
+    candidate_repository = await GitCandidateRepository.create(
+        tmp_path / "session" / "candidates", workspace=workspace
+    )
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=candidate_repository,
+            sandbox=workspace.sandbox,
             session_dir=tmp_path / "session",
         ),
         backends=BackendRegistry(
@@ -303,6 +301,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     )
     optimizer = Optimizer(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
         evaluation_set=EvaluationSet(),
@@ -350,9 +349,13 @@ Path(sys.argv[1]).write_text(json.dumps({
     )
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(target))
+    candidate_repository = await GitCandidateRepository.create(
+        tmp_path / "session" / "candidates", workspace=workspace
+    )
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=candidate_repository,
+            sandbox=workspace.sandbox,
             session_dir=tmp_path / "session",
         ),
         backends=BackendRegistry(
@@ -371,6 +374,7 @@ Path(sys.argv[1]).write_text(json.dumps({
     cancelled = CancelledBatchProducer()
     optimizer = Optimizer(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
         evaluation_set=EvaluationSet(),

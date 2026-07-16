@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from vero.candidate import Candidate
+from vero.candidate_repository import CandidateRepository
 from vero.evaluation import (
     BackendProvenance,
     CaseStatus,
@@ -24,6 +25,7 @@ from vero.evaluation.persistence import _atomic_write_json
 from vero.optimization import OptimizationResult, Optimizer
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import EventBus, JsonlEventSink
+from vero.workspace import Workspace
 
 
 class SessionStatus(str, Enum):
@@ -50,11 +52,13 @@ class SessionFailure(BaseModel):
 class SessionManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     id: str
     status: SessionStatus
     backend_id: str
     backend: BackendProvenance
+    candidate_repository_family: str
+    candidate_repository_format_version: int
     evaluation_set: EvaluationSet
     objective: ObjectiveSpec
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
@@ -68,7 +72,7 @@ class SessionManifest(BaseModel):
     failure: SessionFailure | None = None
     metadata: dict[str, JsonValue] = Field(default_factory=dict)
 
-    @field_validator("id", "backend_id")
+    @field_validator("id", "backend_id", "candidate_repository_family")
     @classmethod
     def validate_identity(cls, value: str) -> str:
         if not value.strip():
@@ -113,6 +117,13 @@ class OptimizationSession:
         if evaluator_session_id is not None and evaluator_session_id != self.id:
             raise ValueError("evaluator session ID does not match OptimizationSession")
         self.optimizer.engine.evaluator.session_id = self.id
+        if (
+            self.optimizer.engine.evaluator.candidate_repository
+            is not self.optimizer.candidate_repository
+        ):
+            raise ValueError(
+                "optimizer and evaluator must share one candidate repository"
+            )
         self.session_dir.mkdir(parents=True, exist_ok=True)
         if self.events is None:
             self.events = EventBus([JsonlEventSink(self.events_path)])
@@ -134,6 +145,16 @@ class OptimizationSession:
     def budget_ledger(self):
         return self.optimizer.engine.budget_ledger
 
+    @property
+    def candidate_repository(self) -> CandidateRepository:
+        return self.optimizer.candidate_repository
+
+    @property
+    def workspace(self) -> Workspace:
+        """The original workspace supplied when the session was created."""
+
+        return self.optimizer.workspace
+
     def _initial_manifest(self, baseline: Candidate) -> SessionManifest:
         now = datetime.now(UTC)
         return SessionManifest(
@@ -143,6 +164,10 @@ class OptimizationSession:
             backend=self.optimizer.engine.backends.resolve(
                 self.optimizer.backend_id
             ).provenance,
+            candidate_repository_family=self.candidate_repository.family,
+            candidate_repository_format_version=(
+                self.candidate_repository.format_version
+            ),
             evaluation_set=self.optimizer.evaluation_set,
             objective=self.optimizer.objective,
             parameters=self.optimizer.parameters,
@@ -216,6 +241,18 @@ class OptimizationSession:
             raise ValueError("session manifest ID does not match runtime session")
         if manifest.backend_id != self.optimizer.backend_id:
             raise ValueError("session backend does not match the persisted manifest")
+        if manifest.candidate_repository_family != self.candidate_repository.family:
+            raise ValueError(
+                "session candidate repository does not match the persisted manifest"
+            )
+        if (
+            manifest.candidate_repository_format_version
+            != self.candidate_repository.format_version
+        ):
+            raise ValueError(
+                "session candidate repository format does not match the "
+                "persisted manifest"
+            )
         backend = self.optimizer.engine.backends.resolve(self.optimizer.backend_id)
         if manifest.backend != backend.provenance:
             raise ValueError(

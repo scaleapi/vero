@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from vero.agents import AgentCandidateProducer, AgentRequirements, AgentRunResult
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     BackendRegistry,
     CommandBackend,
@@ -140,6 +141,9 @@ report_path.write_text(json.dumps({
     sandbox = await LocalSandbox.create(root=tmp_path)
     workspace = await GitWorkspace.from_path(sandbox, str(target))
     session_dir = tmp_path / "sessions" / "agent"
+    candidate_repository = await GitCandidateRepository.create(
+        session_dir / "candidates", workspace=workspace
+    )
     database = EvaluationDatabase(id="agent")
 
     async def authorize(backend_id, request):
@@ -150,9 +154,9 @@ report_path.write_text(json.dumps({
 
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=candidate_repository,
+            sandbox=workspace.sandbox,
             session_dir=session_dir,
-            use_copy=True,
         ),
         backends=BackendRegistry(
             {
@@ -177,6 +181,7 @@ report_path.write_text(json.dumps({
     artifacts = ArtifactStore(session_dir / "artifacts")
     optimizer = Optimizer(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
         evaluation_set=EvaluationSet(name="performance"),

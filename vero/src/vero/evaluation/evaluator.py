@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import AsyncIterator
 from uuid import uuid4
 
+from vero.candidate import Candidate
+from vero.candidate_repository import CandidateRepository
 from vero.evaluation.backend import EvaluationBackend, EvaluationContext
 from vero.evaluation.exceptions import (
     EvaluationCancelledError,
@@ -25,6 +27,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.objective import evaluate_objective
 from vero.evaluation.persistence import EvaluationStore
+from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
 
@@ -34,15 +37,15 @@ class Evaluator:
     def __init__(
         self,
         *,
-        workspace: Workspace,
+        candidate_repository: CandidateRepository,
+        sandbox: Sandbox,
         session_dir: Path,
         session_id: str | None = None,
-        use_copy: bool = True,
     ):
-        self.workspace = workspace
+        self.candidate_repository = candidate_repository
+        self.sandbox = sandbox
         self.session_dir = session_dir
         self.session_id = session_id or session_dir.name
-        self.use_copy = use_copy
 
     @property
     def evaluations_dir(self) -> Path:
@@ -51,18 +54,14 @@ class Evaluator:
     @asynccontextmanager
     async def _candidate_workspace(
         self,
-        version: str,
-        use_copy: bool,
+        candidate: Candidate,
     ) -> AsyncIterator[Workspace]:
-        if use_copy:
-            async with self.workspace.temp_copy(from_version=version) as workspace:
-                yield workspace
-            return
-
-        if await self.workspace.is_dirty():
-            raise ValueError("direct evaluation requires a clean workspace")
-        async with self.workspace.at(version):
-            yield self.workspace
+        async with self.candidate_repository.checkout(
+            candidate,
+            sandbox=self.sandbox,
+            name=f"vero-evaluation-{candidate.id}",
+        ) as workspace:
+            yield workspace
 
     async def _persist_failure(
         self,
@@ -115,7 +114,6 @@ class Evaluator:
         backend: EvaluationBackend,
         request: EvaluationRequest,
         objective_spec: ObjectiveSpec | None = None,
-        use_copy: bool | None = None,
     ) -> EvaluationRecord:
         evaluation_id = str(uuid4())
         created_at = datetime.now(UTC)
@@ -134,8 +132,7 @@ class Evaluator:
 
         try:
             async with self._candidate_workspace(
-                request.candidate.version,
-                self.use_copy if use_copy is None else use_copy,
+                request.candidate,
             ) as candidate_workspace:
                 actual_version = await candidate_workspace.current_version()
                 if actual_version != request.candidate.version:

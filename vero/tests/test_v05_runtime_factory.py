@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from vero.candidate import Candidate
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
@@ -132,10 +134,15 @@ async def test_generic_factory_accepts_a_provisioned_workspace(tmp_path: Path):
     initialize_repository(target)
     backend, _ = command_components(tmp_path)
     workspace = await GitWorkspace.from_path(LocalSandbox(tmp_path), str(target))
+    session_dir = tmp_path / "sessions" / "generic"
+    candidate_repository = await GitCandidateRepository.create(
+        session_dir / "candidates", workspace=workspace
+    )
 
     session = await create_optimization_session(
         workspace=workspace,
-        session_dir=tmp_path / "sessions" / "generic",
+        candidate_repository=candidate_repository,
+        session_dir=session_dir,
         backend_id="command",
         backend=backend,
         objective=ObjectiveSpec(
@@ -210,6 +217,108 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
     assert resumed_result.baseline.id == result.baseline.id
     assert len(resumed_result.evaluations) == 2
     assert resumed_result.best.id == result.best.id
+
+
+@pytest.mark.asyncio
+async def test_resume_evaluates_a_durable_candidate_captured_before_crash(
+    tmp_path: Path,
+):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    backend, _ = command_components(tmp_path)
+    session_dir = tmp_path / "sessions" / "captured"
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="maximize",
+    )
+    session = await create_local_optimization_session(
+        project_path=target,
+        session_dir=session_dir,
+        session_id="captured",
+        backend_id="command",
+        backend=backend,
+        objective=objective,
+        producers={},
+        max_candidates=0,
+    )
+    initial = await session.run()
+    baseline = initial.baseline.request.candidate
+
+    async with session.candidate_repository.checkout(
+        baseline,
+        sandbox=session.workspace.sandbox,
+    ) as candidate_workspace:
+        candidate_path = Path(candidate_workspace.project_path) / "program.txt"
+        candidate_path.write_text("improved\n", encoding="utf-8")
+        version = await candidate_workspace.save("captured before evaluation")
+        candidate = Candidate.from_version(
+            version,
+            candidate_id="captured-candidate",
+            parent_id=baseline.id,
+            description="Captured before evaluation",
+            metadata={
+                "producer_id": "default",
+                "proposal_id": "captured-candidate",
+                "round": 0,
+            },
+        )
+        await session.candidate_repository.capture(candidate, candidate_workspace)
+
+    resumed = await create_local_optimization_session(
+        project_path=target,
+        session_dir=session_dir,
+        session_id=None,
+        backend_id="command",
+        backend=backend,
+        objective=objective,
+        producers={},
+        max_candidates=0,
+    )
+    result = await resumed.run(skip_baseline_evaluation=True)
+
+    assert len(result.evaluations) == 2
+    assert result.best.request.candidate.id == "captured-candidate"
+    assert result.best.objective.value == 1.0
+
+
+@pytest.mark.asyncio
+async def test_factory_reuses_baseline_captured_before_manifest_write(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    backend, _ = command_components(tmp_path)
+    session_dir = tmp_path / "sessions" / "baseline-crash"
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="maximize",
+    )
+    first = await create_local_optimization_session(
+        project_path=target,
+        session_dir=session_dir,
+        backend_id="command",
+        backend=backend,
+        objective=objective,
+        producers={},
+        max_candidates=0,
+    )
+    assert not first.manifest_path.exists()
+    captured = first.baseline
+
+    recreated = await create_local_optimization_session(
+        project_path=target,
+        session_dir=session_dir,
+        backend_id="command",
+        backend=backend,
+        objective=objective,
+        producers={},
+        max_candidates=0,
+    )
+
+    assert recreated.baseline == captured
+    assert recreated.candidate_repository.list() == (captured,)
 
 
 @pytest.mark.asyncio

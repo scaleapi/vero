@@ -11,9 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 class Candidate(BaseModel):
     """A materialized version of the program being optimized.
 
-    ``version`` is interpreted by the session's workspace. It may be a Git
-    commit, a snapshot ID, or a remote revision; evaluation code must not
-    assume a particular version-control implementation.
+    ``version`` is interpreted by the session's candidate repository. A
+    session uses one repository/workspace family, so the identifier remains
+    stable when the candidate is materialized in different sandboxes.
     """
 
     model_config = ConfigDict(extra="forbid")

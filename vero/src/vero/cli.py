@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import click
 
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     AllCases,
     CaseIds,
@@ -337,7 +338,6 @@ def run_config(config_path: Path) -> None:
     type=click.IntRange(min=1),
     show_default=True,
 )
-@click.option("--evaluation-copy/--no-evaluation-copy", default=True, show_default=True)
 @click.option("--seed", type=int)
 @click.option("--wandb-project", help="Log the session to this W&B project.")
 @click.option("--wandb-entity")
@@ -382,7 +382,6 @@ def optimize(
     producer_timeout: float,
     case_timeout: float,
     evaluation_concurrency: int,
-    evaluation_copy: bool,
     seed: int | None,
     wandb_project: str | None,
     wandb_entity: str | None,
@@ -506,7 +505,6 @@ def optimize(
             max_candidates=max_candidates,
             max_rounds=max_rounds,
             max_concurrency=max_concurrency,
-            use_evaluation_copies=evaluation_copy,
             base_ref=target_ref,
             metadata={"project_path": str(project_path.resolve())},
         )
@@ -611,10 +609,25 @@ def session_inspect(session_dir: Path) -> None:
         database.evaluations.values(),
         key=lambda record: (record.completed_at, record.id),
     )
+    try:
+        if manifest.candidate_repository_family != "git":
+            raise ValueError(
+                "unsupported candidate repository family: "
+                f"{manifest.candidate_repository_family}"
+            )
+        candidate_repository = asyncio.run(
+            GitCandidateRepository.open(session_dir / "candidates")
+        )
+        candidates = candidate_repository.list()
+    except Exception as error:
+        raise click.ClickException(f"invalid candidate repository: {error}") from error
     click.echo(
         json.dumps(
             {
                 "manifest": manifest.model_dump(mode="json"),
+                "candidates": [
+                    candidate.model_dump(mode="json") for candidate in candidates
+                ],
                 "evaluations": [
                     project_evaluation(record, DisclosureLevel.AGGREGATE).model_dump(
                         mode="json"

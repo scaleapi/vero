@@ -54,9 +54,15 @@ class StubWorkspace:
         return "baseline-version"
 
 
+class StubCandidateRepository:
+    family = "stub"
+    format_version = 1
+
+
 class StubOptimizer:
     def __init__(self, session_dir: Path, *, failure: Exception | None = None):
         self.workspace = StubWorkspace()
+        self.candidate_repository = StubCandidateRepository()
         self.backend_id = "default"
         self.evaluation_set = EvaluationSet(name="performance")
         self.objective = ObjectiveSpec(
@@ -68,7 +74,10 @@ class StubOptimizer:
         self.seed = None
         self.session_id = None
         self.engine = SimpleNamespace(
-            evaluator=SimpleNamespace(session_dir=session_dir),
+            evaluator=SimpleNamespace(
+                session_dir=session_dir,
+                candidate_repository=self.candidate_repository,
+            ),
             database=EvaluationDatabase(id=session_dir.name),
             budget_ledger=None,
             backends=SimpleNamespace(
@@ -111,7 +120,7 @@ async def test_session_persists_lifecycle_events_and_best_result(tmp_path: Path)
     result = await session.run()
 
     manifest = session.load_manifest()
-    assert manifest.schema_version == 1
+    assert manifest.schema_version == 2
     assert manifest.status == SessionStatus.COMPLETED
     assert manifest.baseline.version == "baseline-version"
     assert manifest.best_candidate_id == "baseline-version"

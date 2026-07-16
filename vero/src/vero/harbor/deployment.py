@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     BackendRegistry,
     BudgetLedger,
@@ -78,7 +79,6 @@ class HarborDeploymentConfig(EvaluationModel):
     admin_volume: str
     submit_enabled: bool = False
     score_baseline: bool = True
-    use_evaluation_copies: bool = True
 
     @field_validator(
         "repo_path",
@@ -171,14 +171,18 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
     session_dir.mkdir(parents=True, exist_ok=True)
     sandbox = await LocalSandbox.create(root=Path(parsed.repo_path).parent)
     workspace = await GitWorkspace.from_path(sandbox, parsed.repo_path)
+    candidate_repository = await GitCandidateRepository.create(
+        session_dir / "candidates",
+        workspace=workspace,
+    )
     database = _database(session_dir, parsed.session_id)
     ledger = _ledger(session_dir, parsed.budgets)
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=candidate_repository,
+            sandbox=workspace.sandbox,
             session_dir=session_dir,
             session_id=parsed.session_id,
-            use_copy=parsed.use_evaluation_copies,
         ),
         backends=BackendRegistry(
             {
@@ -192,6 +196,7 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
     )
     transport = GitCandidateTransport(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         agent_repo_path=parsed.agent_repo_path,
     )
     baseline = (

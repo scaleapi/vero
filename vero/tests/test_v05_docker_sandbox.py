@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
@@ -178,8 +179,13 @@ printf '{"schema_version":1,"status":"success","metrics":{"score":%s}}' "$score"
                 command=["sh", "{producer}/improve.sh", "{workspace}"],
             )
         )
+        candidate_repository = await GitCandidateRepository.create(
+            tmp_path / "session" / "candidates",
+            workspace=workspace,
+        )
         session = await create_optimization_session(
             workspace=workspace,
+            candidate_repository=candidate_repository,
             session_dir=tmp_path / "session",
             backend_id="command",
             backend=backend,

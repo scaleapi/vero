@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import subprocess
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from vero.candidate import Candidate
+from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     BackendProvenance,
     BackendRegistry,
@@ -102,6 +104,14 @@ class StubWorkspace(Workspace):
         return False
 
 
+class StubCandidateRepository:
+    family = "stub"
+
+    @asynccontextmanager
+    async def checkout(self, candidate, *, sandbox, name=None):
+        yield StubWorkspace(Path("/tmp/vero-stub-workspace"), candidate.version)
+
+
 class StubBackend:
     @property
     def provenance(self):
@@ -172,9 +182,9 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False):
     )
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            workspace=workspace,
+            candidate_repository=StubCandidateRepository(),
+            sandbox=workspace.sandbox,
             session_dir=tmp_path / "session",
-            use_copy=False,
         ),
         backends=BackendRegistry({"primary": backend, "secondary": StubBackend()}),
         database=EvaluationDatabase(id="session"),
@@ -364,8 +374,13 @@ async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path, monkeypat
         )
 
     monkeypatch.setattr(sandbox, "run", run_as_different_owner)
+    candidate_repository = await GitCandidateRepository.create(
+        tmp_path / "candidate-store",
+        workspace=workspace,
+    )
     transport = GitCandidateTransport(
         workspace=workspace,
+        candidate_repository=candidate_repository,
         agent_repo_path=str(agent_repo),
     )
 
@@ -375,15 +390,30 @@ async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path, monkeypat
     assert candidate == repeated
     assert candidate.version == agent_commit
     assert candidate.description == "program candidate"
+    shutil.rmtree(agent_repo)
+    checkout_sandbox = await LocalSandbox.create(root=tmp_path)
+    async with candidate_repository.checkout(
+        candidate,
+        sandbox=checkout_sandbox,
+    ) as checkout:
+        assert await checkout.current_version() == agent_commit
+    retained_refs = _git(
+        candidate_repository.repository_path,
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/vero/candidates",
+    ).splitlines()
+    assert len(retained_refs) == 1
     assert (
-        _git(
-            trusted_repo,
-            "rev-parse",
-            f"refs/vero/candidates/{agent_commit}",
-        )
+        _git(candidate_repository.repository_path, "rev-parse", retained_refs[0])
         == agent_commit
     )
     assert (
-        _git(trusted_repo, "for-each-ref", "--format=%(refname)", "refs/vero/incoming")
+        _git(
+            candidate_repository.repository_path,
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/vero/incoming",
+        )
         == ""
     )

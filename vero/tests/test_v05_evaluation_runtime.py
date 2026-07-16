@@ -111,6 +111,19 @@ class StubWorkspace(Workspace):
         return self._dirty
 
 
+class StubCandidateRepository:
+    family = "stub"
+
+    def __init__(self, workspace: StubWorkspace):
+        self.workspace = workspace
+        self.checkout_calls: list[str] = []
+
+    @asynccontextmanager
+    async def checkout(self, candidate, *, sandbox, name=None):
+        self.checkout_calls.append(candidate.version)
+        yield StubWorkspace(self.workspace._root, candidate.version)
+
+
 class StubBackend:
     def __init__(
         self,
@@ -162,12 +175,13 @@ def request(version: str = "candidate") -> EvaluationRequest:
     )
 
 
-def evaluator(tmp_path: Path, workspace: StubWorkspace, *, use_copy=False) -> Evaluator:
-    return Evaluator(
-        workspace=workspace,
+def evaluator(tmp_path: Path, workspace: StubWorkspace) -> Evaluator:
+    runtime = Evaluator(
+        candidate_repository=StubCandidateRepository(workspace),
+        sandbox=workspace.sandbox,
         session_dir=tmp_path / "sessions" / "session",
-        use_copy=use_copy,
     )
+    return runtime
 
 
 def record(candidate_id: str = "candidate") -> EvaluationRecord:
@@ -356,17 +370,18 @@ async def test_evaluator_runs_at_candidate_version_and_persists(tmp_path: Path):
         direction="minimize",
     )
 
-    value = await evaluator(tmp_path, workspace).evaluate(
+    runtime = evaluator(tmp_path, workspace)
+    value = await runtime.evaluate(
         backend_id="command",
         backend=backend,
         request=request(),
         objective_spec=specification,
     )
 
-    assert workspace.at_calls == ["candidate"]
+    assert runtime.candidate_repository.checkout_calls == ["candidate"]
     assert backend.running_manifests[0]["lifecycle"] == "running"
     assert value.objective.value == 2.0
-    result_dir = evaluator(tmp_path, workspace).evaluations_dir / value.id
+    result_dir = runtime.evaluations_dir / value.id
     assert EvaluationStore(result_dir).load() == value
 
 
@@ -375,13 +390,15 @@ async def test_evaluator_uses_isolated_copy(tmp_path: Path):
     workspace = StubWorkspace(tmp_path / "repo")
     backend = StubBackend()
 
-    await evaluator(tmp_path, workspace, use_copy=True).evaluate(
+    runtime = evaluator(tmp_path, workspace)
+    await runtime.evaluate(
         backend_id="default",
         backend=backend,
         request=request(),
     )
 
-    assert workspace.copy_calls == ["candidate"]
+    assert runtime.candidate_repository.checkout_calls == ["candidate"]
+    assert workspace.copy_calls == []
     assert workspace.at_calls == []
 
 

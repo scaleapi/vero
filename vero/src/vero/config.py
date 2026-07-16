@@ -59,7 +59,6 @@ class EvaluationConfig(EvaluationModel):
     timeout_seconds: float = Field(default=600.0, gt=0)
     case_timeout_seconds: float = Field(default=180.0, gt=0)
     max_concurrency: int = Field(default=100, ge=1)
-    use_copy: bool = True
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     seed: int | None = None
 
@@ -322,7 +321,6 @@ async def build_configured_runtime(
         max_candidates=(optimizer_config.max_candidates if optimizer_config else 0),
         max_rounds=(optimizer_config.max_rounds if optimizer_config else 1),
         max_concurrency=(optimizer_config.max_concurrency if optimizer_config else 1),
-        use_evaluation_copies=config.evaluation.use_copy,
         base_ref=config.target.ref,
         metadata={
             "config": "vero.toml",

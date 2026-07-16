@@ -116,14 +116,6 @@ class Workspace(ABC):
         """Clean up this workspace. Default: no-op."""
         pass
 
-    async def retain_version(self, version_id: str, ref_name: str) -> None:
-        """Keep a produced version reachable after an isolated copy is removed.
-
-        Version stores with intrinsic durability may leave this as a no-op.
-        """
-
-        return None
-
     # ── Access control ─────────────────────────────────────────────
 
     @property

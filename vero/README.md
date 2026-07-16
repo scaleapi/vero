@@ -187,6 +187,7 @@ from vero.optimization import (
     CommandCandidateProducerConfig,
 )
 from vero.runtime import create_local_optimization_session
+from vero.sandbox import LocalSandbox
 
 backend = CommandBackend(CommandBackendConfig(
     harness_root=str(Path("../my-evaluator").resolve()),
@@ -211,7 +212,20 @@ session = await create_local_optimization_session(
 )
 result = await session.run()
 print(result.best.request.candidate.version, result.best.objective.value)
+
+# Every candidate remains available after its producer workspace is gone.
+inspection_sandbox = await LocalSandbox.create()
+for candidate in session.candidate_repository.list():
+    async with session.candidate_repository.checkout(
+        candidate,
+        sandbox=inspection_sandbox,
+        name=f"inspect-{candidate.id}",
+    ) as candidate_workspace:
+        print(candidate.id, candidate_workspace.project_path)
 ```
+
+`vero session inspect SESSION_DIR` includes the same durable candidate records
+alongside the manifest and evaluation summaries.
 
 ### Run the target in a remote sandbox
 
@@ -221,6 +235,7 @@ pass it to the generic factory:
 
 ```python
 from vero.runtime import create_optimization_session
+from vero.candidate_repository import GitCandidateRepository
 from vero.sandbox import DockerSandbox
 from vero.workspace import GitWorkspace
 
@@ -231,6 +246,11 @@ try:
     workspace = await GitWorkspace.from_path(
         sandbox,
         "/workspace/my-program",
+    )
+    session_dir = Path("~/.vero/sessions/remote-run").expanduser()
+    candidate_repository = await GitCandidateRepository.create(
+        session_dir / "candidates",
+        workspace=workspace,
     )
 
     backend = CommandBackend(CommandBackendConfig(
@@ -249,7 +269,8 @@ try:
     ))
     session = await create_optimization_session(
         workspace=workspace,
-        session_dir="~/.vero/sessions/remote-run",
+        candidate_repository=candidate_repository,
+        session_dir=session_dir,
         backend_id="command",
         backend=backend,
         objective=ObjectiveSpec(
@@ -263,10 +284,11 @@ finally:
     await sandbox.close()
 ```
 
-Session manifests, databases, budgets, W&B logging, and durable artifacts stay
-on the host. Git worktrees, candidate commands, compilation, and evaluation
-commands run in the sandbox. Requests and reports use a temporary staging area;
-VeRO transfers them explicitly and removes it after each operation.
+Session manifests, databases, budgets, W&B logging, artifacts, and the bare Git
+candidate repository stay on the host. Candidate commands, compilation, and
+evaluation run in isolated checkouts inside the sandbox. VeRO transfers Git
+bundles between remote checkouts and the durable repository, then removes each
+temporary checkout after use.
 
 Remote command harnesses and producer directories must be self-contained. An
 executable named in a command must either be installed in the sandbox or live

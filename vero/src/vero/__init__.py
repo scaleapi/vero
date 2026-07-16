@@ -1,6 +1,7 @@
 """VeRO's public program-optimization API."""
 
 from vero.candidate import Candidate
+from vero.candidate_repository import CandidateRepository, GitCandidateRepository
 from vero.evaluation import (
     EvaluationBackend,
     EvaluationRecord,
@@ -17,11 +18,13 @@ from vero.runtime import (
 
 __all__ = [
     "Candidate",
+    "CandidateRepository",
     "CandidateProducer",
     "EvaluationBackend",
     "EvaluationRecord",
     "EvaluationReport",
     "EvaluationSet",
+    "GitCandidateRepository",
     "ObjectiveSpec",
     "OptimizationSession",
     "OptimizationStrategy",

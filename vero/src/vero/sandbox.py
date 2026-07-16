@@ -236,7 +236,7 @@ class Sandbox(ABC):
         try:
             yield path
         finally:
-            await self.remove(path, recursive=True)
+            await asyncio.shield(self.remove(path, recursive=True))
 
     # ── Host ↔ Sandbox file transfer (async) ───────────────────────────
 

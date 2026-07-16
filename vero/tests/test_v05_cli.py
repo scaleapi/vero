@@ -156,6 +156,7 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
     inspection = json.loads(inspect_result.output)
     assert inspection["manifest"]["id"] == "cli-session"
     assert inspection["manifest"]["status"] == "completed"
+    assert len(inspection["candidates"]) == 2
     assert len(inspection["evaluations"]) == 2
 
     list_result = runner.invoke(

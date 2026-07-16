@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pydantic import JsonValue
 
 from vero.candidate import Candidate
+from vero.candidate_repository import CandidateRepository
 from vero.evaluation import (
     EvaluationAcknowledgement,
     EvaluationBudget,
@@ -116,7 +117,7 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
                 "trial": self._count,
             },
         )
-        await self.optimizer._retain_candidate(candidate)
+        await self.optimizer._capture_candidate(candidate, self.workspace)
         result = await self.optimizer.engine.evaluate(
             backend_id=self.optimizer.backend_id,
             request=self.optimizer._request(candidate),
@@ -128,7 +129,8 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         record = self.optimizer.engine.database.get_evaluation(evaluation_id)
         if record is None:
             raise RuntimeError(
-                f"evaluation engine did not index completed evaluation {evaluation_id!r}"
+                "evaluation engine did not index completed evaluation "
+                f"{evaluation_id!r}"
             )
         self._last_candidate_id = candidate.id
         self._trial_candidates.append(candidate)
@@ -150,6 +152,7 @@ class Optimizer:
     """Schedule proposal, production, evaluation, and selection rounds."""
 
     workspace: Workspace
+    candidate_repository: CandidateRepository
     engine: EvaluationEngine
     backend_id: str
     evaluation_set: EvaluationSet
@@ -177,14 +180,12 @@ class Optimizer:
             seed=self.seed,
         )
 
-    async def _retain_candidate(self, candidate: Candidate) -> None:
-        session_id = self.session_id or self.engine.evaluator.session_dir.name
-        session_digest = hashlib.sha256(session_id.encode()).hexdigest()[:16]
-        candidate_digest = hashlib.sha256(candidate.id.encode()).hexdigest()
-        await self.workspace.retain_version(
-            candidate.version,
-            f"sessions/{session_digest}/candidates/{candidate_digest}",
-        )
+    async def _capture_candidate(
+        self,
+        candidate: Candidate,
+        workspace: Workspace,
+    ) -> Candidate:
+        return await self.candidate_repository.capture(candidate, workspace)
 
     async def evaluate_candidate(self, candidate: Candidate) -> EvaluationRecord:
         return await self.engine.evaluate_record(
@@ -212,11 +213,11 @@ class Optimizer:
                 f"unknown candidate producer: {proposal.producer_id!r}"
             ) from error
 
-        candidate_workspace = await self.workspace.copy(
+        async with self.candidate_repository.checkout(
+            parent,
+            sandbox=self.workspace.sandbox,
             name=self._workspace_name(proposal),
-            from_version=parent.version,
-        )
-        try:
+        ) as candidate_workspace:
             before = await candidate_workspace.current_version()
             if before != parent.version:
                 raise ValueError(
@@ -272,14 +273,12 @@ class Optimizer:
                 description=change.description,
                 metadata=metadata,
             )
-            await self._retain_candidate(candidate)
+            await self._capture_candidate(candidate, candidate_workspace)
             return _ProductionOutcome(
                 candidate=candidate,
                 trial_candidates=evaluation.trial_candidates,
                 trial_evaluations=evaluation.trial_evaluations,
             )
-        finally:
-            await candidate_workspace.destroy()
 
     async def run(
         self,
@@ -299,6 +298,11 @@ class Optimizer:
         if baseline is None:
             version = await self.workspace.current_version()
             baseline = Candidate.from_version(version)
+        stored_baseline = self.candidate_repository.get(baseline.id)
+        if stored_baseline is None:
+            baseline = await self._capture_candidate(baseline, self.workspace)
+        elif stored_baseline != baseline:
+            raise ValueError("baseline does not match its durable candidate record")
 
         backend_provenance = self.engine.backends.resolve(self.backend_id).provenance
         existing_baselines = [
@@ -335,8 +339,7 @@ class Optimizer:
             and record.objective_spec == self.objective
         ]
         candidate_records = {
-            record.request.candidate.id: record.request.candidate
-            for record in compatible
+            candidate.id: candidate for candidate in self.candidate_repository.list()
         }
         reachable = {baseline.id}
         changed = True
@@ -373,6 +376,36 @@ class Optimizer:
         ]
         start_round = max(completed_rounds, default=generated - 1) + 1
         semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        evaluated_candidate_ids = {
+            record.request.candidate.id for record in evaluations
+        }
+        pending = [
+            candidate
+            for candidate in candidates.values()
+            if candidate.id != baseline.id
+            and candidate.id not in evaluated_candidate_ids
+            and "producer_id" in candidate.metadata
+        ]
+        pending.sort(
+            key=lambda candidate: (
+                int(candidate.metadata.get("round", 0)),
+                int(candidate.metadata.get("trial", 0)),
+                candidate.created_at,
+                candidate.id,
+            )
+        )
+
+        async def evaluate(candidate: Candidate) -> EvaluationRecord:
+            async with semaphore:
+                return await self.evaluate_candidate(candidate)
+
+        if pending:
+            async with asyncio.TaskGroup() as group:
+                pending_tasks = [
+                    group.create_task(evaluate(candidate)) for candidate in pending
+                ]
+            evaluations.extend(task.result() for task in pending_tasks)
 
         for round_number in range(start_round, self.max_rounds):
             if generated >= self.max_candidates:
@@ -440,10 +473,6 @@ class Optimizer:
                 for outcome in meaningful_outcomes
                 if outcome.candidate is not None
             ]
-
-            async def evaluate(candidate: Candidate) -> EvaluationRecord:
-                async with semaphore:
-                    return await self.evaluate_candidate(candidate)
 
             async with asyncio.TaskGroup() as group:
                 evaluation_tasks = [
