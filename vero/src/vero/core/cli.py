@@ -775,7 +775,7 @@ def evaluate(
             seed=seed,
             timeout=timeout,
             per_sample_timeout=per_sample_timeout,
-            create_temporary_worktree=create_temporary_worktree,
+            create_temporary_copy=create_temporary_worktree,
             isolate=isolate,
             max_concurrency=max_concurrency,
             task_project=task_project,
