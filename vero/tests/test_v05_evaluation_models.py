@@ -23,6 +23,7 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveResult,
     ObjectiveSpec,
+    RetryPolicy,
 )
 
 
@@ -118,9 +119,39 @@ def test_request_fingerprint_ignores_candidate_display_metadata():
     assert first.fingerprint() == second.fingerprint()
 
 
+def test_retry_policy_restores_transient_provider_defaults():
+    policy = RetryPolicy()
+
+    assert policy.max_attempts == 3
+    assert policy.retry_on_timeout is True
+    assert policy.retry_status_codes == [429, 503, 529]
+    assert RetryPolicy.disabled().max_attempts == 1
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"initial_delay_seconds": 2, "maximum_delay_seconds": 1},
+        {"retry_exception_names": ["same", "same"]},
+        {"retry_status_codes": [99]},
+        {"retry_message_patterns": ["["]},
+    ],
+)
+def test_retry_policy_rejects_invalid_configuration(values):
+    with pytest.raises(ValidationError):
+        RetryPolicy(**values)
+
+
 @pytest.mark.parametrize(
     "path",
-    ["", "/absolute.log", "../escape.log", "logs/../escape.log", "logs//run.log", "logs\\run.log"],
+    [
+        "",
+        "/absolute.log",
+        "../escape.log",
+        "logs/../escape.log",
+        "logs//run.log",
+        "logs\\run.log",
+    ],
 )
 def test_artifacts_reject_unsafe_paths(path):
     with pytest.raises(ValidationError):

@@ -27,6 +27,7 @@ from vero.evaluation import (
     MetricConstraint,
     MetricSelector,
     ObjectiveSpec,
+    RetryPolicy,
     project_evaluation,
 )
 from vero.optimization import (
@@ -338,6 +339,36 @@ def run_config(config_path: Path) -> None:
     type=click.IntRange(min=1),
     show_default=True,
 )
+@click.option(
+    "--retry-max-attempts",
+    default=3,
+    type=click.IntRange(min=1),
+    show_default=True,
+    help="Maximum attempts for a transient per-case failure.",
+)
+@click.option(
+    "--retry-initial-delay",
+    default=4.0,
+    type=click.FloatRange(min=0),
+    show_default=True,
+)
+@click.option(
+    "--retry-maximum-delay",
+    default=120.0,
+    type=click.FloatRange(min=0),
+    show_default=True,
+)
+@click.option(
+    "--retry-multiplier",
+    default=2.0,
+    type=click.FloatRange(min=1),
+    show_default=True,
+)
+@click.option(
+    "--retry-on-timeout/--no-retry-on-timeout",
+    default=True,
+    show_default=True,
+)
 @click.option("--seed", type=int)
 @click.option("--wandb-project", help="Log the session to this W&B project.")
 @click.option("--wandb-entity")
@@ -382,6 +413,11 @@ def optimize(
     producer_timeout: float,
     case_timeout: float,
     evaluation_concurrency: int,
+    retry_max_attempts: int,
+    retry_initial_delay: float,
+    retry_maximum_delay: float,
+    retry_multiplier: float,
+    retry_on_timeout: bool,
     seed: int | None,
     wandb_project: str | None,
     wandb_entity: str | None,
@@ -399,6 +435,24 @@ def optimize(
         raise click.UsageError("--producer-root is required with --produce")
     if producer_command is None and producer_root is not None:
         raise click.UsageError("--producer-root is only valid with --produce")
+    if agent is None and max_turns != 200:
+        raise click.UsageError("--max-turns is only valid with --agent")
+    if producer_command is None and (
+        producer_env
+        or producer_variable
+        or producer_working_directory != "."
+        or producer_timeout != 600.0
+    ):
+        raise click.UsageError(
+            "--producer-env, --producer-variable, --producer-working-directory, "
+            "and --producer-timeout are only valid with --produce"
+        )
+    if wandb_project is None and any(
+        value is not None for value in (wandb_entity, wandb_name, wandb_mode)
+    ):
+        raise click.UsageError(
+            "--wandb-entity, --wandb-name, and --wandb-mode require --wandb-project"
+        )
     if case_id and case_stop is not None:
         raise click.UsageError("--case-id cannot be combined with --case-stop")
     if case_stop is None and case_start != 0:
@@ -500,6 +554,13 @@ def optimize(
                 timeout_seconds=evaluation_timeout,
                 case_timeout_seconds=case_timeout,
                 max_concurrency=evaluation_concurrency,
+                retry=RetryPolicy(
+                    max_attempts=retry_max_attempts,
+                    initial_delay_seconds=retry_initial_delay,
+                    maximum_delay_seconds=retry_maximum_delay,
+                    multiplier=retry_multiplier,
+                    retry_on_timeout=retry_on_timeout,
+                ),
             ),
             seed=seed,
             max_candidates=max_candidates,

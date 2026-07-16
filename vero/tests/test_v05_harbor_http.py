@@ -203,6 +203,7 @@ def test_harbor_cli_builds_canonical_selection(monkeypatch):
         "ids": ["a", "b"],
     }
     assert captured["payload"]["parameters"] == {"temperature": 0.2}
+    assert captured["payload"]["limits"] is None
 
 
 def test_harbor_finalize_cli_writes_only_rewards(tmp_path, monkeypatch):

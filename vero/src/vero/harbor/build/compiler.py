@@ -14,7 +14,12 @@ import tomllib
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 
-from vero.evaluation import EvaluationBudget, EvaluationLimits, EvaluationSet
+from vero.evaluation import (
+    EvaluationBudget,
+    EvaluationLimits,
+    EvaluationSet,
+    RetryPolicy,
+)
 from vero.harbor.build.config import HarborBuildConfig
 
 logger = logging.getLogger(__name__)
@@ -229,8 +234,8 @@ def _deployment_config(
 
     limits = EvaluationLimits(
         timeout_seconds=config.timeout_seconds,
-        case_timeout_seconds=config.case_timeout_seconds,
         max_concurrency=config.max_concurrency,
+        retry=RetryPolicy.disabled(),
     )
     policies = []
     budgets = []
@@ -332,7 +337,6 @@ def _deployment_config(
         "admin_volume": ADMIN_VOLUME,
         "submit_enabled": config.reward_mode == "submit",
         "score_baseline": config.score_baseline,
-        "use_evaluation_copies": config.use_evaluation_copies,
     }
 
 

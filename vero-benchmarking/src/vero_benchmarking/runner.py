@@ -25,6 +25,7 @@ from vero.evaluation import (
     ObjectiveSpec,
     PythonTaskBackend,
     PythonTaskBackendConfig,
+    RetryPolicy,
 )
 from vero.optimization import OptimizationResult, SequentialStrategy
 from vero.runtime import OptimizationSession, create_local_optimization_session
@@ -162,6 +163,7 @@ async def build_benchmark_session(
     candidate_concurrency: int = 1,
     evaluation_timeout: float = DEFAULT_EVAL_TIMEOUT,
     case_timeout: float = DEFAULT_CASE_TIMEOUT,
+    retry: RetryPolicy | None = None,
     case_ids: list[str] | None = None,
     seed: int | None = DEFAULT_SEED,
     parameters: dict | None = None,
@@ -195,9 +197,7 @@ async def build_benchmark_session(
     if resolved_evaluation_budget < 1:
         raise ValueError("evaluation_budget must include at least the baseline")
     if max_candidates is None:
-        max_candidates = (
-            resolved_evaluation_budget - 1 if agent_name is not None else 0
-        )
+        max_candidates = resolved_evaluation_budget - 1 if agent_name is not None else 0
     if max_candidates < 0:
         raise ValueError("max_candidates must be non-negative")
     if agent_name is None and max_candidates:
@@ -266,6 +266,7 @@ async def build_benchmark_session(
             timeout_seconds=evaluation_timeout,
             case_timeout_seconds=case_timeout,
             max_concurrency=evaluation_concurrency,
+            retry=retry or RetryPolicy(),
         ),
         budgets=[budget],
         seed=seed,
@@ -347,6 +348,7 @@ async def run_baseline(
     evaluation_concurrency: int = 100,
     evaluation_timeout: float = DEFAULT_EVAL_TIMEOUT,
     case_timeout: float = DEFAULT_CASE_TIMEOUT,
+    retry: RetryPolicy | None = None,
 ) -> pd.DataFrame:
     """Evaluate the current target version once for each model."""
 
@@ -354,7 +356,9 @@ async def run_baseline(
     for model in models:
         session_id = str(uuid4())
         session_dir = (
-            sessions_root / task_name / session_id if sessions_root is not None else None
+            sessions_root / task_name / session_id
+            if sessions_root is not None
+            else None
         )
         session = await build_benchmark_session(
             task_name=task_name,
@@ -367,6 +371,7 @@ async def run_baseline(
             evaluation_concurrency=evaluation_concurrency,
             evaluation_timeout=evaluation_timeout,
             case_timeout=case_timeout,
+            retry=retry,
         )
         result: OptimizationResult = await session.run()
         frame = evaluation_record_dataframe(
@@ -390,8 +395,29 @@ async def run_baseline(
 def _add_runtime_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--task", required=True)
     parser.add_argument("--evaluation-concurrency", type=int, default=100)
-    parser.add_argument("--evaluation-timeout", type=float, default=DEFAULT_EVAL_TIMEOUT)
+    parser.add_argument(
+        "--evaluation-timeout", type=float, default=DEFAULT_EVAL_TIMEOUT
+    )
     parser.add_argument("--case-timeout", type=float, default=DEFAULT_CASE_TIMEOUT)
+    parser.add_argument("--retry-max-attempts", type=int, default=3)
+    parser.add_argument("--retry-initial-delay", type=float, default=4.0)
+    parser.add_argument("--retry-maximum-delay", type=float, default=120.0)
+    parser.add_argument("--retry-multiplier", type=float, default=2.0)
+    parser.add_argument(
+        "--no-retry-on-timeout",
+        action="store_false",
+        dest="retry_on_timeout",
+    )
+
+
+def _retry_policy(arguments: argparse.Namespace) -> RetryPolicy:
+    return RetryPolicy(
+        max_attempts=arguments.retry_max_attempts,
+        initial_delay_seconds=arguments.retry_initial_delay,
+        maximum_delay_seconds=arguments.retry_maximum_delay,
+        multiplier=arguments.retry_multiplier,
+        retry_on_timeout=arguments.retry_on_timeout,
+    )
 
 
 def _run_optimize(arguments: argparse.Namespace) -> None:
@@ -409,6 +435,7 @@ def _run_optimize(arguments: argparse.Namespace) -> None:
             candidate_concurrency=arguments.candidate_concurrency,
             evaluation_timeout=arguments.evaluation_timeout,
             case_timeout=arguments.case_timeout,
+            retry=_retry_policy(arguments),
         )
         return await run_optimization(
             session,
@@ -432,6 +459,7 @@ def _run_baseline(arguments: argparse.Namespace) -> None:
             evaluation_concurrency=arguments.evaluation_concurrency,
             evaluation_timeout=arguments.evaluation_timeout,
             case_timeout=arguments.case_timeout,
+            retry=_retry_policy(arguments),
         )
     )
 

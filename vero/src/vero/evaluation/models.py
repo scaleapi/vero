@@ -119,17 +119,49 @@ class EvaluationSet(EvaluationModel):
 
 
 class RetryPolicy(EvaluationModel):
-    max_attempts: int = Field(default=1, ge=1)
-    initial_delay_seconds: float = Field(default=0.0, ge=0.0)
-    maximum_delay_seconds: float = Field(default=60.0, ge=0.0)
+    max_attempts: int = Field(default=3, ge=1)
+    initial_delay_seconds: float = Field(default=4.0, ge=0.0)
+    maximum_delay_seconds: float = Field(default=120.0, ge=0.0)
     multiplier: float = Field(default=2.0, ge=1.0)
-    retry_on_timeout: bool = False
+    retry_on_timeout: bool = True
+    retry_exception_names: list[str] = Field(
+        default_factory=lambda: [
+            "openai.RateLimitError",
+            "anthropic.RateLimitError",
+        ]
+    )
+    retry_status_codes: list[int] = Field(default_factory=lambda: [429, 503, 529])
+    retry_message_patterns: list[str] = Field(
+        default_factory=lambda: ["rate limit", "too many requests"]
+    )
 
     @model_validator(mode="after")
     def validate_delays(self) -> RetryPolicy:
         if self.maximum_delay_seconds < self.initial_delay_seconds:
             raise ValueError("maximum retry delay cannot be less than initial delay")
+        for name in self.retry_exception_names:
+            _non_empty(name, "retry exception name")
+        if len(set(self.retry_exception_names)) != len(self.retry_exception_names):
+            raise ValueError("retry exception names must be unique")
+        for status_code in self.retry_status_codes:
+            if status_code < 100 or status_code > 599:
+                raise ValueError("retry status codes must be between 100 and 599")
+        if len(set(self.retry_status_codes)) != len(self.retry_status_codes):
+            raise ValueError("retry status codes must be unique")
+        for pattern in self.retry_message_patterns:
+            _non_empty(pattern, "retry message pattern")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise ValueError(
+                    f"invalid retry message pattern {pattern!r}: {error}"
+                ) from error
         return self
+
+    @classmethod
+    def disabled(cls) -> RetryPolicy:
+        """Return an explicit no-retry policy for backends with their own retries."""
+        return cls(max_attempts=1)
 
 
 class EvaluationLimits(EvaluationModel):

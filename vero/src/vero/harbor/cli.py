@@ -14,7 +14,13 @@ from pathlib import Path
 
 import click
 
-from vero.evaluation import CaseIds, CaseRange, EvaluationLimits, EvaluationSet
+from vero.evaluation import (
+    CaseIds,
+    CaseRange,
+    EvaluationLimits,
+    EvaluationSet,
+    RetryPolicy,
+)
 from vero.harbor.auth import read_admin_token
 from vero.harbor.sidecar import SidecarEvaluationRequest
 
@@ -49,7 +55,9 @@ def _request(
             f"{method} {path} returned {error.code}: {message}"
         ) from error
     except urllib.error.URLError as error:
-        raise click.ClickException(f"could not reach evaluation sidecar: {error}") from error
+        raise click.ClickException(
+            f"could not reach evaluation sidecar: {error}"
+        ) from error
 
 
 def _parameters(values: tuple[str, ...]) -> dict:
@@ -113,7 +121,7 @@ def build_command(config_path, output):
 )
 @click.option("--agent", required=True, help="Harbor optimizer agent.")
 @click.option("--model", help="Model used by the optimizer agent.")
-@click.option("--environment", default="docker", show_default=True)
+@click.option("--environment", default="modal", show_default=True)
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
 def run_command(config_path, agent, model, environment, extra):
     """Compile to a temporary directory and invoke `harbor run`."""
@@ -148,7 +156,9 @@ def run_command(config_path, agent, model, environment, extra):
 
 
 @harbor.command("serve")
-@click.option("--factory", "factory_path", required=True, help="Trusted module:factory.")
+@click.option(
+    "--factory", "factory_path", required=True, help="Trusted module:factory."
+)
 @click.option(
     "--config",
     "config_path",
@@ -185,9 +195,17 @@ def serve_command(factory_path, config_path, admin_token_path, host, port):
 @click.option("--start", type=click.IntRange(min=0))
 @click.option("--stop", type=click.IntRange(min=1))
 @click.option("--parameter", multiple=True, help="Evaluation parameter as NAME=JSON.")
-@click.option("--timeout", default=600.0, type=click.FloatRange(min=0, min_open=True))
-@click.option("--case-timeout", default=180.0, type=click.FloatRange(min=0, min_open=True))
-@click.option("--max-concurrency", default=20, type=click.IntRange(min=1))
+@click.option("--timeout", type=click.FloatRange(min=0, min_open=True))
+@click.option("--case-timeout", type=click.FloatRange(min=0, min_open=True))
+@click.option("--max-concurrency", type=click.IntRange(min=1))
+@click.option("--retry-max-attempts", type=click.IntRange(min=1))
+@click.option("--retry-initial-delay", type=click.FloatRange(min=0))
+@click.option("--retry-maximum-delay", type=click.FloatRange(min=0))
+@click.option("--retry-multiplier", type=click.FloatRange(min=1))
+@click.option(
+    "--retry-on-timeout/--no-retry-on-timeout",
+    default=None,
+)
 @click.option("--seed", type=int)
 def evaluate_command(
     backend_id,
@@ -201,6 +219,11 @@ def evaluate_command(
     timeout,
     case_timeout,
     max_concurrency,
+    retry_max_attempts,
+    retry_initial_delay,
+    retry_maximum_delay,
+    retry_multiplier,
+    retry_on_timeout,
     seed,
 ):
     """Evaluate a candidate through the metered agent endpoint."""
@@ -218,16 +241,34 @@ def evaluate_command(
         partition=partition,
         **({"selection": selection} if selection is not None else {}),
     )
+    retry_values = {
+        name: value
+        for name, value in {
+            "max_attempts": retry_max_attempts,
+            "initial_delay_seconds": retry_initial_delay,
+            "maximum_delay_seconds": retry_maximum_delay,
+            "multiplier": retry_multiplier,
+            "retry_on_timeout": retry_on_timeout,
+        }.items()
+        if value is not None
+    }
+    limit_values = {
+        name: value
+        for name, value in {
+            "timeout_seconds": timeout,
+            "case_timeout_seconds": case_timeout,
+            "max_concurrency": max_concurrency,
+        }.items()
+        if value is not None
+    }
+    if retry_values:
+        limit_values["retry"] = RetryPolicy(**retry_values)
     body = SidecarEvaluationRequest(
         backend_id=backend_id,
         evaluation_set=evaluation_set,
         version=version,
         parameters=_parameters(parameter),
-        limits=EvaluationLimits(
-            timeout_seconds=timeout,
-            case_timeout_seconds=case_timeout,
-            max_concurrency=max_concurrency,
-        ),
+        limits=EvaluationLimits(**limit_values) if limit_values else None,
         seed=seed,
     )
     click.echo(
@@ -242,7 +283,9 @@ def evaluate_command(
 @click.option("--version", help="Candidate version; defaults to agent repository HEAD.")
 def submit_command(version):
     """Nominate a candidate for submit-based finalization."""
-    click.echo(json.dumps(_request("POST", "/submit", payload={"version": version}), indent=2))
+    click.echo(
+        json.dumps(_request("POST", "/submit", payload={"version": version}), indent=2)
+    )
 
 
 @harbor.command("status")

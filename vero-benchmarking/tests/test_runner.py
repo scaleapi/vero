@@ -94,6 +94,7 @@ async def test_build_baseline_session_uses_canonical_runtime(tmp_path, monkeypat
     assert session.optimizer.evaluation_set.name == "example"
     assert session.optimizer.evaluation_set.partition == "test"
     assert session.optimizer.evaluation_set.selection == CaseRange(stop=2)
+    assert session.optimizer.limits.retry.max_attempts == 3
     budget = session.budget_ledger.get(
         runner.BACKEND_ID,
         session.optimizer.evaluation_set,

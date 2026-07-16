@@ -19,6 +19,7 @@ from vero.evaluation import (
     EvaluationRequest,
     EvaluationSet,
     EvaluationStatus,
+    RetryPolicy,
 )
 from vero.harbor import HarborBackend, HarborBackendConfig
 from vero.sandbox import CommandResult, LocalSandbox
@@ -66,8 +67,8 @@ def _request(selection=None) -> EvaluationRequest:
         ),
         limits=EvaluationLimits(
             timeout_seconds=90,
-            case_timeout_seconds=30,
             max_concurrency=7,
+            retry=RetryPolicy.disabled(),
         ),
     )
 
@@ -79,6 +80,41 @@ def test_backend_accepts_pinned_environment_extra(tmp_path):
     )
 
     assert config.harbor_requirement == "harbor[modal]==0.18.0"
+
+
+@pytest.mark.parametrize(
+    ("request_factory", "message"),
+    [
+        (
+            lambda: _request().model_copy(
+                update={
+                    "limits": _request().limits.model_copy(
+                        update={"retry": RetryPolicy(max_attempts=2)}
+                    )
+                }
+            ),
+            "generic per-case retries",
+        ),
+        (
+            lambda: _request().model_copy(
+                update={
+                    "limits": _request().limits.model_copy(
+                        update={"case_timeout_seconds": 30}
+                    )
+                }
+            ),
+            "absolute per-case timeout",
+        ),
+        (lambda: _request().model_copy(update={"seed": 7}), "evaluation seed"),
+    ],
+)
+def test_harbor_backend_rejects_unsupported_generic_controls(
+    tmp_path, request_factory, message
+):
+    backend = HarborBackend(_config(tmp_path))
+
+    with pytest.raises(ValueError, match=message):
+        backend.validate_request(request_factory())
 
 
 class FakeSandbox(LocalSandbox):

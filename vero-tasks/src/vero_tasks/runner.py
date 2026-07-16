@@ -10,7 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from vero_tasks.models import TaskContext, TaskResult
+from vero_tasks.models import RetryPolicy, TaskContext, TaskResult
 from vero_tasks.task import TaskDefinition
 
 
@@ -19,13 +19,16 @@ def _json_value(value: Any) -> Any:
 
 
 def _load_cases(path: Path) -> list[Any]:
+    content = path.read_text(encoding="utf-8")
     if path.suffix == ".jsonl":
-        return [
-            json.loads(line)
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
-    value = json.loads(path.read_text(encoding="utf-8"))
+        return [json.loads(line) for line in content.splitlines() if line.strip()]
+    try:
+        value = json.loads(content)
+    except json.JSONDecodeError as error:
+        lines = [line for line in content.splitlines() if line.strip()]
+        if len(lines) < 2:
+            raise error
+        value = [json.loads(line) for line in lines]
     if isinstance(value, dict) and "cases" in value:
         value = value["cases"]
     if not isinstance(value, list):
@@ -61,8 +64,22 @@ def _select(cases: list[Any], selection: dict[str, Any]) -> list[tuple[str, Any]
 
 
 def _errors(result: TaskResult) -> list[dict[str, Any]]:
-    errors = []
-    if result.error is not None:
+    errors = [
+        {
+            "message": error.message,
+            "code": f"task_{error.phase}_error",
+            "phase": error.phase,
+            "attempt": error.attempt,
+            "retryable": error.retryable,
+            "terminal": error.terminal,
+            "metadata": (
+                {"traceback": error.traceback} if error.traceback is not None else {}
+            ),
+        }
+        for error in result.attempt_errors
+    ]
+    terminal_phases = {error.phase for error in result.attempt_errors if error.terminal}
+    if result.error is not None and "inference" not in terminal_phases:
         metadata = (
             {"traceback": result.error_traceback}
             if result.error_traceback is not None
@@ -77,7 +94,7 @@ def _errors(result: TaskResult) -> list[dict[str, Any]]:
                 "metadata": metadata,
             }
         )
-    if result.eval_error is not None:
+    if result.eval_error is not None and "evaluation" not in terminal_phases:
         metadata = (
             {"traceback": result.evaluation_error_traceback}
             if result.evaluation_error_traceback is not None
@@ -107,7 +124,8 @@ def _report(
         if result.score is not None:
             metrics.setdefault("score", result.score)
         errors = _errors(result)
-        if errors:
+        terminal_errors = [error for error in errors if error["terminal"]]
+        if terminal_errors:
             error_count += 1
         else:
             for name, value in metrics.items():
@@ -115,7 +133,7 @@ def _report(
         cases.append(
             {
                 "case_id": case_id,
-                "status": "error" if errors else "success",
+                "status": "error" if terminal_errors else "success",
                 "metrics": metrics,
                 "input": _json_value(case),
                 "output": _json_value(result.output),
@@ -134,9 +152,7 @@ def _report(
             }
         )
     metrics = {
-        name: sum(values) / len(values)
-        for name, values in totals.items()
-        if values
+        name: sum(values) / len(values) for name, values in totals.items() if values
     }
     metrics["error_rate"] = error_count / len(results) if results else 0.0
     return {
@@ -170,6 +186,7 @@ async def run_task(
         parameters=request.get("parameters", {}),
         max_concurrency=limits["max_concurrency"],
         case_timeout_seconds=limits["case_timeout_seconds"],
+        retry=RetryPolicy.model_validate(limits.get("retry", {})),
         seed=request.get("seed"),
     )
     results = await task.run([case for _, case in selected], context)

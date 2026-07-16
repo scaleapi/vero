@@ -26,6 +26,7 @@ from vero.evaluation.models import (
     EvaluationArtifact,
     EvaluationCost,
     EvaluationDiagnostic,
+    EvaluationLimits,
     EvaluationModel,
     EvaluationReport,
     EvaluationRequest,
@@ -305,6 +306,19 @@ class HarborBackend:
 
     def validate_request(self, request: EvaluationRequest) -> None:
         self._validate_evaluation_set(request.evaluation_set)
+        if request.limits.retry.max_attempts > 1:
+            raise ValueError(
+                "Harbor does not support generic per-case retries; configure "
+                "HarborBackendConfig.max_retries instead"
+            )
+        default_case_timeout = EvaluationLimits().case_timeout_seconds
+        if request.limits.case_timeout_seconds != default_case_timeout:
+            raise ValueError(
+                "Harbor does not support an absolute per-case timeout override; "
+                "configure task timeouts or Harbor timeout multipliers instead"
+            )
+        if request.seed is not None:
+            raise ValueError("Harbor does not support the generic evaluation seed")
         payload = request.model_dump_json()
         if any(secret in payload for secret in self._secrets() if len(secret) >= 4):
             raise ValueError(

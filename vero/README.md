@@ -58,6 +58,11 @@ harness_root = "../my-evaluator"
 command = ["python3", "evaluate.py", "{workspace}", "{report}"]
 evaluation_set = "performance"
 
+[evaluation.retry]
+max_attempts = 3
+initial_delay_seconds = 4
+maximum_delay_seconds = 120
+
 [objective]
 metric = "latency_ms"
 direction = "minimize"
@@ -80,6 +85,12 @@ Run `vero evaluate` to measure only the baseline or `vero run` to produce and
 evaluate candidates. Paths are resolved relative to the config file. A target
 must be a clean Git repository, while the session directory, evaluation harness,
 and command producer must live outside it.
+
+Retries wrap each individual case's inference or scoring call. By default VeRO
+retries provider rate limits, HTTP 429/503/529 responses, and timeouts up to
+three attempts with bounded exponential backoff. A successful retry remains a
+successful case, while its earlier failed attempts are retained in the case's
+structured error history. Set `max_attempts = 1` to disable retries.
 
 The evaluator receives an isolated candidate workspace and paths for a
 versioned request and report:

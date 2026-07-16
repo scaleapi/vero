@@ -223,3 +223,36 @@ def test_cli_requires_exactly_one_producer(tmp_path: Path):
 
     assert result.exit_code == 2
     assert "exactly one of --produce or --agent" in result.output
+
+
+def test_cli_rejects_options_that_do_not_apply(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    base = [
+        "optimize",
+        str(target),
+        "--harness-root",
+        str(harness),
+        "--evaluate",
+        "evaluate {workspace} {report}",
+        "--metric",
+        "score",
+        "--direction",
+        "maximize",
+        "--max-candidates",
+        "0",
+    ]
+    runner = CliRunner()
+
+    max_turns = runner.invoke(main, [*base, "--max-turns", "10"])
+    producer_timeout = runner.invoke(main, [*base, "--producer-timeout", "10"])
+    wandb = runner.invoke(main, [*base, "--wandb-mode", "offline"])
+
+    assert max_turns.exit_code == 2
+    assert "--max-turns is only valid with --agent" in max_turns.output
+    assert producer_timeout.exit_code == 2
+    assert "are only valid with --produce" in producer_timeout.output
+    assert wandb.exit_code == 2
+    assert "require --wandb-project" in wandb.output

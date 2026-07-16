@@ -99,10 +99,8 @@ class HarborBuildConfig(EvaluationModel):
     extra_harbor_args: list[str] = Field(default_factory=list)
 
     timeout_seconds: float = Field(default=1800.0, gt=0)
-    case_timeout_seconds: float = Field(default=600.0, gt=0)
     max_concurrency: int = Field(default=8, ge=1)
     verifier_timeout_seconds: int | None = Field(default=None, ge=1)
-    use_evaluation_copies: bool = True
 
     secrets: list[str] = Field(default_factory=list)
     read_only_paths: list[str] = Field(default_factory=list)

@@ -58,3 +58,16 @@ def test_config_rejects_case_ids_combined_with_range_start():
 
     with pytest.raises(ValidationError, match="case_ids and case range"):
         VeroConfig.model_validate(value)
+
+
+def test_config_wires_retry_policy_into_evaluation_limits():
+    value = _config({"kind": "vero"})
+    value["evaluation"]["retry"] = {
+        "max_attempts": 5,
+        "initial_delay_seconds": 0.5,
+    }
+
+    config = VeroConfig.model_validate(value)
+
+    assert config.evaluation.to_limits().retry.max_attempts == 5
+    assert config.evaluation.to_limits().retry.initial_delay_seconds == 0.5

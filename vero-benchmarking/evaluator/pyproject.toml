@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Minimal trusted Python task harness for VeRO benchmarks."
 requires-python = ">=3.11"
 dependencies = [
-    "scale-vero-tasks>=0.1.0",
+    "scale-vero-tasks>=0.2.0",
 ]
 
 [tool.uv.sources]

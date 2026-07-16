@@ -91,7 +91,7 @@ class SidecarEvaluationRequest(EvaluationModel):
     evaluation_set: EvaluationSet
     version: str | None = None
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
+    limits: EvaluationLimits | None = None
     seed: int | None = None
 
     @field_validator("backend_id")
@@ -250,6 +250,11 @@ class EvaluationSidecar:
                 "evaluation parameters are not agent-controllable: "
                 + ", ".join(unknown_parameters)
             )
+        if policy.limits is not None and request.limits is not None:
+            raise EvaluationAccessError(
+                "evaluation limits are fixed by the access policy and cannot be "
+                "overridden by the agent"
+            )
         await self._enforce_aggregate_floor(policy, request.evaluation_set)
         candidate = await self.candidate_transport.import_candidate(request.version)
         parameters = {**policy.parameters, **request.parameters}
@@ -257,7 +262,7 @@ class EvaluationSidecar:
             candidate=candidate,
             evaluation_set=request.evaluation_set,
             parameters=parameters,
-            limits=policy.limits or request.limits,
+            limits=policy.limits or request.limits or EvaluationLimits(),
             seed=request.seed,
         )
         result = await self.engine.evaluate(

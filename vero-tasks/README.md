@@ -27,3 +27,9 @@ standard VeRO adapter runs this package in a trusted evaluator project while
 overlaying the candidate package as an editable dependency. This keeps Python
 benchmark ergonomics separate from both the target program and VeRO's
 language-neutral evaluation kernel.
+
+The runner applies VeRO's retry policy independently to each non-batch
+inference and evaluation call. Provider rate limits, configured HTTP status
+codes or messages, and timeouts can be retried with bounded exponential
+backoff. Earlier failed attempts are retained in the canonical case error list;
+they are non-terminal when a later attempt succeeds.

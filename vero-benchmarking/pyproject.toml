@@ -14,7 +14,7 @@ dependencies = [
     "kagglehub>=0.3.13",
     "pandas>=2.3.3",
     "scale-vero[claude,optimize]",
-    "scale-vero-tasks>=0.1.0",
+    "scale-vero-tasks>=0.2.0",
 ]
 
 [project.scripts]

@@ -7,13 +7,37 @@ import inspect
 import os
 import traceback
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from vero_tasks.models import TaskContext, TaskOutput, TaskResult, TaskT
+from vero_tasks.models import (
+    TaskAttemptError,
+    TaskContext,
+    TaskOutput,
+    TaskResult,
+    TaskT,
+)
 
 
 async def _resolve(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
+
+
+@dataclass
+class _AttemptOutcome:
+    value: Any
+    errors: list[TaskAttemptError]
+
+
+def _merge_attempt_errors(
+    *groups: Sequence[TaskAttemptError],
+) -> list[TaskAttemptError]:
+    merged: list[TaskAttemptError] = []
+    for group in groups:
+        for error in group:
+            if error not in merged:
+                merged.append(error)
+    return merged
 
 
 class TaskDefinition:
@@ -120,16 +144,31 @@ class TaskDefinition:
             raise RuntimeError("task has no evaluation function")
 
     @staticmethod
-    def _output(value: Any) -> TaskOutput:
+    def _output(
+        value: Any,
+        attempt_errors: Sequence[TaskAttemptError] = (),
+    ) -> TaskOutput:
         if isinstance(value, TaskOutput):
-            return value
+            errors = _merge_attempt_errors(attempt_errors, value.attempt_errors)
+            if errors == value.attempt_errors:
+                return value
+            return TaskOutput(
+                output=value.output,
+                error=value.error,
+                execution_trace=value.execution_trace,
+                attempt_errors=errors,
+            )
         if isinstance(value, BaseException):
             error = value if isinstance(value, Exception) else Exception(str(value))
-            return TaskOutput(error=error)
-        return TaskOutput(output=value)
+            return TaskOutput(error=error, attempt_errors=list(attempt_errors))
+        return TaskOutput(output=value, attempt_errors=list(attempt_errors))
 
     @staticmethod
-    def _result(output: TaskOutput, value: Any) -> TaskResult:
+    def _result(
+        output: TaskOutput,
+        value: Any,
+        attempt_errors: Sequence[TaskAttemptError] = (),
+    ) -> TaskResult:
         if isinstance(value, TaskResult):
             updates: dict[str, Any] = {}
             if output.error is not None and value.error is None:
@@ -143,6 +182,13 @@ class TaskDefinition:
                 )
             if output.execution_trace is not None and value.execution_trace is None:
                 updates["execution_trace"] = output.execution_trace
+            errors = _merge_attempt_errors(
+                output.attempt_errors,
+                value.attempt_errors,
+                attempt_errors,
+            )
+            if errors != value.attempt_errors:
+                updates["attempt_errors"] = errors
             return value.model_copy(update=updates) if updates else value
         if isinstance(value, BaseException):
             return TaskResult.from_task_output(
@@ -150,6 +196,10 @@ class TaskDefinition:
                 eval_error=str(value) or type(value).__name__,
                 evaluation_error_traceback="".join(
                     traceback.format_exception(type(value), value, value.__traceback__)
+                ),
+                attempt_errors=_merge_attempt_errors(
+                    output.attempt_errors,
+                    attempt_errors,
                 ),
             )
         raise TypeError(
@@ -160,16 +210,44 @@ class TaskDefinition:
         self,
         factories: Sequence[Callable[[], Awaitable[Any] | Any]],
         context: TaskContext,
-    ) -> list[Any]:
+        *,
+        phase: str,
+    ) -> list[_AttemptOutcome]:
         semaphore = asyncio.Semaphore(context.max_concurrency)
 
-        async def run(factory: Callable[[], Awaitable[Any] | Any]) -> Any:
-            async with semaphore:
+        async def run(
+            factory: Callable[[], Awaitable[Any] | Any],
+        ) -> _AttemptOutcome:
+            errors: list[TaskAttemptError] = []
+            for attempt in range(1, context.retry.max_attempts + 1):
                 try:
-                    async with asyncio.timeout(context.case_timeout_seconds):
-                        return await _resolve(factory())
+                    async with semaphore:
+                        async with asyncio.timeout(context.case_timeout_seconds):
+                            value = await _resolve(factory())
+                    return _AttemptOutcome(value=value, errors=errors)
                 except Exception as error:
-                    return error
+                    retryable = context.retry.should_retry(error)
+                    terminal = not retryable or attempt == context.retry.max_attempts
+                    errors.append(
+                        TaskAttemptError(
+                            message=str(error) or type(error).__name__,
+                            phase=phase,
+                            attempt=attempt,
+                            retryable=retryable,
+                            terminal=terminal,
+                            traceback="".join(
+                                traceback.format_exception(
+                                    type(error), error, error.__traceback__
+                                )
+                            ),
+                        )
+                    )
+                    if terminal:
+                        return _AttemptOutcome(value=error, errors=errors)
+                    delay = context.retry.delay_after(attempt)
+                    if delay:
+                        await asyncio.sleep(delay)
+            raise AssertionError("retry loop completed without an outcome")
 
         return list(await asyncio.gather(*(run(factory) for factory in factories)))
 
@@ -195,13 +273,21 @@ class TaskDefinition:
         else:
             inference = self.get("inference")
             assert inference is not None
-            raw_outputs = await self._map(
+            inference_outcomes = await self._map(
                 [lambda case=case: inference(case, context) for case in cases],
                 context,
+                phase="inference",
             )
+            raw_outputs = [outcome.value for outcome in inference_outcomes]
         if len(raw_outputs) != len(cases):
             raise ValueError("inference result count does not match case count")
-        outputs = [self._output(value) for value in raw_outputs]
+        if batch_inference is not None:
+            outputs = [self._output(value) for value in raw_outputs]
+        else:
+            outputs = [
+                self._output(outcome.value, outcome.errors)
+                for outcome in inference_outcomes
+            ]
 
         batch_evaluation = self.get("evaluation", batch=True)
         if batch_evaluation is not None:
@@ -211,18 +297,25 @@ class TaskDefinition:
         else:
             evaluation = self.get("evaluation")
             assert evaluation is not None
-            raw_results = await self._map(
+            evaluation_outcomes = await self._map(
                 [
                     lambda case=case, output=output: evaluation(case, output, context)
                     for case, output in zip(cases, outputs)
                 ],
                 context,
+                phase="evaluation",
             )
+            raw_results = [outcome.value for outcome in evaluation_outcomes]
         if len(raw_results) != len(cases):
             raise ValueError("evaluation result count does not match case count")
+        if batch_evaluation is not None:
+            return [
+                self._result(output, result)
+                for output, result in zip(outputs, raw_results)
+            ]
         return [
-            self._result(output, result)
-            for output, result in zip(outputs, raw_results)
+            self._result(output, outcome.value, outcome.errors)
+            for output, outcome in zip(outputs, evaluation_outcomes)
         ]
 
 

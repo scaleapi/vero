@@ -22,6 +22,7 @@ from vero.evaluation import (
     EvaluationCost,
     EvaluationDatabase,
     EvaluationEngine,
+    EvaluationLimits,
     EvaluationReport,
     EvaluationSet,
     EvaluationStatus,
@@ -161,7 +162,7 @@ class StubTransport:
         return self.candidate
 
 
-def _sidecar(tmp_path: Path, *, submit_enabled=False):
+def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False):
     candidate = Candidate(
         id="candidate",
         version="candidate-version",
@@ -204,6 +205,7 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False):
                     selector=MetricSelector(metric="score"),
                     direction="maximize",
                 ),
+                limits=EvaluationLimits() if fixed_limits else None,
             ),
             EvaluationAccessPolicy(
                 backend_id="secondary",
@@ -284,6 +286,30 @@ async def test_sidecar_fails_closed_before_transfer_or_budget(tmp_path):
 
     assert transport.calls == []
     budget = ledger.get("primary", too_small.evaluation_set)
+    assert budget.remaining_runs == 3
+    assert budget.remaining_cases == 20
+
+
+@pytest.mark.asyncio
+async def test_sidecar_rejects_agent_limits_when_policy_fixes_them(tmp_path):
+    sidecar, transport, ledger = _sidecar(tmp_path, fixed_limits=True)
+    evaluation_set = EvaluationSet(
+        name="benchmark",
+        partition="validation",
+        selection=CaseIds(ids=[f"case-{i}" for i in range(5)]),
+    )
+
+    with pytest.raises(EvaluationAccessError, match="limits are fixed"):
+        await sidecar.evaluate(
+            SidecarEvaluationRequest(
+                backend_id="primary",
+                evaluation_set=evaluation_set,
+                limits=EvaluationLimits(timeout_seconds=10),
+            )
+        )
+
+    assert transport.calls == []
+    budget = ledger.get("primary", evaluation_set)
     assert budget.remaining_runs == 3
     assert budget.remaining_cases == 20
 

@@ -25,6 +25,7 @@ from vero.evaluation import (
     MetricConstraint,
     MetricSelector,
     ObjectiveSpec,
+    RetryPolicy,
 )
 from vero.optimization import (
     CommandCandidateProducer,
@@ -59,6 +60,7 @@ class EvaluationConfig(EvaluationModel):
     timeout_seconds: float = Field(default=600.0, gt=0)
     case_timeout_seconds: float = Field(default=180.0, gt=0)
     max_concurrency: int = Field(default=100, ge=1)
+    retry: RetryPolicy = Field(default_factory=RetryPolicy)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     seed: int | None = None
 
@@ -92,6 +94,7 @@ class EvaluationConfig(EvaluationModel):
             timeout_seconds=self.timeout_seconds,
             case_timeout_seconds=self.case_timeout_seconds,
             max_concurrency=self.max_concurrency,
+            retry=self.retry,
         )
 
 

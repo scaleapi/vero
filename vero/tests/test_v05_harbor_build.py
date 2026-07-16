@@ -12,6 +12,7 @@ import yaml
 from vero.harbor import (
     AgentAccessSpec,
     HarborBuildConfig,
+    HarborDeploymentConfig,
     VerificationTargetSpec,
     compile_harbor_task,
     load_harbor_build_config,
@@ -152,6 +153,14 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["targets"][0]["reward_scale"] == 1.0
     assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
+    assert serve["access_policies"][0]["limits"]["retry"]["max_attempts"] == 1
+    assert "use_evaluation_copies" not in serve
+    for partition, backend in serve["backends"].items():
+        partition_name = partition.removeprefix("harbor-")
+        backend["cases_path"] = str(
+            output / f"environment/sidecar/cases/{partition_name}.jsonl"
+        )
+    HarborDeploymentConfig.model_validate(serve)
     test_case = json.loads(
         (output / "environment/sidecar/cases/test.jsonl").read_text(encoding="utf-8")
     )
