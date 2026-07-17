@@ -370,6 +370,11 @@ def run_config(config_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--case-failure-value",
+    type=float,
+    help="Value assigned to failed or missing cases during case aggregation.",
+)
+@click.option(
     "--direction",
     type=click.Choice(["maximize", "minimize"]),
     required=True,
@@ -465,6 +470,13 @@ def run_config(config_path: Path) -> None:
     show_default=True,
 )
 @click.option(
+    "--error-rate-threshold",
+    default=0.1,
+    type=click.FloatRange(min=0, max=1, min_open=True),
+    show_default=True,
+    help="Fail an evaluation when this fraction of selected cases errors.",
+)
+@click.option(
     "--retry-max-attempts",
     default=3,
     type=click.IntRange(min=1),
@@ -512,6 +524,7 @@ def optimize(
     instruction: str | None,
     metric: str,
     aggregation: str,
+    case_failure_value: float | None,
     direction: str,
     failure_value: float | None,
     constraint: tuple[tuple[str, str, str], ...],
@@ -538,6 +551,7 @@ def optimize(
     producer_timeout: float,
     case_timeout: float,
     evaluation_concurrency: int,
+    error_rate_threshold: float,
     retry_max_attempts: int,
     retry_initial_delay: float,
     retry_maximum_delay: float,
@@ -662,6 +676,7 @@ def optimize(
                 selector=MetricSelector(
                     metric=metric,
                     aggregation=MetricAggregation(aggregation),
+                    case_failure_value=case_failure_value,
                 ),
                 direction=direction,
                 failure_value=failure_value,
@@ -681,6 +696,7 @@ def optimize(
                 timeout_seconds=evaluation_timeout,
                 case_timeout_seconds=case_timeout,
                 max_concurrency=evaluation_concurrency,
+                error_rate_threshold=error_rate_threshold,
                 retry=RetryPolicy(
                     max_attempts=retry_max_attempts,
                     initial_delay_seconds=retry_initial_delay,

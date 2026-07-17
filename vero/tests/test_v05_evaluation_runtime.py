@@ -15,6 +15,7 @@ from vero.evaluation import (
     BackendProvenance,
     BackendRegistry,
     BudgetLedger,
+    CaseError,
     CaseResult,
     CaseStatus,
     CaseRange,
@@ -27,6 +28,7 @@ from vero.evaluation import (
     EvaluationDatabase,
     EvaluationDeniedError,
     EvaluationEngine,
+    EvaluationLimits,
     EvaluationDefinition,
     EvaluationExecutionError,
     EvaluationRecord,
@@ -390,6 +392,71 @@ async def test_evaluator_runs_at_candidate_version_and_persists(tmp_path: Path):
     assert value.objective.value == 2.0
     result_dir = runtime.evaluations_dir / value.id
     assert EvaluationStore(result_dir).load() == value
+
+
+@pytest.mark.asyncio
+async def test_evaluator_fails_reports_at_the_error_rate_threshold(tmp_path: Path):
+    workspace = StubWorkspace(tmp_path / "repo")
+    cases = [
+        CaseResult(
+            case_id=f"success-{index}",
+            status=CaseStatus.SUCCESS,
+            metrics={"score": 1.0},
+        )
+        for index in range(9)
+    ]
+    cases.append(
+        CaseResult(
+            case_id="error",
+            status=CaseStatus.ERROR,
+            errors=[CaseError(message="failed", terminal=True)],
+        )
+    )
+    backend = StubBackend(
+        report=EvaluationReport(
+            status=EvaluationStatus.SUCCESS,
+            metrics={"score": 1.0},
+            cases=cases,
+        )
+    )
+
+    value = await evaluator(tmp_path, workspace).evaluate(
+        backend_id="default",
+        backend=backend,
+        request=request(),
+        objective_spec=ObjectiveSpec(
+            selector=MetricSelector(metric="score"),
+            direction="maximize",
+            failure_value=0.0,
+        ),
+    )
+
+    assert value.report.status == EvaluationStatus.FAILED
+    assert value.report.metrics["error_rate"] == pytest.approx(0.1)
+    assert value.report.diagnostics[-1].code == "error_rate_threshold_exceeded"
+    assert value.objective == ObjectiveResult(value=0.0, feasible=False)
+
+
+@pytest.mark.asyncio
+async def test_error_rate_threshold_can_be_disabled(tmp_path: Path):
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = StubBackend(
+        report=EvaluationReport(
+            status=EvaluationStatus.SUCCESS,
+            metrics={"score": 1.0, "error_rate": 1.0},
+        )
+    )
+    evaluation_request = request().model_copy(
+        update={"limits": EvaluationLimits(error_rate_threshold=None)}
+    )
+
+    value = await evaluator(tmp_path, workspace).evaluate(
+        backend_id="default",
+        backend=backend,
+        request=evaluation_request,
+    )
+
+    assert value.report.status == EvaluationStatus.SUCCESS
 
 
 @pytest.mark.asyncio

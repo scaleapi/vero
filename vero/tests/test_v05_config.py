@@ -75,6 +75,19 @@ def test_config_wires_retry_policy_into_evaluation_limits():
     assert config.protocol.to_limits().retry.initial_delay_seconds == 0.5
 
 
+def test_config_wires_case_failure_and_error_rate_policy():
+    value = _config({"kind": "vero"})
+    value["protocol"]["error_rate_threshold"] = 0.25
+    value["objective"].update(
+        {"aggregation": "mean", "case_failure_value": 0.0}
+    )
+
+    config = VeroConfig.model_validate(value)
+
+    assert config.protocol.to_limits().error_rate_threshold == 0.25
+    assert config.objective.to_model().selector.case_failure_value == 0.0
+
+
 def test_config_resolves_agent_context_inputs_with_staged_inputs(tmp_path):
     config_path = tmp_path / "vero.toml"
     config_path.write_text(

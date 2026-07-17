@@ -183,6 +183,7 @@ class EvaluationLimits(EvaluationModel):
     timeout_seconds: float = Field(default=600.0, gt=0.0)
     case_timeout_seconds: float = Field(default=180.0, gt=0.0)
     max_concurrency: int = Field(default=100, ge=1)
+    error_rate_threshold: float | None = Field(default=0.1, gt=0.0, le=1.0)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
 
 
@@ -408,11 +409,30 @@ class MetricAggregation(str, Enum):
 class MetricSelector(EvaluationModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
+    case_failure_value: float | None = None
 
     @field_validator("metric")
     @classmethod
     def validate_metric(cls, value: str) -> str:
         return _non_empty(value, "metric name")
+
+    @field_validator("case_failure_value")
+    @classmethod
+    def validate_case_failure_value(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("case_failure_value must be finite")
+        return value
+
+    @model_validator(mode="after")
+    def validate_case_aggregation(self) -> MetricSelector:
+        if (
+            self.aggregation == MetricAggregation.REPORT
+            and self.case_failure_value is not None
+        ):
+            raise ValueError(
+                "case_failure_value requires a case metric aggregation"
+            )
+        return self
 
 
 class ConstraintOperator(str, Enum):

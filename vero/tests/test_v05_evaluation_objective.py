@@ -78,6 +78,16 @@ def test_case_metric_aggregations_use_only_successful_cases(aggregation, expecte
     ) == expected
 
 
+def test_case_metric_aggregation_penalizes_failed_and_missing_cases():
+    selector = MetricSelector(
+        metric="score",
+        aggregation=MetricAggregation.MEAN,
+        case_failure_value=0.0,
+    )
+
+    assert resolve_metric(report(), selector) == 1.0
+
+
 @pytest.mark.parametrize(
     ("operator", "threshold", "feasible"),
     [

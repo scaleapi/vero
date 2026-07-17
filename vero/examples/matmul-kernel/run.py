@@ -23,6 +23,7 @@ from vero.evaluation import (
     EvaluationPlan,
     EvaluationPrincipal,
     EvaluationSet,
+    MetricAggregation,
     MetricSelector,
     ObjectiveSpec,
     PythonTaskBackend,
@@ -200,8 +201,13 @@ async def run_example(
         backend_id="python-task",
         backend=create_backend(cases),
         objective=ObjectiveSpec(
-            selector=MetricSelector(metric="score"),
+            selector=MetricSelector(
+                metric="score",
+                aggregation=MetricAggregation.MEAN,
+                case_failure_value=1.0e12,
+            ),
             direction="minimize",
+            failure_value=1.0e12,
         ),
         evaluation_plan=evaluation_plan,
         strategy=SequentialStrategy(instruction=INSTRUCTION),

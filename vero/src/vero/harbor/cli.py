@@ -198,6 +198,10 @@ def serve_command(factory_path, config_path, admin_token_path, host, port):
 @click.option("--timeout", type=click.FloatRange(min=0, min_open=True))
 @click.option("--case-timeout", type=click.FloatRange(min=0, min_open=True))
 @click.option("--max-concurrency", type=click.IntRange(min=1))
+@click.option(
+    "--error-rate-threshold",
+    type=click.FloatRange(min=0, max=1, min_open=True),
+)
 @click.option("--retry-max-attempts", type=click.IntRange(min=1))
 @click.option("--retry-initial-delay", type=click.FloatRange(min=0))
 @click.option("--retry-maximum-delay", type=click.FloatRange(min=0))
@@ -219,6 +223,7 @@ def evaluate_command(
     timeout,
     case_timeout,
     max_concurrency,
+    error_rate_threshold,
     retry_max_attempts,
     retry_initial_delay,
     retry_maximum_delay,
@@ -258,6 +263,7 @@ def evaluate_command(
             "timeout_seconds": timeout,
             "case_timeout_seconds": case_timeout,
             "max_concurrency": max_concurrency,
+            "error_rate_threshold": error_rate_threshold,
         }.items()
         if value is not None
     }

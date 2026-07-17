@@ -19,6 +19,7 @@ from vero.evaluation import (
     EvaluationBudget,
     EvaluationDefinition,
     EvaluationDiagnostic,
+    EvaluationLimits,
     EvaluationPlan,
     EvaluationPrincipal,
     EvaluationRecord,
@@ -146,6 +147,17 @@ def test_retry_policy_restores_transient_provider_defaults():
 def test_retry_policy_rejects_invalid_configuration(values):
     with pytest.raises(ValidationError):
         RetryPolicy(**values)
+
+
+def test_case_failure_value_requires_case_aggregation():
+    with pytest.raises(ValidationError, match="requires a case metric aggregation"):
+        MetricSelector(metric="score", case_failure_value=0.0)
+
+
+@pytest.mark.parametrize("threshold", [0.0, 1.1])
+def test_error_rate_threshold_must_be_a_positive_fraction(threshold):
+    with pytest.raises(ValidationError):
+        EvaluationLimits(error_rate_threshold=threshold)
 
 
 @pytest.mark.parametrize(

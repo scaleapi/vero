@@ -35,15 +35,16 @@ _OPERATORS = {
 
 
 def resolve_metric(report: EvaluationReport, selector: MetricSelector) -> float | None:
-    """Resolve a report metric or aggregate it across successful cases."""
+    """Resolve a report metric or aggregate it across evaluation cases."""
     if selector.aggregation == MetricAggregation.REPORT:
         return report.metrics.get(selector.metric)
 
-    values = [
-        case.metrics[selector.metric]
-        for case in report.cases
-        if case.status == CaseStatus.SUCCESS and selector.metric in case.metrics
-    ]
+    values: list[float] = []
+    for case in report.cases:
+        if case.status == CaseStatus.SUCCESS and selector.metric in case.metrics:
+            values.append(case.metrics[selector.metric])
+        elif selector.case_failure_value is not None:
+            values.append(selector.case_failure_value)
     if not values:
         return None
     if selector.aggregation == MetricAggregation.MEAN:

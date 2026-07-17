@@ -241,6 +241,7 @@ def _deployment_config(
     limits = EvaluationLimits(
         timeout_seconds=config.timeout_seconds,
         max_concurrency=config.max_concurrency,
+        error_rate_threshold=config.error_rate_threshold,
         retry=RetryPolicy.disabled(),
     )
     policies = []

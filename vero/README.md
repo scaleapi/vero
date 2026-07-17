@@ -100,6 +100,7 @@ disclosure = "none"
 selection_evaluation = "validation"
 final_evaluation = "test"
 max_proposals = 5
+error_rate_threshold = 0.1
 
 [protocol.retry]
 max_attempts = 3
@@ -133,6 +134,14 @@ retries provider rate limits, HTTP 429/503/529 responses, and timeouts up to
 three attempts with bounded exponential backoff. A successful retry remains a
 successful case, while its earlier failed attempts are retained in the case's
 structured error history. Set `max_attempts = 1` to disable retries.
+
+An otherwise successful evaluation becomes failed when 10% or more of its
+selected cases end in error; configure `protocol.error_rate_threshold` to
+change that boundary. For objectives aggregated from case metrics, set
+`aggregation = "mean"` (or another case aggregation) and
+`case_failure_value` to assign a direction-appropriate penalty to errored,
+skipped, or metric-less cases. This prevents a candidate from improving its
+score by failing difficult cases.
 
 The protocol ranks every candidate on the fixed base selection of
 `validation`, regardless of which cheaper subsets the agent explored. The

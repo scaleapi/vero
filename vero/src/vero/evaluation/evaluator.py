@@ -17,6 +17,7 @@ from vero.evaluation.exceptions import (
     EvaluationExecutionError,
 )
 from vero.evaluation.models import (
+    CaseStatus,
     DiagnosticSeverity,
     EvaluationDiagnostic,
     EvaluationRecord,
@@ -162,6 +163,10 @@ class Evaluator:
                         request=request,
                     )
                 report = EvaluationReport.model_validate(raw_report)
+                report = self._apply_error_rate_threshold(
+                    report,
+                    request.limits.error_rate_threshold,
+                )
 
             objective = (
                 evaluate_objective(report, objective_spec)
@@ -230,3 +235,42 @@ class Evaluator:
                 message=message,
             )
             raise EvaluationExecutionError(evaluation_id, message) from error
+
+    @staticmethod
+    def _apply_error_rate_threshold(
+        report: EvaluationReport,
+        threshold: float | None,
+    ) -> EvaluationReport:
+        """Fail a successful report when too many selected cases errored."""
+
+        if threshold is None or report.status != EvaluationStatus.SUCCESS:
+            return report
+        considered = [
+            case
+            for case in report.cases
+            if case.status in (CaseStatus.SUCCESS, CaseStatus.ERROR)
+        ]
+        if considered:
+            error_rate = sum(
+                case.status == CaseStatus.ERROR for case in considered
+            ) / len(considered)
+        else:
+            error_rate = report.metrics.get("error_rate")
+        if error_rate is None or error_rate < threshold:
+            return report
+        diagnostic = EvaluationDiagnostic(
+            code="error_rate_threshold_exceeded",
+            message=(
+                f"evaluation error rate {error_rate:.6g} reached the configured "
+                f"threshold {threshold:.6g}"
+            ),
+            severity=DiagnosticSeverity.ERROR,
+            phase="evaluation",
+        )
+        return report.model_copy(
+            update={
+                "status": EvaluationStatus.FAILED,
+                "metrics": {**report.metrics, "error_rate": error_rate},
+                "diagnostics": [*report.diagnostics, diagnostic],
+            }
+        )

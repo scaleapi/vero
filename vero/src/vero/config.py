@@ -170,6 +170,7 @@ class ProtocolConfig(EvaluationModel):
     timeout_seconds: float = Field(default=600.0, gt=0)
     case_timeout_seconds: float = Field(default=180.0, gt=0)
     evaluation_concurrency: int = Field(default=100, ge=1)
+    error_rate_threshold: float | None = Field(default=0.1, gt=0, le=1)
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
     max_proposals: int = Field(default=1, ge=0)
     max_rounds: int = Field(default=100, ge=1)
@@ -180,6 +181,7 @@ class ProtocolConfig(EvaluationModel):
             timeout_seconds=self.timeout_seconds,
             case_timeout_seconds=self.case_timeout_seconds,
             max_concurrency=self.evaluation_concurrency,
+            error_rate_threshold=self.error_rate_threshold,
             retry=self.retry,
         )
 
@@ -187,6 +189,7 @@ class ProtocolConfig(EvaluationModel):
 class ObjectiveConstraintConfig(EvaluationModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
+    case_failure_value: float | None = None
     operator: ConstraintOperator
     value: float
 
@@ -195,6 +198,7 @@ class ObjectiveConstraintConfig(EvaluationModel):
             selector=MetricSelector(
                 metric=self.metric,
                 aggregation=self.aggregation,
+                case_failure_value=self.case_failure_value,
             ),
             operator=self.operator,
             value=self.value,
@@ -204,6 +208,7 @@ class ObjectiveConstraintConfig(EvaluationModel):
 class ObjectiveConfig(EvaluationModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
+    case_failure_value: float | None = None
     direction: Literal["maximize", "minimize"]
     failure_value: float | None = None
     constraints: list[ObjectiveConstraintConfig] = Field(default_factory=list)
@@ -213,6 +218,7 @@ class ObjectiveConfig(EvaluationModel):
             selector=MetricSelector(
                 metric=self.metric,
                 aggregation=self.aggregation,
+                case_failure_value=self.case_failure_value,
             ),
             direction=self.direction,
             failure_value=self.failure_value,
