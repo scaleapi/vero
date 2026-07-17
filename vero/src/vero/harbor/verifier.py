@@ -414,7 +414,8 @@ class CanonicalVerifier:
                     drained,
                 )
             result = await self._finalize()
-            _atomic_write_json(
+            await asyncio.to_thread(
+                _atomic_write_json,
                 self.result_path,
                 result.model_dump(mode="json"),
             )
