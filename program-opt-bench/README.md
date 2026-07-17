@@ -1,6 +1,6 @@
 # Harness optimization benchmarks
 
-`harness-opt-bench` contains end-to-end benchmarks for improving programs with
+`program-opt-bench` contains end-to-end benchmarks for improving programs with
 VeRO. Each leaf directory pairs one editable target program with one immutable
 Harbor dataset and compiles them into an outer Harbor optimization task.
 
@@ -19,4 +19,3 @@ the `paper-v1` tag. New benchmarks should use this Harbor-native layout.
 | Benchmark | Editable target | Dataset | Split |
 | --- | --- | --- | --- |
 | [GAIA baseline](gaia/baseline/) | Tool-using Responses API agent | Harbor `gaia/gaia` | 20% / 40% / 40% |
-

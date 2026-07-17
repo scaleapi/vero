@@ -19,8 +19,8 @@ From the repository root:
 ```bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../harness-opt-bench/gaia/baseline/build.yaml \
-  --output ../harness-opt-bench/gaia/baseline/compiled
+  --config ../program-opt-bench/gaia/baseline/build.yaml \
+  --output ../program-opt-bench/gaia/baseline/compiled
 ```
 
 Omit `VERO_SKIP_SECRET_CHECK=1` for a real build so VeRO verifies that the
