@@ -4,6 +4,7 @@ task.toml / compose / scripts parse. No Docker (that's the e2e)."""
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import subprocess
 import tomllib
@@ -13,7 +14,15 @@ import pytest
 import yaml
 
 from vero.harbor.build import BuildConfig, compile_task
+from vero.harbor.protocol import StatusSummary
 from vero.harbor.serve import ServeConfig
+
+# Whether the sidecar in THIS tree grants the budget-free first baseline eval.
+# The feature and the compiler live on different PR chains; the instruction
+# tests below run the arm that matches whichever chains are merged here.
+_HAS_FREE_BASELINE = "free_baseline_available" in {
+    f.name for f in dataclasses.fields(StatusSummary)
+}
 
 
 def _stub_vero(root: Path) -> Path:
@@ -175,12 +184,52 @@ def test_instruction_warns_baseline_not_selectable(built):
     # baseline died with "no candidate experiments" at finalize).
     text = (built / "instruction.md").read_text()
     assert "other than the seeded" in text
-    assert "spends budget without" in text
+    assert "create no candidate" in text
+
+
+@pytest.mark.skipif(
+    not _HAS_FREE_BASELINE, reason="sidecar in this tree has no free baseline eval"
+)
+def test_instruction_advertises_free_baseline_eval(built):
+    # The sidecar gives the first baseline eval away free; the instruction must
+    # say so or the offer goes unclaimed (found live: an optimizer produced only
+    # regressing candidates and never learned where zero was, because the old
+    # wording told it baseline evals waste budget).
+    text = (built / "instruction.md").read_text()
+    assert "budget-free" in text
+    assert "reference score" in text
+    # ...and it must aim the one-per-task freebie at the split where candidates
+    # are compared, or a multi-split task can waste it.
+    assert "once per task" in text
+
+
+@pytest.mark.skipif(
+    _HAS_FREE_BASELINE, reason="sidecar in this tree grants the free baseline eval"
+)
+def test_instruction_omits_free_baseline_claim_when_unsupported(built):
+    # Merge-order guard: if the compiler chain lands without the free-baseline
+    # chain, the instruction must not promise a freebie the sidecar will meter;
+    # acting on that promise burns a metered eval on a commit auto_best cannot
+    # select (fatal on a run_budget=1 task).
+    text = (built / "instruction.md").read_text()
+    assert "budget-free" not in text
+
+
+def test_instruction_tells_agent_to_spend_whole_budget(built):
+    # Two live runs ended with nearly half the eval budget unspent; the
+    # instruction must state that unspent evals are wasted and re-measurement
+    # is a legitimate spend.
+    text = (built / "instruction.md").read_text()
+    assert "Unspent budget is wasted" in text
+    assert "re-measuring your best candidate" in text
 
 
 def test_submit_mode_instruction_has_no_baseline_warning(tmp_path, monkeypatch):
-    # The warning belongs to the auto_best branch only; pin the conditional
-    # boundary so a template refactor cannot leak it into submit-mode tasks.
+    # The not-selectable warning belongs to the auto_best branch only; pin the
+    # conditional boundary so a template refactor cannot leak it into
+    # submit-mode tasks. The free-baseline and spend-the-budget rules are
+    # mode-agnostic (metering does not depend on the selection mode) and must
+    # survive in both.
     monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
     config = BuildConfig(
         name="vero/gsm8k-opt",
@@ -195,4 +244,6 @@ def test_submit_mode_instruction_has_no_baseline_warning(tmp_path, monkeypatch):
     out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
     text = (out / "instruction.md").read_text()
     assert "other than the seeded" not in text
-    assert "spends budget without" not in text
+    assert "create no candidate" not in text
+    assert ("budget-free" in text) == _HAS_FREE_BASELINE
+    assert "Unspent budget is wasted" in text

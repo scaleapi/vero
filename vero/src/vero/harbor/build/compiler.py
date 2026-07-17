@@ -8,6 +8,7 @@ with `harbor run -p <task-dir> -a <optimizer> -m <model> -e docker`.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import re
 import shutil
@@ -17,10 +18,18 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from vero.harbor.build.config import BuildConfig
+from vero.harbor.protocol import StatusSummary
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES = Path(__file__).parent / "templates"
+
+# The StatusSummary field the sidecar sets to signal it grants the agent a free
+# baseline eval. The compiler renders the free-baseline instruction bullet only
+# when this field exists on the protocol shipping in the same tree (see the
+# free_baseline ctx entry). Kept as a named constant so the compiler<->protocol
+# coupling has one source: rename this and StatusSummary.<field> together.
+_FREE_BASELINE_FIELD = "free_baseline_available"
 
 # Container paths (must match the templates).
 VERO_DIR = "/opt/vero"
@@ -278,6 +287,17 @@ def compile_task(
         submit_enabled=config.submit_enabled,
         eval_num_samples=None,
         bake_inner_task=bool(config.inner_task),
+        # The free-baseline bullet may only render when the sidecar shipping in
+        # this same tree actually grants the free eval; the feature lives on a
+        # different PR chain than the compiler, and an instruction that promises
+        # it without it would send the agent to burn a metered eval on a commit
+        # auto_best cannot select. Introspecting the protocol keeps the
+        # instruction truthful under any merge order. _FREE_BASELINE_FIELD is the
+        # single source of the coupled field name: rename StatusSummary.<field> and
+        # this constant together (they cannot import-assert each other, since the
+        # field is absent on this branch's base until the sidecar PR merges).
+        free_baseline=_FREE_BASELINE_FIELD
+        in {f.name for f in dataclasses.fields(StatusSummary)},
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)
