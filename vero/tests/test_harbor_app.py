@@ -95,9 +95,9 @@ class TestServeIntegrityGuards:
     async def test_mode_a_without_task_project_rejected(self, tmp_path):
         # Mode A (no `harbor`) with task_project unset would load the scorer from
         # the agent repo. build_components must refuse to start.
-        from vero.harbor.serve import ServeConfig, build_components
+        from vero.harbor.serve import ServeConfigA, build_components
 
-        cfg = ServeConfig(
+        cfg = ServeConfigA(
             repo_path=str(tmp_path / "repo"),
             agent_repo_path=str(tmp_path / "agent"),
             session_id="s",

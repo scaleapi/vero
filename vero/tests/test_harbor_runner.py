@@ -54,6 +54,7 @@ def _write_trial(
     trajectory: str | None = None,
     finished_at: str | None = None,
     exception_type: str | None = None,
+    exception_message: str = "",
 ):
     # Real harbor layout: <jobs>/<timestamp>/<trial>/result.json, plus a job-level
     # <jobs>/<timestamp>/result.json summary (no task_name) that collation must skip.
@@ -73,7 +74,7 @@ def _write_trial(
     if exception_type is not None:
         data["exception_info"] = {
             "exception_type": exception_type,
-            "exception_message": "",
+            "exception_message": exception_message,
             "exception_traceback": "",
         }
     (d / "result.json").write_text(json.dumps(data))
@@ -99,16 +100,57 @@ class TestBuildCommand:
         assert "-p" in cmd and str(tmp_path) in cmd
         assert "-d" not in cmd
 
+    def test_harbor_requirement_layers_trusted_cli(self):
+        # The overlay must come before the `harbor` executable name so uv
+        # resolves the CLI from the trusted spec, not the candidate's lockfile.
+        runner = HarborRunner(
+            HarborConfig(
+                task_source="org/ds@1",
+                agent_import_path="pkg.mod:Agent",
+                harbor_requirement="harbor==0.1.17",
+            )
+        )
+        cmd = runner._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert cmd[:6] == ["uv", "run", "--project", "/wt", "--with", "harbor==0.1.17"]
+        assert cmd[6] == "harbor"
+
+    def test_no_harbor_requirement_keeps_candidate_env(self):
+        cmd = _runner()._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert "--with" not in cmd
+
+    def test_model_override_beats_configured_model(self):
+        # Transfer targets: a per-eval executor override (via task_params)
+        # wins over the task's configured model.
+        params = _params()
+        params.task_params = {"harbor_model_override": "openai/gpt-4o"}
+        cmd = _runner()._build_command("/wt", params, ["t0"], Path("/jobs"))
+        m = cmd[cmd.index("-m") + 1]
+        assert m == "openai/gpt-4o"
+
+    def test_no_override_uses_configured_model(self):
+        cmd = _runner()._build_command("/wt", _params(), ["t0"], Path("/jobs"))
+        assert cmd[cmd.index("-m") + 1] == "anthropic/x"
+
 
 class TestExtractReward:
-    def test_priority_pass_then_reward_then_mean(self):
+    def test_priority_pass_then_reward_then_sole_key(self):
         r = _runner()
         assert r._extract_reward({"pass": 1.0, "reward": 0.0}) == 1.0
         assert r._extract_reward({"reward": 0.7}) == 0.7
-        assert r._extract_reward({"a": 0.2, "b": 0.4}) == pytest.approx(0.3)
+        assert r._extract_reward({"accuracy": 0.9}) == 0.9  # sole key: unambiguous
+
+    def test_several_unknown_keys_refused_not_averaged(self):
+        # Averaging arbitrary keys would let a candidate inflate its score by
+        # emitting easy auxiliary metrics beside the real one.
+        assert _runner()._extract_reward({"a": 0.2, "b": 0.4}) is None
 
     def test_reward_key_override(self):
         assert _runner(reward_key="acc")._extract_reward({"acc": 0.9, "pass": 0.0}) == 0.9
+
+    def test_configured_key_is_strict_no_fallback(self):
+        # A configured reward_key missing from the dict is unscorable (None),
+        # never a silent substitution of 'pass'/'reward'.
+        assert _runner(reward_key="acc")._extract_reward({"pass": 1.0}) is None
 
 
 class TestCollate:
@@ -302,12 +344,13 @@ class TestCollateMismatchGuard:
 
 
 class TestMeanAttemptAggregation:
-    """aggregate_attempts='mean': average the reward across every SCORED
-    attempt, dirty or clean (de-noising; estimates per-attempt pass
-    probability). Harbor scores timed-out attempts 0.0 while also recording
-    the exception; those must count, or the mean forgives slow candidates.
-    Default 'best' keeps the existing latest-clean behavior, which inflates
-    toward pass@k.
+    """aggregate_attempts='mean': average the reward across every attempt
+    that RAN (de-noising; estimates per-attempt pass probability). Harbor
+    scores timed-out attempts 0.0 while also recording the exception; those
+    must count, or the mean forgives slow candidates. Attempts that died
+    BEFORE scoring count 0.0 too (n_dead in metrics), or dying early becomes
+    a scoring exploit. Default 'best' picks the single highest-scoring clean
+    trial (pass@k-like).
     """
 
     def _write(self, run, trial, task, rewards=None, exc=False):
@@ -334,9 +377,11 @@ class TestMeanAttemptAggregation:
         assert r.score == 0.5
         assert r.metrics["n_scored"] == 2.0
 
-    def test_mean_excludes_attempts_without_rewards(self, tmp_path):
-        # An attempt that died before the verifier scored it carries no
-        # measurement; it is excluded (but still counted in n_attempts).
+    def test_mean_zero_fills_attempts_without_rewards(self, tmp_path):
+        # An attempt that died before the verifier scored it is a real, failed
+        # attempt and counts 0.0. Excluding it would estimate
+        # P(pass | attempt survived), which rewards dying early on hard tasks:
+        # a live optimizer won selection on exactly that artifact.
         runner = HarborRunner(HarborConfig(
             task_source="org/ds", agent_import_path="p:m",
             n_attempts=2, aggregate_attempts="mean",
@@ -346,9 +391,59 @@ class TestMeanAttemptAggregation:
         self._write(run, "t0bad", "t0", exc=True)
         groups = runner._trial_groups(jobs)
         r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
-        assert r.score == 1.0
+        assert r.score == 0.5
         assert r.metrics["n_scored"] == 1.0
+        assert r.metrics["n_dead"] == 1.0
         assert r.metrics["n_attempts"] == 2.0
+
+    def test_mean_records_dead_exception_types(self, tmp_path):
+        # n_dead alone hides WHY attempts died, and cause matters: rate-limit
+        # deaths are infra noise, crashes point at the candidate, and deaths
+        # cluster hard by cause (E1: 110/129 UnicodeDecodeErrors sat on two
+        # tasks). Every zero-filled attempt gets its exception type counted.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0bad", "t0", exc=True)  # exception_type "X"
+        self._write(run, "t0gone", "t0")  # no rewards AND no exception recorded
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.output["dead_exception_types"] == {"X": 1, "no_rewards_recorded": 1}
+        # all-clean samples carry no key at all
+        self._write(run, "t1a", "t1", rewards={"reward": 1.0})
+        groups = runner._trial_groups(jobs)
+        r1 = runner._sample_result(groups["t1"][0], 1, "t1", _params(), attempts=groups["t1"])
+        assert "dead_exception_types" not in r1.output
+
+    def test_mean_all_attempts_dead_errors_not_zero(self, tmp_path):
+        # Every attempt died before scoring: that is an outage to investigate,
+        # not a silent 0.0 measurement; the sample must surface as an error.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        self._write(run, "t0a", "t0", exc=True)
+        self._write(run, "t0b", "t0", exc=True)
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.error is not None
+        assert r.score is None
+
+    def test_best_rank_is_monotone_in_reward(self, tmp_path):
+        # 'best' must never let a later clean 0.0 clobber an earlier clean 1.0:
+        # the reward is part of the rank, recency only breaks ties.
+        runner = _runner()
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        # _write derives finished_at from len(trial)%10: "t0a" -> 00:03,
+        # "t0badlate" -> 00:09, so the 0.0 trial genuinely finishes LATER.
+        self._write(run, "t0a", "t0", rewards={"reward": 1.0})
+        self._write(run, "t0badlate", "t0", rewards={"reward": 0.0})
+        trials = runner._load_trials(jobs)
+        assert (trials["t0"]["verifier_result"]["rewards"]["reward"]) == 1.0
 
     def test_mean_counts_scored_exception_attempts(self, tmp_path):
         # The live-GAIA shape: harbor records AgentTimeoutError but still runs
@@ -482,7 +577,10 @@ class TestTimeoutSalvage:
         with caplog.at_level("WARNING", logger="vero.harbor.runner"):
             r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
         assert r.metrics["n_scored"] == 2.0
-        assert any("2 scored attempt(s) of 3 configured" in m for m in caplog.messages)
+        assert any(
+            "2 attempt(s) of 3 configured (2 scored, 0 dead" in m
+            for m in caplog.messages
+        )
 
 
 def _fb_runner(**kwargs):
@@ -551,6 +649,47 @@ class TestTranscriptFeedback:
         r = self._result(runner, jobs)
         assert r.score == 0.0
         assert r.feedback is None
+
+    def test_empty_pane_falls_through_to_trajectory(self, tmp_path):
+        # An empty transcript file carries nothing and must not surface as ""
+        # feedback; the empty pane falls through to the trajectory.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(
+            jobs, "trial0", "t0", {"reward": 0.0}, pane="", trajectory='{"steps": [1]}'
+        )
+        assert self._result(runner, jobs).feedback == '{"steps": [1]}'
+
+    def test_all_empty_transcripts_yield_no_feedback(self, tmp_path):
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", {"reward": 0.0}, pane="", trajectory="")
+        assert self._result(runner, jobs).feedback is None
+
+    def test_no_rewards_error_sample_carries_crash_transcript(self, tmp_path):
+        # A candidate edit that crashes the agent before scoring lands in the
+        # no-verifier-rewards error branch; the transcript is the only way the
+        # optimizer can see the crash it caused.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", None, pane="crash tail")
+        r = self._result(runner, jobs)
+        assert r.error is not None
+        assert r.feedback == "crash tail"
+
+    def test_no_rewards_error_names_dead_exception_types(self, tmp_path):
+        # The error string must carry WHY the attempts died: it is the one
+        # field that flows to the DB, the per-sample files, and the verifier's
+        # target_errors, and it separates a deterministic candidate crash
+        # (measured live: 72/72 UnsupportedParamsError on an off-model
+        # executor) from an infra outage.
+        runner = _fb_runner()
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "trial0", "t0", None, exception_type="UnsupportedParamsError")
+        _write_trial(jobs, "trial1", "t0", None, exception_type="UnsupportedParamsError")
+        r = self._result(runner, jobs)
+        assert r.error is not None
+        assert "UnsupportedParamsError x2" in r.error
 
     def test_first_failed_attempt_transcript_used(self, tmp_path):
         # Two failed attempts: the FIRST one's transcript (by finished_at) is
@@ -790,3 +929,360 @@ class TestAttemptDetail:
         ))
         mean = self._result(mean_runner, jobs)
         assert "attempts" not in mean.output
+
+
+class TestMeanRewardKeyMismatch:
+    def test_mean_zero_fills_reward_key_mismatch(self, tmp_path):
+        # An attempt whose rewards LACK the configured key is unscorable on the
+        # configured metric and counts 0.0 in the mean (n_dead), exactly like
+        # dying pre-verifier: falling back to another key would score attempts
+        # within one mean on different metrics.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds", agent_import_path="p:m",
+            n_attempts=2, aggregate_attempts="mean", reward_key="acc",
+        ))
+        jobs = tmp_path / "jobs"; run = jobs / "2026-01-01__00-00-00"
+        w = TestMeanAttemptAggregation()
+        w._write(run, "t0a", "t0", rewards={"acc": 1.0})
+        w._write(run, "t0b", "t0", rewards={"other": 1.0})
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == 0.5
+        assert r.metrics["n_dead"] == 1.0
+        assert r.metrics["n_scored"] == 1.0
+
+
+class TestInfraResilience:
+    """Dead-attempt classification + bounded within-eval infra retry.
+
+    Classification is diagnostic and retry-gating only: every dead attempt
+    still scores 0.0 regardless of class (excusing infra-labeled deaths from
+    the score would let a candidate raise fake ConnectionErrors on hard tasks).
+    The retry is OFF BY DEFAULT and exists for trusted-candidate evaluations:
+    against an adversarial optimizer it is a re-roll lever, since the
+    qualifying predicate derives from exceptions raised in candidate code. It
+    re-measures only samples whose EVERY attempt died of a transient infra
+    cause, in a fresh sibling jobs dir, and stamps an audit marker on
+    recovered samples so the discarded round stays visible.
+    """
+
+    def _flow_runner(self, monkeypatch, tmp_path, rounds_by_call, **cfg):
+        """A runner whose _run_harbor writes fixture trials per call:
+        rounds_by_call[i] is a list of (trial, task, rewards, exc_type, exc_msg)
+        written into whatever jobs dir call i receives."""
+        monkeypatch.setenv("VERO_HOME_DIR", str(tmp_path / "vh"))
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+            **cfg,
+        ))
+        calls = []
+
+        async def _fake_run(project_path, params, task_names, jobs_dir):
+            i = len(calls)
+            calls.append((list(task_names), Path(jobs_dir)))
+            for trial, task, rewards, exc_type, exc_msg in rounds_by_call[i]:
+                _write_trial(Path(jobs_dir), trial, task, rewards,
+                             exception_type=exc_type, exception_message=exc_msg)
+
+        monkeypatch.setattr(runner, "_run_harbor", _fake_run)
+        monkeypatch.setattr(runner, "_task_names_for", lambda p: [(0, "t0"), (1, "t1")])
+        sleeps = []
+        import asyncio as _asyncio
+        real_sleep = _asyncio.sleep
+
+        async def _fast_sleep(d, *a, **k):
+            sleeps.append(d)
+            await real_sleep(0)
+
+        monkeypatch.setattr("asyncio.sleep", _fast_sleep)
+        return runner, calls, sleeps
+
+    def test_config_rejects_zero_delay_when_retries_enabled(self):
+        # A zero delay silently nullifies the backoff and an instant retry
+        # re-enters the same outage; misconfiguration must fail loudly.
+        with pytest.raises(ValueError, match="infra_retry_delay_s"):
+            HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                         infra_retry_rounds=1, infra_retry_delay_s=0.0)
+        # with retries off the delay is never used, so 0 is not an error
+        HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                     infra_retry_rounds=0, infra_retry_delay_s=0.0)
+
+    def test_config_rejects_negative_rounds(self):
+        with pytest.raises(ValueError, match="infra_retry_rounds"):
+            HarborConfig(task_source="org/ds@1", agent_import_path="p:m",
+                         infra_retry_rounds=-1)
+
+    def test_infra_deaths_labeled_and_counted_but_still_zero_filled(self, tmp_path):
+        # One scored attempt, one infra death, one candidate crash: the mean
+        # zero-fills BOTH deaths (classification must never move the score),
+        # and the labels + n_dead_infra let an analyst see which zeros
+        # measured the plumbing.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+            n_attempts=3, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "a", "t0", {"reward": 1.0})
+        _write_trial(jobs, "b", "t0", None, exception_type="ConnectionError")
+        _write_trial(jobs, "c", "t0", None, exception_type="UnsupportedParamsError")
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.score == pytest.approx(1.0 / 3)
+        assert r.output["dead_exception_types"] == {
+            "ConnectionError[infra]": 1,
+            "UnsupportedParamsError": 1,
+        }
+        assert r.metrics["n_dead"] == 2.0
+        assert r.metrics["n_dead_infra"] == 1.0
+
+    def test_forged_infra_suffix_is_neutralized(self, tmp_path):
+        # The suffix contract is load-bearing and the exception type name is
+        # candidate-authored: a class literally named "XError[infra]" must not
+        # classify as infra. Brackets are neutralized before labeling.
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"
+        _write_trial(jobs, "a", "t0", {"reward": 1.0})
+        _write_trial(jobs, "b", "t0", None, exception_type="MadeUpError[infra]")
+        groups = runner._trial_groups(jobs)
+        r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.output["dead_exception_types"] == {"MadeUpError(infra)": 1}
+        assert r.metrics["n_dead_infra"] == 0.0
+
+    def test_key_budget_exhaustion_labeled_and_alarmed(self, tmp_path, caplog):
+        # litellm reports a spent key budget as a BadRequestError; only the
+        # message identifies it. It must be labeled infra (those zeros likely
+        # measure an outage) and alarmed at ERROR (every later call fails
+        # identically). The alarm text hedges: the signature is read from
+        # candidate-process exceptions and needs corroboration.
+        import logging as _logging
+
+        runner = HarborRunner(HarborConfig(
+            task_source="org/ds@1", agent_import_path="pkg.mod:Agent",
+            n_attempts=2, aggregate_attempts="mean",
+        ))
+        jobs = tmp_path / "jobs"
+        msg = "litellm.BadRequestError: Budget has been exceeded! Current cost: 102.47, Max budget: 99.0"
+        _write_trial(jobs, "a", "t0", None, exception_type="BadRequestError", exception_message=msg)
+        _write_trial(jobs, "b", "t0", None, exception_type="BadRequestError", exception_message=msg)
+        groups = runner._trial_groups(jobs)
+        with caplog.at_level(_logging.ERROR, logger="vero.harbor.runner"):
+            r = runner._sample_result(groups["t0"][0], 0, "t0", _params(), attempts=groups["t0"])
+        assert r.error is not None
+        assert "BadRequestError[infra:llm-key-budget] x2" in r.error
+        assert r.output["dead_exception_types"] == {"BadRequestError[infra:llm-key-budget]": 2}
+        assert any("spend budget as exhausted" in rec.message for rec in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_retry_is_off_by_default(self, tmp_path, monkeypatch):
+        # The re-roll lever must be opt-in: with a default config, an
+        # infra-outaged sample books its cause-rich error and nothing re-runs.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t1", None, "ConnectionError", "")],
+            ],
+        )
+        assert runner.config.infra_retry_rounds == 0
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        assert len(calls) == 1
+        assert sleeps == []
+
+    @pytest.mark.asyncio
+    async def test_retry_reruns_only_the_outaged_sample(self, tmp_path, monkeypatch):
+        # t0 scores; t1 loses every attempt to ConnectionError. The retry round
+        # re-runs t1 ALONE in a fresh SIBLING jobs dir after a backoff, the
+        # fresh measurement replaces the recorded outage, and the booked output
+        # carries the audit marker naming the discarded dead attempts.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t1", None, "ConnectionError", ""),
+                 ("c", "t1", None, "ConnectionError", "")],
+                [("r1", "t1", {"reward": 0.5}, None, "")],
+            ],
+            infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 1.0
+        assert results[1].error is None and results[1].score == 0.5
+        assert results[1].output["infra_retry"] == {
+            "recovered_round": 1,
+            "discarded_rounds": [{"ConnectionError[infra]": 2}],
+        }
+        assert "infra_retry" not in (results[0].output or {})
+        assert len(calls) == 2
+        assert calls[1][0] == ["t1"]
+        # sibling of jobs/, never nested inside it (resume collations rglob
+        # the whole jobs dir and would pool this round's dead attempts)
+        assert calls[1][1].name == "jobs-infra-retry-1"
+        assert calls[1][1].parent == calls[0][1].parent
+        assert sleeps == [30.0]
+
+    @pytest.mark.asyncio
+    async def test_candidate_crash_and_spent_key_never_retry(self, tmp_path, monkeypatch):
+        # A crash is a result; a spent key cannot recover by waiting. Neither
+        # triggers a retry round even with retries enabled.
+        budget_msg = "Budget has been exceeded! Current cost: 102.47, Max budget: 99.0"
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", None, "UnsupportedParamsError", ""),
+                 ("b", "t1", None, "BadRequestError", budget_msg)],
+            ],
+            infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].error is not None and results[1].error is not None
+        assert len(calls) == 1
+        assert sleeps == []
+
+    @pytest.mark.asyncio
+    async def test_mixed_cause_fully_dead_sample_never_retries(self, tmp_path, monkeypatch):
+        # EVERY dead cause must be transient-infra (all, not any): a
+        # deterministically-crashing candidate must not qualify for a re-roll
+        # by mixing one fake ConnectionError into its crashes.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t1", None, "ConnectionError", ""),
+                 ("c", "t1", None, "UnsupportedParamsError", "")],
+            ],
+            n_attempts=2, aggregate_attempts="mean", infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[1].error is not None
+        assert len(calls) == 1
+        assert sleeps == []
+
+    @pytest.mark.asyncio
+    async def test_persistent_outage_keeps_the_cause_rich_error(self, tmp_path, monkeypatch):
+        # The retry round produces nothing (outage persists): the durable
+        # record must keep the original infra-labeled error, not degrade to
+        # "no Harbor trial result" or raise out of the eval.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t1", None, "ConnectionError", "")],
+                [],
+            ],
+            infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[1].error is not None
+        assert "ConnectionError[infra]" in results[1].error
+        assert results[1].output["dead_exception_types"] == {"ConnectionError[infra]": 1}
+        assert len(calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_partially_scored_sample_is_a_measurement_not_an_outage(self, tmp_path, monkeypatch):
+        # One attempt scored, one died of infra: the sample is a (noisy)
+        # measurement. Its infra death stays zero-filled in the mean and it is
+        # NOT retried; anything else would let infra flakiness re-roll scores.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t0", None, "ConnectionError", ""),
+                 ("c", "t1", {"reward": 1.0}, None, "")],
+            ],
+            n_attempts=2, aggregate_attempts="mean", infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 0.5
+        assert results[0].metrics["n_dead_infra"] == 1.0
+        assert len(calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_round_mean_is_not_diluted_by_dead_rounds(self, tmp_path, monkeypatch):
+        # The fresh round is collated from its own sibling dir alone: the two
+        # dead attempts of round 0 must not zero-dilute the fresh mean
+        # (1.0, not 0.5), and the audit marker records what was discarded.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", {"reward": 1.0}, None, ""),
+                 ("b", "t1", None, "ConnectionError", ""),
+                 ("c", "t1", None, "ConnectionError", "")],
+                [("r1", "t1", {"reward": 1.0}, None, ""),
+                 ("r2", "t1", {"reward": 1.0}, None, "")],
+            ],
+            n_attempts=2, aggregate_attempts="mean", infra_retry_rounds=1,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[1].score == 1.0
+        assert results[1].metrics["n_scored"] == 2.0
+        assert results[1].metrics["n_dead"] == 0.0
+        assert results[1].output["infra_retry"]["discarded_rounds"] == [
+            {"ConnectionError[infra]": 2}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_multi_round_backoff_and_partial_recovery(self, tmp_path, monkeypatch):
+        # Two rounds: round 1 recovers t0 and leaves t1 outaged; round 2
+        # retries ONLY the survivor, after a LONGER (linear) backoff, in its
+        # own fresh sibling dir.
+        runner, calls, sleeps = self._flow_runner(
+            monkeypatch, tmp_path,
+            rounds_by_call=[
+                [("a", "t0", None, "ConnectionError", ""),
+                 ("b", "t1", None, "TimeoutError", "")],
+                [("r1a", "t0", {"reward": 1.0}, None, ""),
+                 ("r1b", "t1", None, "TimeoutError", "")],
+                [("r2b", "t1", {"reward": 0.5}, None, "")],
+            ],
+            infra_retry_rounds=2,
+        )
+        params = _params()
+        await runner.produce_sample_results(
+            workspace=MagicMock(project_path="/wt"), params=params, result_dir=tmp_path / "res"
+        )
+        results = load_all_sample_results(get_vero_home_dir() / "sessions", "s", params.result_id)
+        assert results[0].score == 1.0
+        assert results[0].output["infra_retry"] == {
+            "recovered_round": 1,
+            "discarded_rounds": [{"ConnectionError[infra]": 1}],
+        }
+        # t1 burned TWO rounds before recovering; the audit marker must list
+        # both, not just the round immediately before recovery.
+        assert results[1].score == 0.5
+        assert results[1].output["infra_retry"] == {
+            "recovered_round": 2,
+            "discarded_rounds": [{"TimeoutError[infra]": 1}, {"TimeoutError[infra]": 1}],
+        }
+        assert [c[0] for c in calls] == [["t0", "t1"], ["t0", "t1"], ["t1"]]
+        assert [c[1].name for c in calls[1:]] == ["jobs-infra-retry-1", "jobs-infra-retry-2"]
+        assert sleeps == [30.0, 60.0]

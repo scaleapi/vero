@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from vero.core.budget import BudgetLedger, SplitBudget
 from vero.core.dataset.base import SplitAccess, SplitAccessLevel
@@ -42,10 +43,18 @@ class _TargetCfg(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only).
+    model: str | None = None
 
 
-class ServeConfig(BaseModel):
-    """Everything the sidecar needs to assemble itself. Baked by the compiler."""
+class _ServeConfigBase(BaseModel):
+    """Fields shared by both serve modes. The compiled twin of BuildConfig's
+    shared base. Not instantiated directly."""
+
+    # extra="forbid" so a wrong-mode key (e.g. Mode-B feedback levers in a Mode-A
+    # serve.json) is a load-time error rather than a silently-ignored no-op; the
+    # Mode-A / Mode-B split makes those keys unknown to the resolved variant.
+    model_config = ConfigDict(extra="forbid")
 
     repo_path: str            # sidecar's own repo (baseline target) = the engine workspace
     agent_repo_path: str      # mounted agent workspace (commit-transfer source)
@@ -53,13 +62,6 @@ class ServeConfig(BaseModel):
     dataset_id: str           # already registered in the sidecar's VERO_HOME
     split_accesses: list[_SplitAccessCfg]
     budgets: list[dict]       # SplitBudget kwargs
-
-    # Mode A
-    task: str | None = None
-    task_project: str | None = None
-    task_module: str | None = None
-    # Mode B
-    harbor: dict | None = None  # HarborConfig kwargs
 
     # selection / reward
     reward_mode: Literal["submit", "auto_best"] = "auto_best"
@@ -77,19 +79,15 @@ class ServeConfig(BaseModel):
     # auto_best never ships a candidate that fails to beat the untouched baseline
     # on the selection split; it reverts to base_commit instead (needs base_commit).
     auto_best_baseline_floor: bool = True
-    # Lever 1 (Mode B): failed samples carry their trial-transcript tail in the
-    # per-sample `feedback` field. Exposure stays gated by the sidecar's tier
-    # routing (per-sample files are written only for viewable splits).
-    feedback_transcripts: bool = False
-    feedback_max_bytes: int = 3000
-    # Lever 3 (Mode B): sample output carries a per-attempt {reward, exception}
-    # list. Same viewable-only exposure path as feedback_transcripts.
-    expose_attempt_detail: bool = False
-    # Lever 2: consumed at COMPILE time (the instruction's multi-fidelity
-    # section); recorded here so serve.json mirrors build.yaml. The sidecar's
-    # subset-eval support itself is unconditional (EvalRequest.num_samples /
-    # sample_ids), so there is nothing to toggle at serve time.
-    instruct_multifidelity: bool = False
+
+    # Minimum sample count for agent-chosen subset evals of non_viewable
+    # splits (full-split evals always pass; <=1 disables). See
+    # EvaluationSidecar.k_anonymity_floor for the leak this closes.
+    k_anonymity_floor: int = 5
+
+    # Consumed at COMPILE time (the instruction's exhaust-budget bullet);
+    # recorded here so serve.json mirrors build.yaml, like instruct_multifidelity.
+    instruct_exhaust_budget: bool = True
 
     # volumes / token
     agent_volume: str
@@ -98,16 +96,61 @@ class ServeConfig(BaseModel):
 
     # eval params
     timeout: int = 600
-    sample_timeout: int = 180
     max_concurrency: int = 20
     use_copy: bool = True  # isolate each eval in a temp copy (clean tree, concurrency-safe)
 
     host: str = "0.0.0.0"
     port: int = 8000
 
-    @classmethod
-    def from_file(cls, path: Path | str) -> ServeConfig:
-        return cls.model_validate_json(Path(path).read_text())
+
+class ServeConfigA(_ServeConfigBase):
+    """Mode A: vero runs inference + scoring."""
+
+    mode: Literal["A"] = "A"
+
+    task: str | None = None
+    task_project: str | None = None
+    task_module: str | None = None
+    # Per-sample vero-scoring cap. Mode-A only (Mode B uses each nested task's
+    # own harbor-configured timeouts, capped only by `timeout`).
+    sample_timeout: int = 180
+
+
+class ServeConfigB(_ServeConfigBase):
+    """Mode B: scoring runs in a nested `harbor run`."""
+
+    mode: Literal["B"]
+
+    harbor: dict | None = None  # HarborConfig kwargs
+    # Lever 1: failed samples carry their trial-transcript tail in the per-sample
+    # `feedback` field. Exposure stays gated by the sidecar's tier routing
+    # (per-sample files are written only for viewable splits).
+    feedback_transcripts: bool = False
+    feedback_max_bytes: int = 3000
+    # Lever 3: sample output carries a per-attempt {reward, exception} list. Same
+    # viewable-only exposure path as feedback_transcripts.
+    expose_attempt_detail: bool = False
+    # Lever 2: consumed at COMPILE time (the instruction's multi-fidelity
+    # section); recorded here so serve.json mirrors build.yaml. The sidecar's
+    # subset-eval support itself is unconditional (EvalRequest.num_samples /
+    # sample_ids), so there is nothing to toggle at serve time.
+    instruct_multifidelity: bool = False
+
+
+# Discriminated union on `mode`, the compiled twin of BuildConfig.
+ServeConfig = Annotated[ServeConfigA | ServeConfigB, Field(discriminator="mode")]
+
+_ServeConfigAdapter: TypeAdapter[ServeConfigA | ServeConfigB] = TypeAdapter(ServeConfig)
+
+
+def load_serve_config(path: Path | str) -> ServeConfigA | ServeConfigB:
+    """Load and validate a serve.json into the correct Mode-A / Mode-B variant."""
+    data = json.loads(Path(path).read_text())
+    # `mode` defaults to "A" when absent (older serve.json predates the tag). The
+    # discriminated union needs the tag explicitly, so inject it before validating.
+    if isinstance(data, dict):
+        data.setdefault("mode", "A")
+    return _ServeConfigAdapter.validate_python(data)
 
 
 def _load_or_build_ledger(
@@ -119,8 +162,12 @@ def _load_or_build_ledger(
     a sidecar restart would reset all spent budget to full, letting the agent
     regain its full evaluation budget by triggering a restart. On startup we
     reconstruct each SplitBudget and restore its persisted ``remaining_*`` values.
-    Falls back to the configured budgets if the file is missing or unreadable
-    (fail-safe to the configured budget, never to unlimited).
+
+    A MISSING file is a fresh boot: configured budgets. A file that exists but
+    cannot be parsed fails CLOSED: metered budgets restore with zero remaining.
+    The old fallback (configured budgets) refunded the agent everything already
+    spent, so any crash that corrupted the flush minted budget; spend that
+    cannot be read must be treated as fully spent, never as never-happened.
     """
     if persist_path.exists():
         try:
@@ -145,55 +192,42 @@ def _load_or_build_ledger(
             )
             return BudgetLedger(budgets, persist_path=persist_path)
         except (json.JSONDecodeError, KeyError, OSError) as e:
-            logger.warning(
-                "Could not reload persisted ledger %s (%s); using configured budgets.",
+            logger.error(
+                "Persisted ledger %s exists but is unreadable (%s); failing "
+                "CLOSED: metered agent budgets restore as exhausted. Admin and "
+                "finalize are unaffected. The unreadable file is preserved at "
+                "%s; delete ledger.json deliberately to boot fresh.",
                 persist_path,
                 e,
+                persist_path.with_suffix(".corrupt"),
             )
+            try:  # keep the evidence: the next flush overwrites persist_path
+                shutil.copyfile(persist_path, persist_path.with_suffix(".corrupt"))
+            except OSError:
+                pass
+            budgets = []
+            for cfg in budget_cfgs:
+                b = SplitBudget(**cfg)
+                if b.total_sample_budget is not None:
+                    b.remaining_sample_budget = 0
+                if b.total_run_budget is not None:
+                    b.remaining_run_budget = 0
+                budgets.append(b)
+            return BudgetLedger(budgets, persist_path=persist_path)
     return BudgetLedger(
         [SplitBudget(**b) for b in budget_cfgs], persist_path=persist_path
     )
 
 
-def _warn_mode_b_sample_timeout(config: ServeConfig) -> None:
-    """sample_timeout only governs Mode A (per-sample vero scoring). In Mode B
-    the nested `harbor run` applies each task's OWN harbor-configured timeouts;
-    the only vero-side cap is `timeout` on the whole nested run. An author who
-    set sample_timeout expecting a per-task cap would silently get none: say so.
-    """
-    if config.harbor is not None and "sample_timeout" in config.model_fields_set:
-        logger.warning(
-            "sample_timeout=%s is not enforced in Mode B: nested `harbor run` "
-            "tasks use their harbor-configured timeouts (tune via "
-            "harbor.extra_args, e.g. --agent-timeout-multiplier); only "
-            "`timeout` (%ss) caps the whole nested run.",
-            config.sample_timeout,
-            config.timeout,
-        )
+# PR #20's _warn_mode_b_sample_timeout and _warn_mode_a_ignores_feedback_levers
+# are superseded by the Mode-A / Mode-B type split: sample_timeout no longer
+# exists on Mode B, and the feedback levers no longer exist on Mode A, so both
+# warned-about conditions are structurally impossible (a ValidationError at load).
 
 
-def _warn_mode_a_ignores_feedback_levers(config: ServeConfig) -> None:
-    """The transcript-feedback / attempt-detail levers ride the Mode-B nested
-    `harbor run` collation (HarborRunner). Mode A (config.harbor is None) never
-    builds a HarborRunner, so these do nothing there; say so rather than let an
-    author think feedback is on.
-    """
-    if config.harbor is not None:
-        return
-    mode_b_only = [
-        n
-        for n in ("feedback_transcripts", "expose_attempt_detail")
-        if getattr(config, n)
-    ]
-    if mode_b_only:
-        logger.warning(
-            "Mode A serve config sets Mode-B-only lever(s) %s; these have no "
-            "effect in Mode A (no nested `harbor run`) and will be ignored.",
-            ", ".join(mode_b_only),
-        )
-
-
-async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Verifier, str]:
+async def build_components(
+    config: ServeConfigA | ServeConfigB,
+) -> tuple[EvaluationSidecar, Verifier, str]:
     """Assemble the sidecar + verifier (sharing one engine) and the admin token."""
     vero_home = get_vero_home_dir()
 
@@ -202,17 +236,14 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
     # discovered from the AGENT's committed repo, so a committed scorer returning
     # 1.0 would win the hidden-split/admin reward. Require a sidecar-baked task
     # project so the scorer is trusted (agent code is layered as --with-editable,
-    # never the scorer's source). Mode B (config.harbor set) uses an eval_strategy
-    # that ignores the vero scorer and is exempt.
-    if config.harbor is None and not config.task_project:
+    # never the scorer's source). Mode B uses an eval_strategy that ignores the
+    # vero scorer and is exempt.
+    if isinstance(config, ServeConfigA) and not config.task_project:
         raise ValueError(
             "Mode A requires `task_project` so the scorer is loaded from the "
             "sidecar-baked task project, not the agent's committed repo. Refusing "
             "to start: with task_project unset the agent controls its own scoring."
         )
-
-    _warn_mode_b_sample_timeout(config)
-    _warn_mode_a_ignores_feedback_levers(config)
 
     workspace = await GitWorkspace.create(config.repo_path)
 
@@ -220,7 +251,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
     budget = _load_or_build_ledger(config.budgets, persist_path)
 
     eval_strategy = None
-    if config.harbor is not None:
+    if isinstance(config, ServeConfigB) and config.harbor is not None:
         from vero.harbor.runner import HarborRunner
         from vero.harbor.config import HarborConfig
 
@@ -231,35 +262,40 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
             expose_attempt_detail=config.expose_attempt_detail,
         )
 
+    is_mode_a = isinstance(config, ServeConfigA)
     evaluator = Evaluator(
         workspace,
         config.session_id,
         vero_home=vero_home,
         use_copy=config.use_copy,
-        task_project=Path(config.task_project) if config.task_project else None,
-        task_module=config.task_module,
+        task_project=Path(config.task_project) if is_mode_a and config.task_project else None,
+        task_module=config.task_module if is_mode_a else None,
         eval_strategy=eval_strategy,
-    )
-
-    db = ExperimentDatabase(id=config.session_id)  # shared by engine (writes) + verifier (reads)
-    engine = EvaluationEngine(
-        evaluator=evaluator,
-        budget=budget,
-        default_task=config.task,
-        db=db,
-        run_constraints=BaseEvaluationParameters(
-            timeout=config.timeout,
-            sample_timeout=config.sample_timeout,
-            max_concurrency=config.max_concurrency,
-        ),
-        session_id=config.session_id,
-        vero_home=vero_home,
     )
 
     split_accesses = [
         SplitAccess(split=s.split, access=SplitAccessLevel(s.access))
         for s in config.split_accesses
     ]
+    db = ExperimentDatabase(id=config.session_id)  # shared by engine (writes) + verifier (reads)
+    engine = EvaluationEngine(
+        evaluator=evaluator,
+        budget=budget,
+        default_task=config.task if is_mode_a else None,
+        db=db,
+        run_constraints=BaseEvaluationParameters(
+            timeout=config.timeout,
+            sample_timeout=config.sample_timeout if is_mode_a else config.timeout,
+            max_concurrency=config.max_concurrency,
+        ),
+        session_id=config.session_id,
+        vero_home=vero_home,
+        # The engine-side no_access gate is only armed when split_accesses is
+        # set. Without it the ledger was the sole gate (no_access splits are
+        # unbudgeted, so reserve() raised) — and every unmetered path (admin,
+        # the free baseline eval) walked straight past it.
+        split_accesses=split_accesses,
+    )
     sidecar = EvaluationSidecar(
         engine=engine,
         split_accesses=split_accesses,
@@ -268,6 +304,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         admin_volume=Path(config.admin_volume),
         submit_enabled=config.submit_enabled,
         base_commit=config.base_commit,
+        k_anonymity_floor=config.k_anonymity_floor,
     )
     verifier = Verifier(
         engine=engine,
@@ -276,7 +313,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
         targets=[VerificationTarget(**t.model_dump()) for t in config.targets],
         selection_split=config.selection_split,
         base_commit=config.base_commit,
-        selection_task=config.task,
+        selection_task=config.task if is_mode_a else None,
         selection_dataset_id=config.dataset_id,
         score_baseline=config.score_baseline,
         baseline_score_attempts=config.baseline_score_attempts,
@@ -288,7 +325,7 @@ async def build_components(config: ServeConfig) -> tuple[EvaluationSidecar, Veri
     return sidecar, verifier, token
 
 
-async def build_app(config: ServeConfig):
+async def build_app(config: ServeConfigA | ServeConfigB):
     sidecar, verifier, token = await build_components(config)
     return create_app(sidecar=sidecar, verifier=verifier, admin_token=token)
 
@@ -299,7 +336,7 @@ def serve(config_path: Path | str) -> None:
 
     import uvicorn
 
-    config = ServeConfig.from_file(config_path)
+    config = load_serve_config(config_path)
     app = asyncio.run(build_app(config))
     logger.info(f"Serving eval sidecar on {config.host}:{config.port}")
     uvicorn.run(app, host=config.host, port=config.port)

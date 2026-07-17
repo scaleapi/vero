@@ -18,7 +18,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from vero.evaluation.engine import EvalRequest
-from vero.harbor.build.config import BuildConfig
+from vero.harbor.build.config import BuildConfigA, BuildConfigB
 from vero.harbor.protocol import StatusSummary
 
 logger = logging.getLogger(__name__)
@@ -210,24 +210,14 @@ def _validate_partition_names(
         )
 
 
-def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str) -> dict:
-    harbor = None
-    if config.harbor is not None:
-        # Local inner task -> baked sidecar-only path; registry ref -> pass through.
-        harbor = {**config.harbor}
-        if config.inner_task:
-            harbor["task_source"] = INNER_TASK
-    targets = [
-        {
-            "task": config.task,
-            "dataset_id": dataset_id,
-            "split": t.split,
-            "reward_key": t.reward_key,
-            "sample_ids": t.sample_ids,
-        }
-        for t in config.targets
-    ]
-    return {
+def _serve_config(
+    config: BuildConfigA | BuildConfigB, dataset_id: str | None, base_commit: str
+) -> dict:
+    # Fields common to both ServeConfig variants. Mode-specific keys are added
+    # below so the wrong-mode key never reaches the (extra="forbid") ServeConfig.
+    task = config.task if isinstance(config, BuildConfigA) else None
+    common = {
+        "mode": config.mode,
         "repo_path": AGENT_BASELINE,
         "agent_repo_path": WORK_AGENT,
         "session_id": SESSION_ID,
@@ -237,33 +227,61 @@ def _serve_config(config: BuildConfig, dataset_id: str | None, base_commit: str)
             {"split": b.split, "dataset_id": dataset_id, **b.model_dump(exclude={"split"}, exclude_none=True)}
             for b in config.budgets
         ],
-        "task": config.task,
-        "task_project": config.task_project,
-        "task_module": config.task_module,
-        "harbor": harbor,
         "reward_mode": config.reward_mode,
         "selection_split": config.selection_split,
-        "targets": targets,
+        "targets": [
+            {
+                "task": task,
+                "dataset_id": dataset_id,
+                "split": t.split,
+                "reward_key": t.reward_key,
+                "sample_ids": t.sample_ids,
+                "model": t.model,
+            }
+            for t in config.targets
+        ],
         "base_commit": base_commit,
         "submit_enabled": config.submit_enabled,
         "score_baseline": config.score_baseline,
-        "feedback_transcripts": config.feedback_transcripts,
-        "feedback_max_bytes": config.feedback_max_bytes,
-        "instruct_multifidelity": config.instruct_multifidelity,
-        "expose_attempt_detail": config.expose_attempt_detail,
+        "k_anonymity_floor": config.k_anonymity_floor,
+        "instruct_exhaust_budget": config.instruct_exhaust_budget,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,
         "timeout": config.timeout,
-        "sample_timeout": config.sample_timeout,
         "max_concurrency": config.max_concurrency,
         "host": "0.0.0.0",
         "port": 8000,
     }
+    if isinstance(config, BuildConfigA):
+        return {
+            **common,
+            "task": config.task,
+            "task_project": config.task_project,
+            "task_module": config.task_module,
+            "sample_timeout": config.sample_timeout,
+        }
+    # Mode B: local inner task -> baked sidecar-only path; registry ref passes through.
+    harbor = None
+    if config.harbor is not None:
+        harbor = {**config.harbor}
+        if config.inner_task:
+            harbor["task_source"] = INNER_TASK
+    return {
+        **common,
+        "harbor": harbor,
+        "feedback_transcripts": config.feedback_transcripts,
+        "feedback_max_bytes": config.feedback_max_bytes,
+        "instruct_multifidelity": config.instruct_multifidelity,
+        "expose_attempt_detail": config.expose_attempt_detail,
+    }
 
 
 def compile_task(
-    config: BuildConfig, out_dir: Path | str, *, vero_root: Path | None = None
+    config: BuildConfigA | BuildConfigB,
+    out_dir: Path | str,
+    *,
+    vero_root: Path | None = None,
 ) -> Path:
     """Compile ``config`` into a Harbor task directory at ``out_dir``."""
     import json
@@ -272,23 +290,10 @@ def compile_task(
 
     vero_root = vero_root or PACKAGE_DIR
 
-    # Mode A ignores the Mode-B-only feedback levers (they ride the nested
-    # `harbor run` collation, which Mode A never runs). Warn loudly at build time
-    # so a config that sets them in Mode A learns they will do nothing, rather
-    # than silently getting no feedback.
-    if config.mode == "A":
-        mode_b_only = [
-            n
-            for n in ("feedback_transcripts", "expose_attempt_detail")
-            if getattr(config, n)
-        ]
-        if mode_b_only:
-            logger.warning(
-                "Mode A build sets Mode-B-only lever(s) %s; these have no effect "
-                "in Mode A (they ride the nested `harbor run` collation) and will "
-                "be ignored.",
-                ", ".join(mode_b_only),
-            )
+    # The Mode-A "you set a Mode-B-only lever" warning (and its ServeConfig twin)
+    # is superseded by the Mode-A / Mode-B type split: a Mode-A config that sets
+    # feedback_transcripts / expose_attempt_detail is now a load-time
+    # ValidationError, so the condition is structurally impossible here.
 
     out = Path(out_dir)
     if out.exists():
@@ -315,7 +320,7 @@ def compile_task(
     # the dataset into vh before the dir is torn down, so cleanup is safe.
     with tempfile.TemporaryDirectory() as tmp_str:
         tmp = Path(tmp_str)
-        if config.mode == "A":
+        if isinstance(config, BuildConfigA):
             if not config.dataset:
                 raise ValueError("Mode A requires a dataset.")
             dataset_id = _register(config.dataset, vh, tmp)
@@ -365,6 +370,10 @@ def compile_task(
         description=config.description,
         mode=config.mode,
         timeout=config.timeout,
+        # The verifier phase runs the whole finalize battery (shortlist
+        # re-scores + floor + targets + baseline attempts), not one eval;
+        # unset falls back to `timeout` for backward compatibility.
+        verifier_timeout=config.verifier_timeout or config.timeout,
         secrets=config.secrets,
         read_only_paths=config.read_only_paths,
         base_image_main=config.base_image_main,
@@ -373,7 +382,9 @@ def compile_task(
         selection_split=config.selection_split,
         submit_enabled=config.submit_enabled,
         eval_num_samples=None,
-        bake_inner_task=bool(config.inner_task),
+        # inner_task / instruct_multifidelity are Mode-B-only fields; on a
+        # Mode-A config they do not exist, so read them only when present.
+        bake_inner_task=bool(getattr(config, "inner_task", None)),
         # The free-baseline bullet may only render when the sidecar shipping in
         # this same tree actually grants the free eval; the feature lives on a
         # different PR chain than the compiler, and an instruction that promises
@@ -392,10 +403,11 @@ def compile_task(
         # sample's exact score, defeating the non_viewable contract. Only a
         # viewable split is safe to screen with subsets. no_access splits are
         # not agent-evaluable at all, so they never count either.
-        multifidelity=config.instruct_multifidelity
+        multifidelity=getattr(config, "instruct_multifidelity", False)
         and {"sample_ids", "num_samples"}
         <= {f.name for f in dataclasses.fields(EvalRequest)}
         and any(s.access == "viewable" for s in config.splits),
+        exhaust_budget=config.instruct_exhaust_budget,
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)

@@ -14,9 +14,17 @@ import pytest
 import yaml
 
 from vero.evaluation.engine import EvalRequest
-from vero.harbor.build import BuildConfig, compile_task
+from vero.harbor.build import BuildConfigA, BuildConfigB, compile_task, load_build_config
+from vero.harbor.build.config import _BuildConfigAdapter
 from vero.harbor.protocol import StatusSummary
-from vero.harbor.serve import ServeConfig
+from vero.harbor.serve import load_serve_config
+
+
+def _validate_build(data: dict) -> BuildConfigA | BuildConfigB:
+    """Validate a raw build.yaml dict through the discriminated union, defaulting
+    `mode` to "A" the way load_build_config does."""
+    data.setdefault("mode", "A")
+    return _BuildConfigAdapter.validate_python(data)
 
 # Whether the sidecar in THIS tree grants the budget-free first baseline eval.
 # The feature and the compiler live on different PR chains; the instruction
@@ -75,11 +83,10 @@ def _dataset(root: Path) -> Path:
 @pytest.fixture
 def built(tmp_path, monkeypatch):
     monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
-    config = BuildConfig(
+    config = BuildConfigA(
         name="vero/gsm8k-opt",
         description="optimize gsm8k",
         agent_repo=str(_agent_repo(tmp_path)),
-        mode="A",
         task="gsm8k",
         task_module="gsm8k_agent.vero_tasks",
         dataset=str(_dataset(tmp_path)),
@@ -92,6 +99,36 @@ def built(tmp_path, monkeypatch):
         selection_split="validation",
         targets=[{"split": "test", "reward_key": "reward"}],
         read_only_paths=["src/gsm8k_agent/vero_tasks"],
+        secrets=["OPENAI_API_KEY"],
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    return out
+
+
+def _inner_task(root: Path) -> Path:
+    """A minimal local Harbor task dir (has task.toml) so Mode B compiles offline:
+    a local inner_task skips the registry partition-name enumeration."""
+    d = root / "inner-task"
+    d.mkdir(parents=True)
+    (d / "task.toml").write_text('[metadata]\nname = "org/task-a"\n')
+    return d
+
+
+@pytest.fixture
+def built_b(tmp_path, monkeypatch):
+    """A compiled Mode-B task, for the Mode-B-only lever round-trips."""
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfigB(
+        mode="B",
+        name="vero/harbor-opt",
+        description="optimize a harbor bench",
+        agent_repo=str(_agent_repo(tmp_path)),
+        harbor={"agent_import_path": "a:C"},
+        partition={"train": ["org/task-a"]},
+        inner_task=str(_inner_task(tmp_path)),
+        splits=[{"split": "train", "access": "viewable"}],
+        budgets=[{"split": "train", "total_run_budget": 5}],
+        selection_split="train",
         secrets=["OPENAI_API_KEY"],
     )
     out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
@@ -111,7 +148,7 @@ def test_structure(built):
 
 
 def test_serve_config_validates(built):
-    cfg = ServeConfig.from_file(built / "environment" / "sidecar" / "serve.json")
+    cfg = load_serve_config(built / "environment" / "sidecar" / "serve.json")
     assert cfg.repo_path == "/opt/agent-baseline"
     assert cfg.agent_repo_path == "/work/agent"
     assert cfg.task == "gsm8k"
@@ -133,7 +170,7 @@ def test_score_baseline_true_emitted():
     # the headline claim "reachable from build.yaml" is what is tested.
     from vero.harbor.build.compiler import _serve_config
 
-    config = BuildConfig.model_validate(yaml.safe_load(
+    config = _validate_build(yaml.safe_load(
         "name: o/n\n"
         "agent_repo: .\n"
         "splits:\n"
@@ -149,10 +186,9 @@ def test_score_baseline_true_through_compile_task(tmp_path, monkeypatch):
     # Full pipeline: a True value must survive compile_task into the written
     # serve.json, not just the _serve_config helper.
     monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
-    config = BuildConfig(
+    config = BuildConfigA(
         name="vero/gsm8k-opt",
         agent_repo=str(_agent_repo(tmp_path)),
-        mode="A",
         task="gsm8k",
         dataset=str(_dataset(tmp_path)),
         splits=[{"split": "validation", "access": "non_viewable"}],
@@ -163,24 +199,36 @@ def test_score_baseline_true_through_compile_task(tmp_path, monkeypatch):
     assert raw["score_baseline"] is True
 
 
-def test_feedback_transcripts_reach_serve_json(built):
-    # Lever 1 plumbing: the flags must be in the compiler <-> serve contract
-    # (default off) and validate through ServeConfig.
-    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+def test_feedback_transcripts_reach_serve_json(built_b):
+    # Lever 1 plumbing (Mode B): the flags must be in the compiler <-> serve
+    # contract (default off) and validate through ServeConfig.
+    raw = json.loads((built_b / "environment" / "sidecar" / "serve.json").read_text())
     assert raw["feedback_transcripts"] is False
     assert raw["feedback_max_bytes"] == 3000
-    cfg = ServeConfig.from_file(built / "environment" / "sidecar" / "serve.json")
+    cfg = load_serve_config(built_b / "environment" / "sidecar" / "serve.json")
     assert cfg.feedback_transcripts is False
     assert cfg.feedback_max_bytes == 3000
 
 
+def test_mode_a_serve_json_omits_mode_b_levers(built):
+    # The type split means a Mode-A serve.json carries no Mode-B-only keys at all
+    # (rather than carrying them at a silently-ignored default).
+    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+    assert raw["mode"] == "A"
+    for k in ("feedback_transcripts", "feedback_max_bytes",
+              "expose_attempt_detail", "instruct_multifidelity", "harbor"):
+        assert k not in raw
+
+
 def test_feedback_transcripts_configured_through_yaml():
-    # Through the actual YAML path, mirroring the score_baseline exemplar.
+    # Through the actual YAML path, mirroring the score_baseline exemplar. A
+    # Mode-B-only lever, so the config declares mode: B.
     from vero.harbor.build.compiler import _serve_config
 
-    config = BuildConfig.model_validate(yaml.safe_load(
+    config = _validate_build(yaml.safe_load(
         "name: o/n\n"
         "agent_repo: .\n"
+        "mode: B\n"
         "splits:\n"
         "  - {split: validation, access: viewable}\n"
         "feedback_transcripts: true\n"
@@ -191,19 +239,20 @@ def test_feedback_transcripts_configured_through_yaml():
     assert raw["feedback_max_bytes"] == 512
 
 
-def test_expose_attempt_detail_reaches_serve_json(built):
-    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+def test_expose_attempt_detail_reaches_serve_json(built_b):
+    raw = json.loads((built_b / "environment" / "sidecar" / "serve.json").read_text())
     assert raw["expose_attempt_detail"] is False  # default off
-    cfg = ServeConfig.from_file(built / "environment" / "sidecar" / "serve.json")
+    cfg = load_serve_config(built_b / "environment" / "sidecar" / "serve.json")
     assert cfg.expose_attempt_detail is False
 
 
 def test_expose_attempt_detail_configured_through_yaml():
     from vero.harbor.build.compiler import _serve_config
 
-    config = BuildConfig.model_validate(yaml.safe_load(
+    config = _validate_build(yaml.safe_load(
         "name: o/n\n"
         "agent_repo: .\n"
+        "mode: B\n"
         "splits:\n"
         "  - {split: validation, access: viewable}\n"
         "expose_attempt_detail: true\n"
@@ -249,8 +298,8 @@ def test_baseline_archive_failure_raises(tmp_path, monkeypatch):
     (bad / "src").mkdir(parents=True)
     (bad / "pyproject.toml").write_text("[project]\nname='x'\nversion='0'\n")
     subprocess.run(["git", "init", "-q"], cwd=bad, check=True)
-    config = BuildConfig(
-        name="vero/x", agent_repo=str(bad), mode="A", task="gsm8k",
+    config = BuildConfigA(
+        name="vero/x", agent_repo=str(bad), task="gsm8k",
         dataset=str(_dataset(tmp_path)),
         splits=[{"split": "validation", "access": "non_viewable"}],
     )
@@ -261,8 +310,8 @@ def test_baseline_archive_failure_raises(tmp_path, monkeypatch):
 def test_missing_secret_fails_build(tmp_path, monkeypatch):
     monkeypatch.delenv("VERO_SKIP_SECRET_CHECK", raising=False)
     monkeypatch.delenv("DEFINITELY_MISSING_SECRET", raising=False)
-    config = BuildConfig(
-        name="vero/x", agent_repo=str(_agent_repo(tmp_path)), mode="A", task="gsm8k",
+    config = BuildConfigA(
+        name="vero/x", agent_repo=str(_agent_repo(tmp_path)), task="gsm8k",
         dataset=str(_dataset(tmp_path)),
         splits=[{"split": "validation", "access": "non_viewable"}],
         secrets=["DEFINITELY_MISSING_SECRET"],
@@ -314,19 +363,83 @@ def test_instruction_omits_free_baseline_claim_when_unsupported(built):
     assert "budget-free" not in text
 
 
-def _multifidelity_config_with_splits(tmp_path, splits) -> BuildConfig:
-    return BuildConfig(
+def test_target_model_reaches_serve_json(tmp_path, monkeypatch):
+    # Transfer probe: a target's executor-model override must survive the
+    # compile into serve.json and validate back through ServeConfig.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfigA(
         name="vero/gsm8k-opt",
         agent_repo=str(_agent_repo(tmp_path)),
-        mode="A",
         task="gsm8k",
+        task_module="gsm8k_agent.vero_tasks",
         dataset=str(_dataset(tmp_path)),
+        splits=[
+            {"split": "validation", "access": "non_viewable"},
+            {"split": "test", "access": "no_access"},
+        ],
+        budgets=[{"split": "validation", "total_run_budget": 5}],
+        selection_split="validation",
+        targets=[
+            {"split": "test", "reward_key": "reward"},
+            {"split": "test", "reward_key": "reward_4o", "model": "openai/gpt-4o"},
+        ],
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    cfg = load_serve_config(out / "environment" / "sidecar" / "serve.json")
+    by_key = {t.reward_key: t for t in cfg.targets}
+    assert by_key["reward_4o"].model == "openai/gpt-4o"
+    assert by_key["reward"].model is None
+
+
+def test_instruction_renders_exhaust_budget_by_default(built):
+    text = (built / "instruction.md").read_text()
+    assert "Unspent budget is wasted" in text
+
+
+def test_instruction_omits_exhaust_budget_when_disabled(tmp_path, monkeypatch):
+    # The persistence exhortation is an instruction LEVER: off, stopping early
+    # becomes the agent's own choice, which is the ablation arm for measuring
+    # what the exhortation itself contributes.
+    monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
+    config = BuildConfigA(
+        name="vero/gsm8k-opt",
+        description="optimize gsm8k",
+        agent_repo=str(_agent_repo(tmp_path)),
+        task="gsm8k",
+        task_module="gsm8k_agent.vero_tasks",
+        dataset=str(_dataset(tmp_path)),
+        splits=[
+            {"split": "validation", "access": "non_viewable"},
+            {"split": "test", "access": "no_access"},
+        ],
+        budgets=[{"split": "validation", "total_run_budget": 5}],
+        reward_mode="auto_best",
+        selection_split="validation",
+        targets=[{"split": "test", "reward_key": "reward"}],
+        instruct_exhaust_budget=False,
+    )
+    out = compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
+    text = (out / "instruction.md").read_text()
+    assert "Unspent budget is wasted" not in text
+    assert "Scores are noisy." in text  # the noise fact is not part of the lever
+
+
+def _multifidelity_config_with_splits(tmp_path, splits) -> BuildConfigB:
+    # instruct_multifidelity is a Mode-B-only lever, so the multi-fidelity gate is
+    # exercised through a Mode-B config (local inner_task so it compiles offline).
+    return BuildConfigB(
+        mode="B",
+        name="vero/harbor-opt",
+        agent_repo=str(_agent_repo(tmp_path)),
+        harbor={"agent_import_path": "a:C"},
+        partition={s["split"]: ["org/task-a"] for s in splits},
+        inner_task=str(_inner_task(tmp_path)),
         splits=splits,
         instruct_multifidelity=True,
     )
 
 
-def _multifidelity_config(tmp_path) -> BuildConfig:
+def _multifidelity_config(tmp_path) -> BuildConfigB:
     # Includes a viewable split so the section renders: multi-fidelity is gated
     # on a viewable evaluable split existing (subset evals on a non_viewable
     # split would leak per-sample scores; see the compiler ctx gate).
@@ -435,20 +548,21 @@ def test_multifidelity_gate_suppresses_section_without_subset_evals(tmp_path, mo
     assert "Screen cheaply" not in text
 
 
-def test_instruct_multifidelity_reaches_serve_json(built):
-    raw = json.loads((built / "environment" / "sidecar" / "serve.json").read_text())
+def test_instruct_multifidelity_reaches_serve_json(built_b):
+    raw = json.loads((built_b / "environment" / "sidecar" / "serve.json").read_text())
     assert raw["instruct_multifidelity"] is False  # default off
-    assert ServeConfig.from_file(
-        built / "environment" / "sidecar" / "serve.json"
+    assert load_serve_config(
+        built_b / "environment" / "sidecar" / "serve.json"
     ).instruct_multifidelity is False
 
 
 def test_instruct_multifidelity_configured_through_yaml():
     from vero.harbor.build.compiler import _serve_config
 
-    config = BuildConfig.model_validate(yaml.safe_load(
+    config = _validate_build(yaml.safe_load(
         "name: o/n\n"
         "agent_repo: .\n"
+        "mode: B\n"
         "splits:\n"
         "  - {split: validation, access: non_viewable}\n"
         "instruct_multifidelity: true\n"
@@ -473,10 +587,9 @@ def test_submit_mode_instruction_has_no_baseline_warning(tmp_path, monkeypatch):
     # mode-agnostic (metering does not depend on the selection mode) and must
     # survive in both.
     monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
-    config = BuildConfig(
+    config = BuildConfigA(
         name="vero/gsm8k-opt",
         agent_repo=str(_agent_repo(tmp_path)),
-        mode="A",
         task="gsm8k",
         dataset=str(_dataset(tmp_path)),
         splits=[{"split": "validation", "access": "non_viewable"}],
@@ -565,18 +678,20 @@ class TestUnknownFieldRejection:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError):
-            BuildConfig.model_validate(yaml.safe_load(
+            _validate_build(yaml.safe_load(
                 "name: o/n\n"
                 "agent_repo: .\n"
+                "mode: B\n"
                 "splits:\n"
                 "  - {split: validation, access: non_viewable}\n"
                 "feeback_transcripts: true\n"  # typo: feeback (missing 'd')
             ))
 
     def test_known_keys_still_accepted(self):
-        cfg = BuildConfig.model_validate(yaml.safe_load(
+        cfg = _validate_build(yaml.safe_load(
             "name: o/n\n"
             "agent_repo: .\n"
+            "mode: B\n"
             "splits:\n"
             "  - {split: validation, access: non_viewable}\n"
             "feedback_transcripts: true\n"
@@ -584,30 +699,56 @@ class TestUnknownFieldRejection:
         assert cfg.feedback_transcripts is True
 
 
-class TestModeAIgnoresFeedbackLevers:
-    """Mode A ignores the Mode-B-only feedback levers (they ride the nested
-    `harbor run` collation). compile_task must warn so an author does not think
-    feedback is on when it is not."""
+class TestModeMismatchRejection:
+    """The Mode-A / Mode-B split turns a wrong-mode field from a silently-ignored
+    no-op (previously papered over by PR #20's runtime warnings) into a load-time
+    ValidationError: the field is simply unknown to the resolved variant
+    (extra="forbid")."""
 
-    def test_mode_a_with_feedback_lever_warns(self, tmp_path, monkeypatch, caplog):
-        monkeypatch.setenv("VERO_SKIP_SECRET_CHECK", "1")
-        config = BuildConfig(
-            name="vero/gsm8k-opt",
-            agent_repo=str(_agent_repo(tmp_path)),
-            mode="A",
-            task="gsm8k",
-            dataset=str(_dataset(tmp_path)),
-            splits=[{"split": "validation", "access": "non_viewable"}],
-            feedback_transcripts=True,
-            expose_attempt_detail=True,
-        )
-        with caplog.at_level("WARNING", logger="vero.harbor.build.compiler"):
-            compile_task(config, tmp_path / "task", vero_root=_stub_vero(tmp_path))
-        joined = " ".join(caplog.messages)
-        assert "Mode-B-only" in joined
-        assert "feedback_transcripts" in joined
-        assert "expose_attempt_detail" in joined
+    def test_mode_a_with_mode_b_field_rejected(self):
+        # A Mode-A build.yaml setting a Mode-B-only lever fails at load.
+        from pydantic import ValidationError
 
-    def test_mode_a_without_feedback_lever_does_not_warn(self, built, caplog):
-        # `built` fixture is a Mode A config with the levers off: no warning.
-        assert not any("Mode-B-only" in m for m in caplog.messages)
+        for lever in ("feedback_transcripts: true",
+                      "expose_attempt_detail: true",
+                      "instruct_multifidelity: true",
+                      "feedback_max_bytes: 512"):
+            with pytest.raises(ValidationError):
+                _validate_build(yaml.safe_load(
+                    "name: o/n\n"
+                    "agent_repo: .\n"
+                    "mode: A\n"
+                    "splits:\n"
+                    "  - {split: validation, access: non_viewable}\n"
+                    f"{lever}\n"
+                ))
+
+    def test_mode_a_default_with_mode_b_field_rejected(self):
+        # Same, but relying on the default mode ("A" when omitted).
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            _validate_build(yaml.safe_load(
+                "name: o/n\n"
+                "agent_repo: .\n"
+                "splits:\n"
+                "  - {split: validation, access: non_viewable}\n"
+                "feedback_transcripts: true\n"
+            ))
+
+    def test_mode_b_with_mode_a_field_rejected(self):
+        # A Mode-B build.yaml setting a Mode-A-only field fails at load.
+        from pydantic import ValidationError
+
+        for field in ("sample_timeout: 500",
+                      "task: gsm8k",
+                      "dataset: /tmp/ds"):
+            with pytest.raises(ValidationError):
+                _validate_build(yaml.safe_load(
+                    "name: o/n\n"
+                    "agent_repo: .\n"
+                    "mode: B\n"
+                    "splits:\n"
+                    "  - {split: validation, access: viewable}\n"
+                    f"{field}\n"
+                ))

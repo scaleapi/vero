@@ -12,8 +12,10 @@ reward.json.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -37,6 +39,15 @@ class VerificationTarget:
     split: str
     reward_key: str
     sample_ids: list[int] | None = None  # None = full split
+    # Executor-model override for this target (Mode B): score the selected
+    # commit under a DIFFERENT model than the one it was optimized on. This is
+    # the transfer probe: home-model evals cannot see model-specific couplings
+    # the optimizer bakes in (measured live: three champions independently
+    # hardcoded temperature=0 and scored 0/72 on an executor that rejects it,
+    # while looking healthy on every home-model eval). None = the task's
+    # configured model. The baseline is scored under the same override, so the
+    # comparison stays like-for-like.
+    model: str | None = None
 
 
 class Verifier:
@@ -75,13 +86,34 @@ class Verifier:
         # candidate even when every candidate regressed, shipping a regression
         # (observed live: a weak inner model, every candidate below baseline).
         self.auto_best_baseline_floor = auto_best_baseline_floor
-        # Baseline scoring is retried this many times total before its outcome is
-        # reported as an error; the nested eval can fail transiently (a nested
-        # harbor run crashing right after a large eval), and a single blip must
-        # not silently drop the regression check.
+        # Every reward-critical finalize eval (targets, shortlist re-scores,
+        # floor, baseline) is retried this many times total: the nested eval can
+        # fail transiently (a nested harbor run crashing right after a large
+        # eval), and a single blip must not abort finalize; a trial that ships
+        # no reward.json loses its result entirely.
         self._baseline_score_attempts = max(1, baseline_score_attempts)
+        # Finalize is idempotent: Harbor may retry the verifier (or an operator
+        # may re-POST /finalize), and a replayed finalize must return the FIRST
+        # completed result verbatim. Re-running it would re-rank against a DB
+        # that now also contains the first finalize's own admin evals, so a
+        # retry could select a DIFFERENT champion than the one already reported.
+        self._finalize_lock = asyncio.Lock()
+        self._finalize_result: dict | None = None
 
     async def finalize(self) -> dict:
+        """Idempotent entry point: the first completed finalize is cached and
+        replayed verbatim on any retry (see __init__ for why re-running would
+        be unsound). The lock serializes concurrent calls so exactly one
+        finalize ever computes."""
+        async with self._finalize_lock:
+            if self._finalize_result is not None:
+                logger.info("finalize: replaying cached result (idempotent)")
+                return self._finalize_result
+            result = await self._finalize()
+            self._finalize_result = result
+            return result
+
+    async def _finalize(self) -> dict:
         """Select the commit, score it on every target, and score the baseline.
 
         Returns a wrapper ``{"rewards": {reward_key: score}, "baseline": {...}}``.
@@ -113,20 +145,131 @@ class Verifier:
             return {"rewards": rewards, "baseline": {"skipped": "no candidate commit"}}
         logger.info(f"Verifier selected commit {sha} (mode={self.reward_mode})")
         rewards: dict[str, float] = {}
+        target_errors: dict[str, str] = {}
         for target in self.targets:
-            exp = await self.engine.evaluate_admin(
+            score, cause = await self._admin_eval_score(
                 task=target.task,
                 dataset_id=target.dataset_id,
                 split=target.split,
                 commit=sha,
                 sample_ids=target.sample_ids,
+                model=target.model,
+                what=f"target '{target.reward_key}'",
             )
-            score = exp.result.score()
-            rewards[target.reward_key] = (
-                float(score) if score is not None else default_minimum_score
-            )
+            if score is None:
+                # Persistent failure: floor the target so reward.json still
+                # ships, and record the failure WITH ITS CAUSE in the wrapper
+                # (echoed to the trial's durable stdout). A floored-by-outage
+                # reward must never masquerade as a measured 0.0, and the cause
+                # separates the two floored cases that demand opposite actions:
+                # a champion that deterministically crashes on this target's
+                # executor (a real, reportable portability failure) vs an infra
+                # outage (invalidate and re-run).
+                rewards[target.reward_key] = float(default_minimum_score)
+                target_errors[target.reward_key] = (
+                    f"eval failed after {self._baseline_score_attempts} attempt(s); "
+                    f"reward floored, not measured"
+                    + (f"; cause: {cause}" if cause else "")
+                )
+            else:
+                rewards[target.reward_key] = score
         baseline = await self._maybe_score_baseline(rewards)
-        return {"rewards": rewards, "baseline": baseline}
+        result = {"rewards": rewards, "baseline": baseline}
+        if target_errors:
+            result["target_errors"] = target_errors
+        return result
+
+    async def _admin_eval_score(
+        self,
+        *,
+        task: str | None,
+        dataset_id: str,
+        split: str,
+        commit: str,
+        sample_ids: list[int] | None = None,
+        model: str | None = None,
+        what: str,
+    ) -> tuple[float | None, str | None]:
+        """One reward-critical admin eval with bounded retry.
+
+        Returns ``(score, failure_cause)``. The score counts errored samples
+        as 0.0 (min-fill: an errored sample is a failed measurement of the
+        candidate, and excluding it would reward candidates whose failures
+        error out rather than score). An eval in which NO sample scored is
+        indistinguishable from an infrastructure outage and must never quietly
+        become 0.0, so it is retried like an exception; ``(None, cause)``
+        after the last attempt means "could not measure", and the caller
+        decides the fail-safe. ``cause`` summarizes the dominant per-sample
+        errors so the durable record can distinguish a deterministically
+        crashing candidate from an outage.
+        """
+        last_error: Exception | str | None = None
+        for attempt in range(1, self._baseline_score_attempts + 1):
+            try:
+                exp = await self.engine.evaluate_admin(
+                    task=task,
+                    dataset_id=dataset_id,
+                    split=split,
+                    commit=commit,
+                    sample_ids=sample_ids,
+                    model=model,
+                )
+                if exp.result.score(fill_score=None) is None:
+                    last_error = (
+                        "eval scored no samples (all errored or empty); "
+                        + self._dominant_sample_errors(exp)
+                    )
+                    logger.warning(
+                        "%s attempt %d/%d: %s",
+                        what, attempt, self._baseline_score_attempts, last_error,
+                    )
+                    continue
+                score = exp.result.score()
+                if score is None:
+                    # Should be unreachable (the strict check above already
+                    # passed), but a None here must consume a retry like any
+                    # other unmeasurable outcome, never bypass the loop.
+                    last_error = "eval returned no aggregate score"
+                    continue
+                return float(score), None
+            except Exception as exc:  # noqa: BLE001 - retried, then surfaced as None
+                last_error = exc
+                logger.warning(
+                    "%s attempt %d/%d failed: %s",
+                    what, attempt, self._baseline_score_attempts, exc,
+                )
+        logger.error(
+            "%s failed after %d attempt(s): %s",
+            what, self._baseline_score_attempts, last_error,
+        )
+        return None, str(last_error) if last_error is not None else None
+
+    @staticmethod
+    def _dominant_sample_errors(exp) -> str:
+        """Frequency summary of the per-sample error strings of an experiment
+        (e.g. "12x: No verifier rewards for task ... (attempts died:
+        UnsupportedParamsError x6)"). One identical cause across every sample
+        is the signature of a deterministic candidate crash; a mixed bag points
+        at infra. Top few only: the value is the shape, not the full list.
+        Diagnostics must never fail finalize, so any surprise shape degrades
+        to a fixed string instead of raising."""
+        try:
+            counts: dict[str, int] = {}
+            for r in exp.result.sample_results.values():
+                if r.error:
+                    # Group on the CAUSE, not the sample: runner errors embed
+                    # the task name ("No verifier rewards for task 'x/y'..."),
+                    # so keying on the raw string would leave every sample in
+                    # its own 1x bucket and a deterministic crash across a
+                    # multi-task slice would read as a mixed bag.
+                    key = re.sub(r"for task '[^']*'", "for task '…'", r.error)
+                    counts[key] = counts.get(key, 0) + 1
+            if not counts:
+                return "no per-sample errors recorded"
+            top = sorted(counts.items(), key=lambda i: -i[1])[:3]
+            return "; ".join(f"{n}x: {err}" for err, n in top)
+        except Exception:  # noqa: BLE001 - diagnostics only
+            return "no per-sample errors recorded"
 
     async def _maybe_score_baseline(self, rewards: dict[str, float]) -> dict:
         """Admin-score the unmodified baseline on every target and report it.
@@ -162,13 +305,24 @@ class Verifier:
             try:
                 baselines: dict[str, float] = {}
                 for target in self.targets:
+                    # Same executor override as the candidate's target eval, or
+                    # the baseline comparison is not like-for-like.
                     exp = await self.engine.evaluate_admin(
                         task=target.task,
                         dataset_id=target.dataset_id,
                         split=target.split,
                         commit=self.base_commit,
                         sample_ids=target.sample_ids,
+                        model=target.model,
                     )
+                    if exp.result.score(fill_score=None) is None:
+                        # All-error/empty is an outage, not a 0.0 baseline: a
+                        # zero here would fake a huge candidate improvement.
+                        # Raise into the retry loop instead.
+                        raise RuntimeError(
+                            f"baseline eval on '{target.reward_key}' scored no "
+                            f"samples (all errored or empty)"
+                        )
                     score = exp.result.score()
                     baselines[target.reward_key] = (
                         float(score) if score is not None else default_minimum_score
@@ -276,31 +430,73 @@ class Verifier:
             if len(full_split_df) > 0:
                 split_df = full_split_df
         # Shortlist by recorded score (cheap, agent-influenced -> not trusted as
-        # final), one row per candidate (highest recorded score wins the slot).
-        ranked = split_df.sort_values(
+        # final). Recorded evals are POOLED before shortlisting, in two steps:
+        # every eval of the same commit averages into that commit's score, then
+        # commits with the same git TREE (identical content) collapse into one
+        # candidate group scored by the group mean. Max-over-rows selection made
+        # every re-measurement an independent lottery draw, and one live
+        # optimizer farmed exactly that ("distinct empty commits = clean
+        # independent lottery tickets") while another refused to re-measure its
+        # champion to protect a lucky draw. Pooling makes re-measurement
+        # variance-REDUCING (as statistics wants) instead of max-inflating, and
+        # tree-dedup stops identical content from stuffing the top-K shortlist
+        # or collecting several admin re-score draws.
+        agg: dict[str, tuple[str, str]] = {
+            "mean_score": ("mean_score", "mean"),
+            "candidate_created_at": ("candidate_created_at", "max"),
+        }
+        if "dataset_subset_dataset_id" in split_df.columns:
+            agg["dataset_subset_dataset_id"] = ("dataset_subset_dataset_id", "first")
+        per_commit = (
+            split_df.groupby("candidate_commit").agg(**agg).reset_index()
+        )
+        trees: dict[str, str] = {}
+        for commit in per_commit["candidate_commit"]:
+            # Unresolvable tree (non-git workspace, unknown sha) falls back to
+            # the commit itself: no pooling across commits, never a crash.
+            trees[commit] = (await self._tree_of(commit)) or commit
+        per_commit["_tree"] = per_commit["candidate_commit"].map(trees)
+        # Newest commit represents its tree group (any member is equivalent
+        # content-wise; newest keeps logs intuitive).
+        per_commit = per_commit.sort_values(
+            by=["candidate_created_at"], ascending=[False]
+        )
+        group_agg: dict[str, tuple[str, str]] = {
+            "mean_score": ("mean_score", "mean"),
+            "candidate_commit": ("candidate_commit", "first"),
+            "candidate_created_at": ("candidate_created_at", "first"),
+        }
+        if "dataset_subset_dataset_id" in per_commit.columns:
+            group_agg["dataset_subset_dataset_id"] = (
+                "dataset_subset_dataset_id", "first",
+            )
+        pooled = per_commit.groupby("_tree", sort=False).agg(**group_agg)
+        ranked = pooled.sort_values(
             by=["mean_score", "candidate_created_at"], ascending=[False, False]
         )
-        ranked = ranked.drop_duplicates(subset=["candidate_commit"], keep="first")
         shortlist = ranked.head(max(1, self.rescore_top_k))
 
         rescored: list[tuple[float, int, str]] = []
         for idx, (_, row) in enumerate(shortlist.iterrows()):
             commit = row["candidate_commit"]
             dataset_id = row.get("dataset_subset_dataset_id")
-            exp = await self.engine.evaluate_admin(
+            score, _cause = await self._admin_eval_score(
                 task=self.selection_task,
                 dataset_id=dataset_id,
                 split=self.selection_split,
                 commit=commit,
+                what=f"auto_best re-score of {commit}",
             )
-            score = exp.result.score()
-            admin_score = float(score) if score is not None else default_minimum_score
+            # A candidate whose re-score persistently fails is unscorable, not
+            # zero-scored: it keeps the floor value and cannot win on a fluke,
+            # but its failure does not abort the other candidates' re-scores.
+            admin_score = score if score is not None else float(default_minimum_score)
             # Tie-break by shortlist position (already ordered by recorded score
             # then recency), so ties resolve deterministically without depending on
             # the type of candidate_created_at (a datetime in the real DB).
             rescored.append((admin_score, idx, commit))
             logger.info(
-                "auto_best re-score: commit=%s admin_score=%s (recorded=%s)",
+                "auto_best re-score: commit=%s admin_score=%s (pooled recorded=%s)",
                 commit,
                 admin_score,
                 row["mean_score"],
@@ -320,14 +516,25 @@ class Verifier:
             base_dataset_id = self.selection_dataset_id
             if base_dataset_id is None:
                 base_dataset_id = shortlist.iloc[0].get("dataset_subset_dataset_id")
-            base_exp = await self.engine.evaluate_admin(
+            base_score_opt, _cause = await self._admin_eval_score(
                 task=self.selection_task,
                 dataset_id=base_dataset_id,
                 split=self.selection_split,
                 commit=self.base_commit,
+                what="auto_best floor (baseline)",
             )
-            base_s = base_exp.result.score()
-            base_score = float(base_s) if base_s is not None else default_minimum_score
+            if base_score_opt is None:
+                # The floor exists to stop shipped regressions; shipping a
+                # candidate with the floor check unmeasured re-opens exactly
+                # that hole. Fail safe: revert to the seed.
+                logger.error(
+                    "auto_best floor: baseline could not be measured; failing "
+                    "safe to base_commit %s instead of shipping unverified "
+                    "candidate %s.",
+                    self.base_commit, best_commit,
+                )
+                return self.base_commit
+            base_score = base_score_opt
             if best_score <= base_score:
                 logger.info(
                     "auto_best floor: best candidate %s (admin_score=%s) does not beat "
@@ -340,3 +547,17 @@ class Verifier:
                 best_commit, best_score, base_score,
             )
         return best_commit
+
+    async def _tree_of(self, commit: str) -> str | None:
+        """Git tree hash for a commit via the engine's workspace, or None when
+        it cannot be resolved (non-git workspace, unknown sha). None makes the
+        caller treat the commit as its own pooling group: degraded, never wrong."""
+        workspace = getattr(self.engine.evaluator, "workspace", None)
+        tree_hash = getattr(workspace, "tree_hash", None)
+        if tree_hash is None:
+            return None
+        try:
+            return await tree_hash(commit)
+        except Exception:  # noqa: BLE001 - pooling is an optimization, not a gate
+            logger.warning("could not resolve tree hash for commit %s", commit)
+            return None
