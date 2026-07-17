@@ -20,11 +20,18 @@ budget, and final candidate selection.
    vero harbor eval \
      --backend {{ selection_backend }} \
      --evaluation-set {{ evaluation_set_name }} \
-     --partition {{ selection_partition }}
+     --partition {{ selection_partition }} \
+     --detach
    ```
 
-4. Use `vero harbor status` to inspect allowed evaluation sets and remaining
-   budgets.
+   Record the returned `job_id`. Continue inspecting or editing while it runs,
+   then use `vero harbor eval-status JOB_ID` and
+   `vero harbor eval-result JOB_ID` to retrieve its durable result. Track every
+   outstanding job and do not claim an improvement before its comparison
+   baseline has completed.
+
+4. Use `vero harbor status` to inspect evaluation jobs, allowed evaluation sets,
+   and remaining budgets.
 {% if submit_enabled %}
 5. When finished, nominate the chosen commit with `vero harbor submit`.
 {% else %}
@@ -72,6 +79,8 @@ CLI response.
   container.
 - Evaluation budgets are finite and are charged by backend and evaluation set.
 - Scores may be noisy; compare candidates on the same selection whenever possible.
+- Reusing the same cases removes case-sampling differences, but target-model
+  randomness remains. Replicate important comparisons before assigning causality.
 {% if exhaust_budget %}
 - Unspent evaluation budget is wasted. Use remaining calls to re-measure the
   strongest candidate or try another plausible change.

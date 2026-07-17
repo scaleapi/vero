@@ -499,10 +499,14 @@ vero harbor serve \
   --admin-token /shared/admin-token
 ```
 
-The optimizer uses `vero harbor eval`, `status`, and `submit` through
-`VERO_EVAL_URL`. Harbor's trusted verifier uses `vero harbor finalize` with the
-root-readable token file and writes only the final reward mapping to
-`reward.json`.
+The optimizer uses `vero harbor eval --detach`, `eval-status`, `eval-result`,
+`status`, and `submit` through `VERO_EVAL_URL`. Detached evaluations are durable
+session jobs: their candidate version is captured before the start command
+returns, their lifecycle appears in `status`, and their terminal receipt remains
+retrievable if the original client exits. Plain `vero harbor eval` remains a
+blocking compatibility shortcut. Harbor's trusted verifier uses `vero harbor
+finalize` with the root-readable token file and writes only the final reward
+mapping to `reward.json`.
 
 The built-in Harbor compiler supplies that factory and container topology for
 nested Harbor evaluations. A minimal build file looks like:
@@ -578,6 +582,13 @@ boundary.
 Evaluation case budgets are cumulative rather than per-run. An agent may spend
 its entire remaining case budget in one authorized evaluation; deciding between
 wide measurements and more iterations is part of its optimization strategy.
+
+`case_timeout_seconds` is an absolute VeRO limit for the Harbor agent phase.
+Because Harbor applies task timeouts through a multiplier, set
+`task_agent_timeout_seconds` to the agent timeout declared by the pinned task
+source. The compiler passes their ratio as Harbor's agent-timeout multiplier;
+for example, `180 / 600 = 0.3`. This leaves verifier and environment setup
+timeouts unchanged.
 
 Finalization closes the agent evaluation entrance and waits for every request
 the sidecar already accepted before selecting a candidate. This includes an

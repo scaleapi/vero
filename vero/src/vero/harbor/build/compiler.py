@@ -228,6 +228,8 @@ def _deployment_config(
             "model": config.model,
             "environment_name": config.environment_name,
             "python_version": config.harbor_python_version,
+            "case_timeout_seconds": config.case_timeout_seconds,
+            "task_agent_timeout_seconds": config.task_agent_timeout_seconds,
             "default_index": config.default_index,
             "n_attempts": config.n_attempts,
             "max_retries": config.max_retries,
@@ -251,6 +253,7 @@ def _deployment_config(
 
     limits = EvaluationLimits(
         timeout_seconds=config.timeout_seconds,
+        case_timeout_seconds=config.case_timeout_seconds,
         max_concurrency=config.max_concurrency,
         error_rate_threshold=config.error_rate_threshold,
         retry=RetryPolicy.disabled(),

@@ -20,6 +20,12 @@ development evaluations place their complete Harbor trial records—including
 exact failures and target-agent logs—under
 `.vero/evaluations/`. Neither validation nor test resources are mounted.
 
+The pinned GAIA tasks declare a 600-second Harbor agent timeout. The build
+config sets `case_timeout_seconds: 180` and
+`task_agent_timeout_seconds: 600`, so VeRO invokes Harbor with an agent-timeout
+multiplier of `0.3`. The 180-second limit reported to the optimizer is therefore
+the timeout enforced by the inner Harbor trial.
+
 To verify or regenerate the split after downloading the pinned Harbor dataset:
 
 ```bash

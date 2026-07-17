@@ -245,12 +245,19 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["evaluation_drain_timeout_seconds"] == config.timeout_seconds
     assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
+    assert serve["backends"]["harbor-test"]["case_timeout_seconds"] == 180.0
+    assert serve["backends"]["harbor-test"]["task_agent_timeout_seconds"] == 600.0
     assert (
         serve["backends"]["harbor-validation"]["case_resources_cache_path"]
         == "/state/admin/case-resources/validation"
     )
     assert serve["access_policies"][0]["limits"]["retry"]["max_attempts"] == 1
+    assert serve["access_policies"][0]["limits"]["case_timeout_seconds"] == 180.0
     assert "use_evaluation_copies" not in serve
+    instruction = (output / "instruction.md").read_text()
+    assert "--detach" in instruction
+    assert "vero harbor eval-status JOB_ID" in instruction
+    assert "randomness remains" in instruction
     for partition, backend in serve["backends"].items():
         partition_name = partition.removeprefix("harbor-")
         backend["cases_path"] = str(

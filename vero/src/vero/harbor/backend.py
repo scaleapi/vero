@@ -30,7 +30,6 @@ from vero.evaluation.models import (
     EvaluationArtifact,
     EvaluationCost,
     EvaluationDiagnostic,
-    EvaluationLimits,
     EvaluationModel,
     EvaluationReport,
     EvaluationRequest,
@@ -88,6 +87,8 @@ class HarborBackendConfig(EvaluationModel):
     model: str | None = None
     environment_name: str = "modal"
     python_version: str = "3.12"
+    case_timeout_seconds: float = Field(default=180.0, gt=0)
+    task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
     infrastructure_max_attempts: int = Field(default=3, ge=1)
@@ -221,6 +222,7 @@ class HarborBackendConfig(EvaluationModel):
             "--jobs-dir",
             "--max-retries",
             "--n-attempts",
+            "--agent-timeout-multiplier",
         }
         conflicts = [
             argument for argument in value if argument.split("=", 1)[0] in controlled
@@ -545,11 +547,10 @@ class HarborBackend:
                 "Harbor does not support generic per-case retries; configure "
                 "HarborBackendConfig.max_retries instead"
             )
-        default_case_timeout = EvaluationLimits().case_timeout_seconds
-        if request.limits.case_timeout_seconds != default_case_timeout:
+        if request.limits.case_timeout_seconds != self.config.case_timeout_seconds:
             raise ValueError(
-                "Harbor does not support an absolute per-case timeout override; "
-                "configure task timeouts or Harbor timeout multipliers instead"
+                "Harbor case timeout is fixed by the backend at "
+                f"{self.config.case_timeout_seconds:g} seconds"
             )
         if request.seed is not None:
             raise ValueError("Harbor does not support the generic evaluation seed")
@@ -618,6 +619,11 @@ class HarborBackend:
             str(self.config.n_attempts),
             "--max-retries",
             str(self.config.max_retries),
+            "--agent-timeout-multiplier",
+            str(
+                self.config.case_timeout_seconds
+                / self.config.task_agent_timeout_seconds
+            ),
         ]
         model = request.parameters.get("harbor_model_override", self.config.model)
         if model is not None:

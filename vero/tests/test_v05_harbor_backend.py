@@ -105,7 +105,7 @@ def test_backend_accepts_pinned_environment_extra(tmp_path):
                     )
                 }
             ),
-            "absolute per-case timeout",
+            "case timeout is fixed by the backend",
         ),
         (lambda: _request().model_copy(update={"seed": 7}), "evaluation seed"),
     ],
@@ -318,9 +318,9 @@ async def test_harbor_backend_maps_remote_download_results_by_request_order(
             "harbor.tasks.client",
         )
     }
-    modules["harbor.registry.client.package"].PackageDatasetClient = (
-        PackageDatasetClient
-    )
+    modules[
+        "harbor.registry.client.package"
+    ].PackageDatasetClient = PackageDatasetClient
     modules["harbor.tasks.client"].TaskClient = TaskClient
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -361,17 +361,14 @@ async def test_harbor_backend_exposes_complete_successful_trial_records(tmp_path
                             {"steps": [{"message": f"used {secret}"}]}
                         ),
                         "gaia-trace.jsonl": (
-                            '{"turn":1,"action":"search"}\n'
-                            '{"turn":2,"answer":"done"}\n'
+                            '{"turn":1,"action":"search"}\n{"turn":2,"answer":"done"}\n'
                         ),
                     },
                 }
             ]
         },
     )
-    backend = HarborBackend(
-        _config(tmp_path, environment={"EVALUATION_TOKEN": secret})
-    )
+    backend = HarborBackend(_config(tmp_path, environment={"EVALUATION_TOKEN": secret}))
 
     report = await backend.evaluate(
         context=await _context(tmp_path, sandbox),
@@ -392,9 +389,7 @@ async def test_harbor_backend_exposes_complete_successful_trial_records(tmp_path
         for artifact in artifacts
         if Path(artifact.path).name == "trajectory.json"
     )
-    assert "[REDACTED]" in (
-        tmp_path / "result/artifacts" / trajectory.path
-    ).read_text()
+    assert "[REDACTED]" in (tmp_path / "result/artifacts" / trajectory.path).read_text()
 
 
 @pytest.mark.asyncio
@@ -481,6 +476,10 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     ]
     assert sandbox.command.count("-i") == 2
     assert sandbox.command[sandbox.command.index("-n") + 1] == "7"
+    assert (
+        sandbox.command[sandbox.command.index("--agent-timeout-multiplier") + 1]
+        == "0.3"
+    )
     assert sandbox.timeout == 90
     assert [artifact.path for artifact in report.artifacts] == [
         "harbor/stdout.log",

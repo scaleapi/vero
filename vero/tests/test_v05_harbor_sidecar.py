@@ -38,6 +38,7 @@ from vero.evaluation import (
 from vero.filesystem import AccessType, Filesystem
 from vero.harbor import (
     EvaluationAccessError,
+    EvaluationJobStatus,
     SidecarEvaluationPolicy,
     EvaluationSidecar,
     GitCandidateTransport,
@@ -271,6 +272,76 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
         "secondary",
     ]
     assert status.evaluation_access[0].expose_case_resources is False
+
+
+@pytest.mark.asyncio
+async def test_sidecar_detached_job_returns_before_evaluation_and_persists_result(
+    tmp_path,
+):
+    sidecar, _, _ = _sidecar(tmp_path)
+
+    class BlockingBackend(StubBackend):
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def evaluate(self, *, context, request):
+            self.started.set()
+            await self.release.wait()
+            return await super().evaluate(context=context, request=request)
+
+    backend = BlockingBackend()
+    sidecar.engine.backends._backends["primary"] = backend
+    job = await sidecar.start_evaluation_job(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(
+                name="benchmark",
+                partition="validation",
+                selection=CaseIds(ids=[f"case-{i}" for i in range(5)]),
+            ),
+            version="HEAD",
+        )
+    )
+
+    assert job.status == EvaluationJobStatus.RUNNING
+    assert job.version == "candidate-version"
+    assert job.receipt is None
+    await backend.started.wait()
+    assert sidecar.status().evaluation_jobs[0].job_id == job.job_id
+    drain = asyncio.create_task(
+        sidecar.engine.quiesce_agent_evaluations(timeout_seconds=1.0)
+    )
+    await asyncio.sleep(0)
+    assert not drain.done()
+
+    backend.release.set()
+    task = sidecar._evaluation_job_tasks[job.job_id]
+    await task
+    assert await drain == 1
+
+    completed = sidecar.evaluation_job(job.job_id)
+    assert completed.status == EvaluationJobStatus.COMPLETE
+    assert completed.receipt is not None
+    assert completed.receipt.result.metrics == {"score": 0.75}
+    persisted = tmp_path / "session/evaluation-jobs" / f"{job.job_id}.json"
+    assert json.loads(persisted.read_text())["status"] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_sidecar_detached_job_reports_safe_admission_failure(tmp_path):
+    sidecar, _, _ = _sidecar(tmp_path)
+
+    job = await sidecar.start_evaluation_job(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(name="private", partition="validation"),
+        )
+    )
+
+    assert job.status == EvaluationJobStatus.FAILED
+    assert job.error == "evaluation denied"
+    assert job.receipt is None
 
 
 @pytest.mark.asyncio

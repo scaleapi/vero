@@ -5,7 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import posixpath
+from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -17,12 +20,15 @@ from vero.evaluation import (
     EvaluationAcknowledgement,
     EvaluationAuthorization,
     EvaluationBudget,
+    EvaluationBudgetExceeded,
     EvaluationCancelledError,
+    EvaluationDeniedError,
     EvaluationExecutionError,
     EvaluationLimits,
     EvaluationModel,
     EvaluationRecord,
     EvaluationReceipt,
+    EvaluationRequestError,
     EvaluationRequest,
     EvaluationSet,
     EvaluationSummary,
@@ -38,7 +44,7 @@ from vero.runtime.context import (
     make_evaluation_receipt,
     narrower_disclosure,
 )
-from vero.harbor.transport import CandidateTransport
+from vero.harbor.transport import CandidateTransferError, CandidateTransport
 from vero.sandbox import LocalSandbox
 
 
@@ -48,6 +54,10 @@ class EvaluationAccessError(RuntimeError):
 
 class SubmissionDisabledError(RuntimeError):
     """Raised when submission is disabled for this optimization task."""
+
+
+class EvaluationJobNotFoundError(LookupError):
+    """Raised when an agent requests an unknown evaluation job."""
 
 
 class SidecarEvaluationPolicy(EvaluationModel):
@@ -139,6 +149,52 @@ class SidecarEvaluationResult(EvaluationModel):
         return self
 
 
+class EvaluationJobStatus(str, Enum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SidecarEvaluationJob(EvaluationModel):
+    """Durable agent-facing lifecycle for one sidecar evaluation request."""
+
+    job_id: str
+    status: EvaluationJobStatus
+    backend_id: str
+    evaluation_set: EvaluationSet
+    version: str | None = None
+    evaluation_id: str | None = None
+    receipt: EvaluationReceipt | None = None
+    error: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_lifecycle(self) -> SidecarEvaluationJob:
+        terminal = self.status in {
+            EvaluationJobStatus.COMPLETE,
+            EvaluationJobStatus.FAILED,
+            EvaluationJobStatus.CANCELLED,
+        }
+        if terminal != (self.completed_at is not None):
+            raise ValueError("only terminal evaluation jobs have completed_at")
+        if self.status == EvaluationJobStatus.COMPLETE and self.receipt is None:
+            raise ValueError("complete evaluation jobs require a receipt")
+        if self.receipt is not None:
+            if self.status != EvaluationJobStatus.COMPLETE:
+                raise ValueError("only complete evaluation jobs may have a receipt")
+            if self.evaluation_id != self.receipt.evaluation_id:
+                raise ValueError("evaluation job and receipt identities must match")
+        if self.error is not None and self.status not in {
+            EvaluationJobStatus.FAILED,
+            EvaluationJobStatus.CANCELLED,
+        }:
+            raise ValueError("only failed or cancelled jobs may have an error")
+        return self
+
+
 class EvaluationAccessStatus(EvaluationModel):
     backend_id: str
     evaluation_set_name: str
@@ -155,6 +211,7 @@ class SidecarStatus(EvaluationModel):
     submit_enabled: bool
     evaluation_access: list[EvaluationAccessStatus]
     inference_usage: dict[str, JsonValue] | None = None
+    evaluation_jobs: list[SidecarEvaluationJob] = Field(default_factory=list)
 
 
 class Submission(EvaluationModel):
@@ -192,6 +249,13 @@ class EvaluationSidecar:
         self.submit_enabled = submit_enabled
         self._context_lock = asyncio.Lock()
         self._context_initialized = False
+        self._evaluation_jobs_dir = (
+            self.engine.evaluator.session_dir / "evaluation-jobs"
+        )
+        self._evaluation_jobs_dir.mkdir(parents=True, exist_ok=True)
+        self._evaluation_jobs: dict[str, SidecarEvaluationJob] = {}
+        self._evaluation_job_tasks: dict[str, asyncio.Task[None]] = {}
+        self._load_evaluation_jobs()
         self._disclosures = AgentDisclosureLedger(
             self.engine.evaluator.session_dir / "agent-context.json"
         )
@@ -215,6 +279,148 @@ class EvaluationSidecar:
                     f"access policy references unknown backend {policy.backend_id!r}"
                 )
             self._policies[policy.key] = policy
+
+    def _load_evaluation_jobs(self) -> None:
+        """Restore terminal jobs and mark interrupted in-flight jobs explicitly."""
+
+        for path in sorted(self._evaluation_jobs_dir.glob("*.json")):
+            try:
+                job = SidecarEvaluationJob.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+            except (OSError, ValueError):
+                continue
+            if job.status in {
+                EvaluationJobStatus.QUEUED,
+                EvaluationJobStatus.RUNNING,
+            }:
+                job = job.model_copy(
+                    update={
+                        "status": EvaluationJobStatus.FAILED,
+                        "error": "evaluation job was interrupted by a sidecar restart",
+                        "completed_at": datetime.now(UTC),
+                    }
+                )
+                _atomic_write_json(path, job.model_dump(mode="json"))
+            self._evaluation_jobs[job.job_id] = job
+
+    async def _save_evaluation_job(self, job: SidecarEvaluationJob) -> None:
+        self._evaluation_jobs[job.job_id] = job
+        await asyncio.to_thread(
+            _atomic_write_json,
+            self._evaluation_jobs_dir / f"{job.job_id}.json",
+            job.model_dump(mode="json"),
+        )
+
+    async def _update_evaluation_job(
+        self,
+        job_id: str,
+        **updates: object,
+    ) -> SidecarEvaluationJob:
+        job = self._evaluation_jobs[job_id].model_copy(update=updates)
+        job = SidecarEvaluationJob.model_validate(job)
+        await self._save_evaluation_job(job)
+        return job
+
+    def evaluation_job(self, job_id: str) -> SidecarEvaluationJob:
+        try:
+            return self._evaluation_jobs[job_id]
+        except KeyError as error:
+            raise EvaluationJobNotFoundError(
+                f"unknown evaluation job {job_id!r}"
+            ) from error
+
+    async def start_evaluation_job(
+        self,
+        request: SidecarEvaluationRequest,
+    ) -> SidecarEvaluationJob:
+        """Admit an evaluation and return without waiting for its result."""
+
+        job = SidecarEvaluationJob(
+            job_id=str(uuid4()),
+            status=EvaluationJobStatus.QUEUED,
+            backend_id=request.backend_id,
+            evaluation_set=request.evaluation_set,
+            version=request.version,
+            created_at=datetime.now(UTC),
+        )
+        await self._save_evaluation_job(job)
+        admitted = asyncio.Event()
+        task = asyncio.create_task(
+            self._run_evaluation_job(job.job_id, request, admitted),
+            name=f"vero-evaluation-job-{job.job_id}",
+        )
+        self._evaluation_job_tasks[job.job_id] = task
+        task.add_done_callback(
+            lambda _task, job_id=job.job_id: self._evaluation_job_tasks.pop(
+                job_id, None
+            )
+        )
+        await admitted.wait()
+        return self.evaluation_job(job.job_id)
+
+    async def _run_evaluation_job(
+        self,
+        job_id: str,
+        request: SidecarEvaluationRequest,
+        admitted: asyncio.Event,
+    ) -> None:
+        try:
+            async with self.engine.agent_evaluation_scope():
+                policy, canonical_request = await self._prepare_evaluation(request)
+                await self._update_evaluation_job(
+                    job_id,
+                    status=EvaluationJobStatus.RUNNING,
+                    version=canonical_request.candidate.version,
+                )
+                admitted.set()
+                result = await self._evaluate_prepared(
+                    backend_id=request.backend_id,
+                    policy=policy,
+                    request=canonical_request,
+                )
+                await self._update_evaluation_job(
+                    job_id,
+                    status=EvaluationJobStatus.COMPLETE,
+                    evaluation_id=result.receipt.evaluation_id,
+                    receipt=result.receipt,
+                    completed_at=datetime.now(UTC),
+                )
+        except asyncio.CancelledError:
+            admitted.set()
+            await asyncio.shield(
+                self._update_evaluation_job(
+                    job_id,
+                    status=EvaluationJobStatus.CANCELLED,
+                    receipt=None,
+                    error="evaluation job was cancelled",
+                    completed_at=datetime.now(UTC),
+                )
+            )
+            raise
+        except Exception as error:  # the terminal record remains in agent context
+            admitted.set()
+            evaluation_id = getattr(error, "evaluation_id", None)
+            await self._update_evaluation_job(
+                job_id,
+                status=EvaluationJobStatus.FAILED,
+                evaluation_id=evaluation_id,
+                receipt=None,
+                error=self._evaluation_job_error(error),
+                completed_at=datetime.now(UTC),
+            )
+
+    @staticmethod
+    def _evaluation_job_error(error: Exception) -> str:
+        if isinstance(error, EvaluationBudgetExceeded):
+            return "evaluation budget exhausted"
+        if isinstance(error, (EvaluationDeniedError, EvaluationAccessError)):
+            return "evaluation denied"
+        if isinstance(error, EvaluationRequestError):
+            return "invalid evaluation request"
+        if isinstance(error, CandidateTransferError):
+            return "candidate version could not be imported"
+        return "evaluation failed"
 
     def _policy(
         self,
@@ -409,6 +615,17 @@ class EvaluationSidecar:
         self,
         request: SidecarEvaluationRequest,
     ) -> SidecarEvaluationResult:
+        policy, canonical_request = await self._prepare_evaluation(request)
+        return await self._evaluate_prepared(
+            backend_id=request.backend_id,
+            policy=policy,
+            request=canonical_request,
+        )
+
+    async def _prepare_evaluation(
+        self,
+        request: SidecarEvaluationRequest,
+    ) -> tuple[SidecarEvaluationPolicy, EvaluationRequest]:
         policy = self._policy(request.backend_id, request.evaluation_set)
         unknown_parameters = sorted(
             set(request.parameters) - set(policy.allowed_parameters)
@@ -426,17 +643,25 @@ class EvaluationSidecar:
         await self._enforce_aggregate_floor(policy, request.evaluation_set)
         candidate = await self.candidate_transport.import_candidate(request.version)
         parameters = {**policy.parameters, **request.parameters}
-        canonical_request = EvaluationRequest(
+        return policy, EvaluationRequest(
             candidate=candidate,
             evaluation_set=request.evaluation_set,
             parameters=parameters,
             limits=policy.limits or request.limits or EvaluationLimits(),
             seed=request.seed,
         )
+
+    async def _evaluate_prepared(
+        self,
+        *,
+        backend_id: str,
+        policy: SidecarEvaluationPolicy,
+        request: EvaluationRequest,
+    ) -> SidecarEvaluationResult:
         try:
             result = await self.engine.evaluate(
-                backend_id=request.backend_id,
-                request=canonical_request,
+                backend_id=backend_id,
+                request=request,
                 objective_spec=policy.objective,
                 authorization=EvaluationAuthorization(
                     may_evaluate=True,
@@ -545,4 +770,9 @@ class EvaluationSidecar:
             submit_enabled=self.submit_enabled,
             evaluation_access=access,
             inference_usage=inference_usage,
+            evaluation_jobs=sorted(
+                self._evaluation_jobs.values(),
+                key=lambda job: (job.created_at, job.job_id),
+                reverse=True,
+            )[:100],
         )

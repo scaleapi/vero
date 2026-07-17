@@ -145,6 +145,8 @@ class HarborBuildConfig(EvaluationModel):
     extra_harbor_args: list[str] = Field(default_factory=list)
 
     timeout_seconds: float = Field(default=1800.0, gt=0)
+    case_timeout_seconds: float = Field(default=180.0, gt=0)
+    task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     max_concurrency: int = Field(default=8, ge=1)
     error_rate_threshold: float | None = Field(default=0.1, gt=0, le=1)
     verifier_timeout_seconds: int | None = Field(default=None, ge=1)

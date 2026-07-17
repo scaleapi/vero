@@ -27,6 +27,9 @@ from vero.harbor.auth import (
 )
 from vero.harbor.sidecar import (
     EvaluationAccessError,
+    EvaluationJobNotFoundError,
+    EvaluationJobStatus,
+    SidecarEvaluationJob,
     SidecarEvaluationResult,
     SidecarStatus,
     Submission,
@@ -39,6 +42,7 @@ class FakeSidecar:
         self.requests = []
         self.raise_access_error = False
         self.raise_request_error = False
+        self.job = None
         self.engine = SimpleNamespace(database=EvaluationDatabase(id="session"))
 
     async def evaluate(self, request):
@@ -69,6 +73,26 @@ class FakeSidecar:
                 created_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
+
+    async def start_evaluation_job(self, request):
+        result = await self.evaluate(request)
+        self.job = SidecarEvaluationJob(
+            job_id="job-1",
+            status=EvaluationJobStatus.COMPLETE,
+            backend_id=request.backend_id,
+            evaluation_set=request.evaluation_set,
+            version=request.version,
+            evaluation_id=result.receipt.evaluation_id,
+            receipt=result.receipt,
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            completed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+        return self.job
+
+    def evaluation_job(self, job_id):
+        if self.job is None or self.job.job_id != job_id:
+            raise EvaluationJobNotFoundError(job_id)
+        return self.job
 
     def status(self):
         return SidecarStatus(submit_enabled=True, evaluation_access=[])
@@ -252,6 +276,33 @@ def test_http_app_separates_agent_and_admin_surfaces(tmp_path, monkeypatch):
     ).json() == {"evaluations": []}
 
 
+def test_http_app_exposes_agent_evaluation_jobs():
+    sidecar = FakeSidecar()
+    client = TestClient(
+        create_app(
+            sidecar=sidecar,
+            verifier=FakeVerifier(),
+            admin_token="admin-secret",
+        )
+    )
+
+    started = client.post(
+        "/eval/jobs",
+        json={
+            "backend_id": "backend",
+            "evaluation_set": {"name": "public"},
+        },
+    )
+
+    assert started.status_code == 202
+    assert started.json()["job_id"] == "job-1"
+    assert client.get("/eval/jobs/job-1").json()["status"] == "complete"
+    result = client.get("/eval/jobs/job-1/result")
+    assert result.status_code == 200
+    assert result.json()["receipt"]["evaluation_id"] == "evaluation"
+    assert client.get("/eval/jobs/missing").status_code == 404
+
+
 def test_http_app_redacts_access_denial_details():
     sidecar = FakeSidecar()
     sidecar.raise_access_error = True
@@ -335,6 +386,38 @@ def test_harbor_cli_builds_canonical_selection(monkeypatch):
     }
     assert captured["payload"]["parameters"] == {"temperature": 0.2}
     assert captured["payload"]["limits"] is None
+
+
+def test_harbor_cli_supports_detached_evaluation_jobs(monkeypatch):
+    requests = []
+
+    def fake_request(method, path, *, payload=None, headers=None):
+        requests.append((method, path, payload))
+        return {"job_id": "job-1", "status": "running"}
+
+    monkeypatch.setattr("vero.harbor.cli._request", fake_request)
+    runner = CliRunner()
+    started = runner.invoke(
+        main,
+        [
+            "harbor",
+            "eval",
+            "--backend",
+            "backend",
+            "--evaluation-set",
+            "benchmark",
+            "--detach",
+        ],
+    )
+    status = runner.invoke(main, ["harbor", "eval-status", "job-1"])
+    result = runner.invoke(main, ["harbor", "eval-result", "job-1"])
+
+    assert started.exit_code == 0, started.output
+    assert status.exit_code == 0, status.output
+    assert result.exit_code == 0, result.output
+    assert requests[0][:2] == ("POST", "/eval/jobs")
+    assert requests[1][:2] == ("GET", "/eval/jobs/job-1")
+    assert requests[2][:2] == ("GET", "/eval/jobs/job-1/result")
 
 
 def test_harbor_finalize_cli_writes_only_rewards(tmp_path, monkeypatch):

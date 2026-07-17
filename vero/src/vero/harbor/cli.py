@@ -419,6 +419,11 @@ def inference_gateway_command(config_path, host, port):
     default=None,
 )
 @click.option("--seed", type=int)
+@click.option(
+    "--detach",
+    is_flag=True,
+    help="Start a durable evaluation job and return without waiting for its result.",
+)
 def evaluate_command(
     backend_id,
     evaluation_set_name,
@@ -438,6 +443,7 @@ def evaluate_command(
     retry_multiplier,
     retry_on_timeout,
     seed,
+    detach,
 ):
     """Evaluate a candidate through the metered agent endpoint."""
     if case_ids and (start is not None or stop is not None):
@@ -487,10 +493,28 @@ def evaluate_command(
     )
     click.echo(
         json.dumps(
-            _request("POST", "/eval", payload=body.model_dump(mode="json")),
+            _request(
+                "POST",
+                "/eval/jobs" if detach else "/eval",
+                payload=body.model_dump(mode="json"),
+            ),
             indent=2,
         )
     )
+
+
+@harbor.command("eval-status")
+@click.argument("job_id")
+def evaluation_status_command(job_id):
+    """Inspect a detached evaluation job."""
+    click.echo(json.dumps(_request("GET", f"/eval/jobs/{job_id}"), indent=2))
+
+
+@harbor.command("eval-result")
+@click.argument("job_id")
+def evaluation_result_command(job_id):
+    """Retrieve a detached evaluation result when it is available."""
+    click.echo(json.dumps(_request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
 
 
 @harbor.command("submit")

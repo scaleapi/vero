@@ -56,6 +56,8 @@ feedback_transcripts: true
 feedback_max_bytes: 12000
 expose_attempt_detail: false
 timeout_seconds: 3600
+case_timeout_seconds: 180
+task_agent_timeout_seconds: 600
 max_concurrency: 8
 error_rate_threshold: 0.1
 verifier_timeout_seconds: 7200

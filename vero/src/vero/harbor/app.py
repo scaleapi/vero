@@ -23,8 +23,11 @@ from vero.harbor.auth import check_admin_token
 from vero.harbor.session import create_harbor_session_archive
 from vero.harbor.sidecar import (
     EvaluationAccessError,
+    EvaluationJobNotFoundError,
+    EvaluationJobStatus,
     EvaluationSidecar,
     SidecarEvaluationRequest,
+    SidecarEvaluationResult,
     SubmissionDisabledError,
 )
 from vero.harbor.transport import CandidateTransferError
@@ -74,6 +77,10 @@ def create_app(
         SubmissionDisabledError,
         _error(409, "candidate submission is disabled"),
     )
+    app.add_exception_handler(
+        EvaluationJobNotFoundError,
+        _error(404, "evaluation job not found"),
+    )
 
     @app.exception_handler(EvaluationExecutionError)
     async def evaluation_failure(_request, error: EvaluationExecutionError):
@@ -96,6 +103,33 @@ def create_app(
     @app.post("/eval")
     async def evaluate(body: SidecarEvaluationRequest):
         return await sidecar.evaluate(body)
+
+    @app.post("/eval/jobs", status_code=202)
+    async def start_evaluation_job(body: SidecarEvaluationRequest):
+        return await sidecar.start_evaluation_job(body)
+
+    @app.get("/eval/jobs/{job_id}")
+    async def evaluation_job(job_id: str):
+        return sidecar.evaluation_job(job_id)
+
+    @app.get("/eval/jobs/{job_id}/result")
+    async def evaluation_job_result(job_id: str):
+        job = sidecar.evaluation_job(job_id)
+        if job.receipt is None:
+            status_code = (
+                202
+                if job.status
+                in {EvaluationJobStatus.QUEUED, EvaluationJobStatus.RUNNING}
+                else 409
+            )
+            return JSONResponse(
+                status_code=status_code,
+                content=job.model_dump(mode="json"),
+            )
+        return SidecarEvaluationResult(
+            disclosure=job.receipt.disclosure,
+            receipt=job.receipt,
+        )
 
     @app.post("/submit")
     async def submit(body: SubmitRequest):
