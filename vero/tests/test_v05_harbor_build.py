@@ -174,6 +174,7 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert (output / "environment/sidecar/task-source/task-hidden/task.toml").is_file()
     assert not (output / "environment/agent-seed/protected-tasks").exists()
     instruction = (output / "instruction.md").read_text(encoding="utf-8")
+    assert "## Objective\n\nImprove the program" in instruction
     assert "--backend harbor-validation" in instruction
     assert "arbitrary subsets" in instruction
     task_toml = (output / "task.toml").read_text(encoding="utf-8")

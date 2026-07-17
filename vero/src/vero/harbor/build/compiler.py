@@ -441,6 +441,7 @@ def compile_harbor_task(
     context = {
         "name_toml": json.dumps(config.name, ensure_ascii=False),
         "description_toml": json.dumps(config.description, ensure_ascii=False),
+        "description": config.description,
         "base_image_main": config.base_image_main,
         "base_image_sidecar": config.base_image_sidecar,
         "use_local_vero": use_local_vero,
