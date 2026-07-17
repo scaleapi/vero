@@ -651,10 +651,16 @@ incompatible with the schema-v3 manifest.
 ```bash
 vero session list
 vero session inspect ~/.vero/sessions/<session-id>
+vero report ~/.vero/sessions/<session-id> --output experiment.html
 vero session fork OLD_SESSION NEW_SESSION --max-proposals 20 --reset-budgets
 vero session export ~/.vero/sessions/<session-id>
 vero session clear ~/.vero/sessions/<session-id> --yes
 ```
+
+`vero report` creates a self-contained, read-only HTML view of the whole run:
+the score trajectory, candidate lineage and parent diffs, evaluation artifacts,
+producer traces, and runtime event timeline. The report embeds those materials,
+so treat the resulting file as sensitive experiment data.
 
 ## Safety boundaries
 

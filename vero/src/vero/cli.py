@@ -329,6 +329,28 @@ def run_config(config_path: Path) -> None:
     _print_result(session, result)
 
 
+@main.command(name="report")
+@click.argument(
+    "session_dir",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Portable HTML path; defaults to SESSION_DIR/experiment.html.",
+)
+def report_session(session_dir: Path, output: Path | None) -> None:
+    """Build a self-contained visual report for an optimization session."""
+
+    from vero.report import generate_experiment_report
+
+    try:
+        destination = asyncio.run(generate_experiment_report(session_dir, output))
+    except Exception as error:
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    click.echo(destination)
+
+
 @main.command()
 @click.argument(
     "project_path",
