@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -42,6 +43,8 @@ class _TargetCfg(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only).
+    model: str | None = None
 
 
 class _ServeConfigBase(BaseModel):
@@ -76,6 +79,15 @@ class _ServeConfigBase(BaseModel):
     # auto_best never ships a candidate that fails to beat the untouched baseline
     # on the selection split; it reverts to base_commit instead (needs base_commit).
     auto_best_baseline_floor: bool = True
+
+    # Minimum sample count for agent-chosen subset evals of non_viewable
+    # splits (full-split evals always pass; <=1 disables). See
+    # EvaluationSidecar.k_anonymity_floor for the leak this closes.
+    k_anonymity_floor: int = 5
+
+    # Consumed at COMPILE time (the instruction's exhaust-budget bullet);
+    # recorded here so serve.json mirrors build.yaml, like instruct_multifidelity.
+    instruct_exhaust_budget: bool = True
 
     # volumes / token
     agent_volume: str
@@ -150,8 +162,12 @@ def _load_or_build_ledger(
     a sidecar restart would reset all spent budget to full, letting the agent
     regain its full evaluation budget by triggering a restart. On startup we
     reconstruct each SplitBudget and restore its persisted ``remaining_*`` values.
-    Falls back to the configured budgets if the file is missing or unreadable
-    (fail-safe to the configured budget, never to unlimited).
+
+    A MISSING file is a fresh boot: configured budgets. A file that exists but
+    cannot be parsed fails CLOSED: metered budgets restore with zero remaining.
+    The old fallback (configured budgets) refunded the agent everything already
+    spent, so any crash that corrupted the flush minted budget; spend that
+    cannot be read must be treated as fully spent, never as never-happened.
     """
     if persist_path.exists():
         try:
@@ -176,11 +192,28 @@ def _load_or_build_ledger(
             )
             return BudgetLedger(budgets, persist_path=persist_path)
         except (json.JSONDecodeError, KeyError, OSError) as e:
-            logger.warning(
-                "Could not reload persisted ledger %s (%s); using configured budgets.",
+            logger.error(
+                "Persisted ledger %s exists but is unreadable (%s); failing "
+                "CLOSED: metered agent budgets restore as exhausted. Admin and "
+                "finalize are unaffected. The unreadable file is preserved at "
+                "%s; delete ledger.json deliberately to boot fresh.",
                 persist_path,
                 e,
+                persist_path.with_suffix(".corrupt"),
             )
+            try:  # keep the evidence: the next flush overwrites persist_path
+                shutil.copyfile(persist_path, persist_path.with_suffix(".corrupt"))
+            except OSError:
+                pass
+            budgets = []
+            for cfg in budget_cfgs:
+                b = SplitBudget(**cfg)
+                if b.total_sample_budget is not None:
+                    b.remaining_sample_budget = 0
+                if b.total_run_budget is not None:
+                    b.remaining_run_budget = 0
+                budgets.append(b)
+            return BudgetLedger(budgets, persist_path=persist_path)
     return BudgetLedger(
         [SplitBudget(**b) for b in budget_cfgs], persist_path=persist_path
     )
@@ -240,6 +273,10 @@ async def build_components(
         eval_strategy=eval_strategy,
     )
 
+    split_accesses = [
+        SplitAccess(split=s.split, access=SplitAccessLevel(s.access))
+        for s in config.split_accesses
+    ]
     db = ExperimentDatabase(id=config.session_id)  # shared by engine (writes) + verifier (reads)
     engine = EvaluationEngine(
         evaluator=evaluator,
@@ -253,12 +290,12 @@ async def build_components(
         ),
         session_id=config.session_id,
         vero_home=vero_home,
+        # The engine-side no_access gate is only armed when split_accesses is
+        # set. Without it the ledger was the sole gate (no_access splits are
+        # unbudgeted, so reserve() raised) — and every unmetered path (admin,
+        # the free baseline eval) walked straight past it.
+        split_accesses=split_accesses,
     )
-
-    split_accesses = [
-        SplitAccess(split=s.split, access=SplitAccessLevel(s.access))
-        for s in config.split_accesses
-    ]
     sidecar = EvaluationSidecar(
         engine=engine,
         split_accesses=split_accesses,
@@ -267,6 +304,7 @@ async def build_components(
         admin_volume=Path(config.admin_volume),
         submit_enabled=config.submit_enabled,
         base_commit=config.base_commit,
+        k_anonymity_floor=config.k_anonymity_floor,
     )
     verifier = Verifier(
         engine=engine,

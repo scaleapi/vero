@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -38,6 +39,11 @@ class SubmitDisabledError(RuntimeError):
     """Raised when submit() is called but the task does not use submit selection."""
 
 
+class KAnonymityError(RuntimeError):
+    """Raised when an agent eval on a non_viewable split selects fewer samples
+    than the k-anonymity floor allows."""
+
+
 class EvaluationSidecar:
     """Agent-facing handlers over the EvaluationEngine.
 
@@ -56,6 +62,7 @@ class EvaluationSidecar:
         admin_volume: Path,
         submit_enabled: bool = False,
         base_commit: str | None = None,
+        k_anonymity_floor: int = 5,
     ):
         self.engine = engine
         self.split_accesses = split_accesses
@@ -64,13 +71,42 @@ class EvaluationSidecar:
         self.admin_volume = Path(admin_volume)
         self.submit_enabled = submit_enabled
         self.base_commit = base_commit
+        # Minimum sample count for an agent-chosen SUBSET eval of a non_viewable
+        # split. The aggregate response carries mean_score, so a singleton subset
+        # returns the sample's label-derived score verbatim, and n singleton
+        # evals reconstruct the split's per-sample labels wholesale. The floor
+        # applies only to proper subsets (sample_ids/num_samples): a full-split
+        # eval reveals exactly the intended aggregate, so it always passes and a
+        # split smaller than the floor degrades to full-split-only rather than
+        # becoming unevaluable. This is a cost multiplier, not a proof: means of
+        # k-sized overlapping subsets still admit reconstruction by elimination,
+        # but at >= k times the sample budget per label. <= 1 disables the floor.
+        self.k_anonymity_floor = k_anonymity_floor
         self._free_baseline_used = False
+        self._eval_seq = 0  # per-eval ordinal for result-dir versioning
 
     # ------------------------------------------------------------------
     # Handlers (the HTTP layer resolves `admin` from auth and calls these)
     # ------------------------------------------------------------------
 
     async def evaluate(self, req: EvalRequest, *, admin: bool = False) -> EvalSummary:
+        # k-anonymity floor, checked before any work (no commit transfer, no
+        # budget debit, no eval) so a rejected request costs the agent nothing.
+        # sample_ids is None exactly when the request covers the full split
+        # (resolve_samples collapses a covering num_samples to None too), and a
+        # full-split aggregate is the intended surface, so only proper subsets
+        # are floored.
+        if not admin and self.k_anonymity_floor > 1:
+            tier = tier_for_split(req.split, self.split_accesses)
+            if tier == SplitAccessLevel.non_viewable:
+                sample_ids, n = self.engine.resolve_samples(req)
+                if sample_ids is not None and n < self.k_anonymity_floor:
+                    raise KAnonymityError(
+                        f"Evals on non_viewable split '{req.split}' must cover "
+                        f"at least {self.k_anonymity_floor} samples (or the "
+                        f"whole split); got {n}. Aggregate scores over smaller "
+                        f"subsets would reveal per-sample results."
+                    )
         sha = await self._transfer_commit(req.commit)
         # The agent's FIRST eval of the seeded baseline is budget-free. The
         # baseline is the reference every candidate is implicitly compared to,
@@ -80,17 +116,29 @@ class EvaluationSidecar:
         # an optimizer that skipped the reference could not tell a no-op edit
         # from an improvement and quit with budget unspent). Capped at one:
         # later baseline evals debit normally, so free compute is bounded.
+        # `free` waives only the budget debit; the eval still runs as the agent
+        # (tier gates apply), so the free baseline cannot touch no_access
+        # splits — riding the admin flag here did exactly that.
         free_baseline = (
             not admin
             and self.base_commit is not None
             and sha == self.base_commit
             and not self._free_baseline_used
         )
+        # Claim the freebie BEFORE the await (asyncio is atomic between await
+        # points, so a concurrent second baseline eval sees the claim and pays)
+        # and refund it if the eval raises: a failed eval gave the agent
+        # nothing, so it must not burn the one free reference measurement.
         if free_baseline:
             self._free_baseline_used = True
-        exp = await self.engine.evaluate(
-            replace(req, commit=sha), admin=admin or free_baseline
-        )
+        try:
+            exp = await self.engine.evaluate(
+                replace(req, commit=sha), admin=admin, free=free_baseline
+            )
+        except BaseException:
+            if free_baseline:
+                self._free_baseline_used = False
+            raise
         # Route with the agent's real tier even when the eval was unmetered.
         result_path = self._route_results(exp, admin=admin)
         budget_remaining = None
@@ -125,6 +173,7 @@ class EvaluationSidecar:
             free_baseline_available=(
                 self.base_commit is not None and not self._free_baseline_used
             ),
+            k_anonymity_floor=self.k_anonymity_floor,
         )
 
     def list_experiments(self) -> list[dict]:
@@ -234,24 +283,66 @@ class EvaluationSidecar:
             return None
 
         commit = experiment.run.candidate.commit
-        dest = self.agent_volume / "results" / f"{split}__{commit[:12]}"
-        # Recreate the dir so it reflects exactly this metered run. The dir is keyed
-        # only on (split, commit[:12]); a prior eval of the same commit on a larger
-        # sample set would otherwise leave stale per-sample files behind that this
-        # run did not produce, and result_path would surface them as if they were.
-        if dest.exists():
+        # Every metered eval gets its own versioned dir. Keying on
+        # (split, commit) alone forced a wipe-and-rewrite, so a re-measurement
+        # (a multifidelity confirm, a noise re-eval of the champion) erased the
+        # agent's earlier evidence for the same commit; repeat measurements are
+        # exactly the ones worth comparing. result_path in the response names
+        # the dir for THIS eval.
+        results_root = self.agent_volume / "results"
+        if self._eval_seq == 0 and results_root.exists():
+            # Volume reuse (sidecar restart): resume the ordinal past every
+            # surviving dir, or the first N evals of the new session would
+            # silently wipe __e1..__eN — the exact erasure this scheme exists
+            # to prevent.
+            self._eval_seq = max(
+                (
+                    int(m.group(1))
+                    for d in results_root.iterdir()
+                    if (m := re.search(r"__e(\d+)$", d.name))
+                ),
+                default=0,
+            )
+        self._eval_seq += 1
+        dest = results_root / f"{split}__{commit[:12]}__e{self._eval_seq}"
+        if dest.exists():  # unreachable after the resume scan; never merge
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
         # Aggregate summary is label-safe for both visible and partial tiers.
+        # n_scored / n_errored / mean_score_se qualify the mean: a mean over 3
+        # scored samples of 18, or one dominated by errored zero-fills, is a
+        # different measurement than a clean full-split mean, and the agent
+        # (and any auditor) should see that without per-sample access.
+        # mean_score_se is named to bind it to mean_score: both are computed
+        # over the zero-filled n_samples population (score() fills errored
+        # samples with 0.0), NOT over the n_scored subset — an SE of the
+        # 3-of-18-scored mean would be a different (and larger) number.
+        sample_results = experiment.result.sample_results
+        filled = [
+            r.score if r.score is not None else 0.0
+            for r in sample_results.values()
+        ]
+        mean_score_se = None
+        if len(filled) > 1:
+            m = sum(filled) / len(filled)
+            var = sum((x - m) ** 2 for x in filled) / (len(filled) - 1)
+            mean_score_se = (var / len(filled)) ** 0.5
         (dest / "summary.json").write_text(
             json.dumps(
                 {
                     "split": split,
                     "commit": commit,
-                    "n_samples": len(experiment.result.sample_results),
+                    "n_samples": len(sample_results),
+                    "n_scored": sum(
+                        1 for r in sample_results.values() if r.score is not None
+                    ),
+                    "n_errored": sum(
+                        1 for r in sample_results.values() if r.is_error()
+                    ),
                     "mean_score": experiment.result.score(),
-                    "status": str(experiment.result.status),
+                    "mean_score_se": mean_score_se,
+                    "status": experiment.result.status.value,
                 },
                 indent=2,
             )
