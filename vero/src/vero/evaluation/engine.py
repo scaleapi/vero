@@ -193,6 +193,7 @@ class EvaluationEngine:
         split: str,
         commit: str,
         sample_ids: list[int] | None = None,
+        model: str | None = None,
     ) -> Experiment:
         """Admin/verifier evaluation: explicit ``task``, no budget, no allowlist.
 
@@ -200,7 +201,23 @@ class EvaluationEngine:
         this scores an arbitrary ``(task, dataset_id, split)`` — including held-out
         tasks/splits the agent never had access to. Used by the verifier to score
         the selected commit on its configured targets.
+
+        ``model`` overrides the executor model for this one eval (rides
+        ``task_params`` so the eval strategy can honor it; the Mode-B
+        HarborRunner does, the Mode-A vero-task path ignores it). Used for
+        transfer targets: scoring the champion under a model it was NOT
+        optimized on.
         """
+        params = self.run_constraints
+        if model is not None:
+            params = params.model_copy(
+                update={
+                    "task_params": {
+                        **(params.task_params or {}),
+                        "harbor_model_override": model,
+                    }
+                }
+            )
         return await self.evaluator.evaluate(
             commit=commit,
             dataset_id=dataset_id,
@@ -208,7 +225,7 @@ class EvaluationEngine:
             task=task,
             sample_ids=sample_ids,
             db=self.db,
-            evaluation_parameters=self.run_constraints,
+            evaluation_parameters=params,
         )
 
     def status(self) -> dict[tuple[str, str], SplitBudget]:

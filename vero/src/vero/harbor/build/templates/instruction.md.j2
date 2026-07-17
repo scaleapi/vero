@@ -51,9 +51,11 @@ in rough proportion to its size, so it is the cheap way to triage ideas:
   from a regression. Repeat baseline evals are metered. `vero harbor status`
   shows the baseline sha and whether the free eval is still available.
 {% endif %}
-- Scores are noisy. Unspent budget is wasted: if you finish with evals left, spend
+- Scores are noisy.
+{% if exhaust_budget %}- Unspent budget is wasted: if you finish with evals left, spend
   them re-measuring your best candidate to confirm its score, or trying one more
   variant, rather than stopping early.
+{% endif %}
 - The test split is hidden: you cannot evaluate it, and its labels never reach this
   container. Trying to read it will fail.
 - The scorer is locked. Only the eval sidecar scores.

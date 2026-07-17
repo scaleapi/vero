@@ -40,6 +40,32 @@ class HarborConfig:
     # without running anything). None keeps the current behavior: the
     # candidate env supplies harbor, and is trusted to.
     harbor_requirement: str | None = None
+    # Bounded within-eval retry for infra-destroyed samples. A sample whose
+    # EVERY attempt died of a transient infrastructure cause (connection,
+    # timeout, rate limit, 5xx) was never measured at all: re-run it after a
+    # backoff instead of booking the outage as a permanent error. Measured
+    # live: a 65-second host DNS blip killed 44 of 72 attempts of one eval
+    # with ConnectionError, and nothing in the record distinguished the blip
+    # from a bad candidate.
+    #
+    # OFF BY DEFAULT, and it must stay off when the candidate is an
+    # adversarial optimizer. The qualifying predicate is built from exception
+    # types raised inside candidate code, and agents are stochastic: a
+    # candidate that raises an allowlisted exception whenever an attempt is
+    # going badly loses nothing on partially-good samples (its fakes
+    # zero-fill like honest failures) but converts every all-bad sample from
+    # a booked 0.0 into a fresh re-roll. That is one-sided selection over
+    # attempt sets, exactly what the zero-fill invariant exists to prevent.
+    # Enable only for trusted-candidate evaluations (frozen agents,
+    # operator-run matrices), where re-measuring an outage is pure signal
+    # recovery. Candidate crashes and exhausted key budgets never retry
+    # regardless (a crash is a result; a spent key cannot recover by
+    # waiting), and recovered samples carry an ``infra_retry`` audit marker.
+    infra_retry_rounds: int = 0
+    # Backoff before retry round N is N times this many seconds. Transient
+    # infra needs time, not immediacy: instant retries burned 6 of 8 run
+    # attempts inside one live DNS blip.
+    infra_retry_delay_s: float = 30.0
     extra_args: list[str] = field(default_factory=list)  # passthrough harbor run flags
 
     def __post_init__(self) -> None:
@@ -49,6 +75,18 @@ class HarborConfig:
             raise ValueError(
                 f"aggregate_attempts must be 'best' or 'mean', got "
                 f"{self.aggregate_attempts!r}"
+            )
+        if self.infra_retry_rounds < 0:
+            raise ValueError(
+                f"infra_retry_rounds must be >= 0, got {self.infra_retry_rounds}"
+            )
+        # A zero (or negative) delay silently nullifies the backoff, and an
+        # instant retry re-enters the same outage: 6 of 8 run attempts once
+        # burned inside a single live DNS blip for exactly this reason.
+        if self.infra_retry_rounds > 0 and self.infra_retry_delay_s <= 0:
+            raise ValueError(
+                f"infra_retry_delay_s must be > 0 when infra retries are "
+                f"enabled, got {self.infra_retry_delay_s}"
             )
 
     @property

@@ -245,7 +245,8 @@ class TestHonestSummary:
         assert data["n_scored"] == 3
         assert data["n_errored"] == 0
         assert data["mean_score"] == pytest.approx(1 / 3)
-        assert data["score_se"] == pytest.approx(1 / 3)  # sd .5774 / sqrt(3)
+        # SE of mean_score, i.e. over the zero-filled n_samples population
+        assert data["mean_score_se"] == pytest.approx(1 / 3)  # sd .5774 / sqrt(3)
         # enum VALUE, not "ExperimentResultStatus.SUCCESS"
         assert data["status"] == "success"
 
@@ -262,6 +263,18 @@ class TestHonestSummary:
         assert s2.result_path.endswith("__e2")
         assert (Path(s1.result_path) / "summary.json").exists()
         assert (Path(s2.result_path) / "summary.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_volume_reuse_resumes_ordinal_past_survivors(self, tmp_path):
+        # A restarted sidecar (fresh _eval_seq) on a reused volume must not
+        # wipe the prior session's __e1..__eN evidence.
+        survivor = tmp_path / "agent_vol" / "results" / "validation__old000000000__e7"
+        survivor.mkdir(parents=True)
+        (survivor / "summary.json").write_text("{}")
+        sidecar = _sidecar(tmp_path, split="validation")
+        s = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert s.result_path.endswith("__e8")
+        assert (survivor / "summary.json").exists()
 
 
 class TestKAnonymityFloor:
@@ -395,6 +408,22 @@ class TestFreeBaselineEval:
         sidecar.engine.evaluate = AsyncMock(return_value=_experiment("validation"))
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
         assert sidecar.engine.evaluate.await_args.kwargs["free"] is True
+
+    @pytest.mark.asyncio
+    async def test_freebie_claimed_before_eval_await(self, tmp_path):
+        # The claim must be visible DURING the eval await, or a concurrent
+        # second baseline eval would also resolve free_baseline=True and both
+        # would ride free (asyncio interleaves at await points).
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        seen: list[bool] = []
+
+        async def _spy(req, **kwargs):
+            seen.append(sidecar._free_baseline_used)
+            return _experiment("validation")
+
+        sidecar.engine.evaluate = AsyncMock(side_effect=_spy)
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert seen == [True]
 
     def test_status_surfaces_free_baseline(self, tmp_path):
         sidecar = _sidecar(tmp_path, split="train", base_commit="abcdef123456")

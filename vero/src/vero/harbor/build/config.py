@@ -36,6 +36,12 @@ class TargetSpec(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only):
+    # score the selected commit AND the baseline under a model it was not
+    # optimized on, so model-specific couplings (measured live: hardcoded
+    # temperature=0 crashing 72/72 on an executor that rejects it) surface at
+    # finalize instead of one substrate away.
+    model: str | None = None
 
 
 class _BuildConfigBase(BaseModel):
@@ -71,6 +77,13 @@ class _BuildConfigBase(BaseModel):
     # (full-split evals always pass; <=1 disables). Aggregate responses carry
     # mean_score, so singleton subsets would hand back per-sample labels.
     k_anonymity_floor: int = 5
+
+    # Instruction lever: render the "unspent budget is wasted" persistence
+    # bullet that tells the optimizer to keep spending (re-measure the champion,
+    # try one more variant) instead of stopping early. On by default (current
+    # behavior); off makes stopping-early a choice the agent arrives at itself,
+    # which is the ablation arm for measuring what the exhortation contributes.
+    instruct_exhaust_budget: bool = True
 
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.

@@ -236,6 +236,7 @@ def _serve_config(
                 "split": t.split,
                 "reward_key": t.reward_key,
                 "sample_ids": t.sample_ids,
+                "model": t.model,
             }
             for t in config.targets
         ],
@@ -243,6 +244,7 @@ def _serve_config(
         "submit_enabled": config.submit_enabled,
         "score_baseline": config.score_baseline,
         "k_anonymity_floor": config.k_anonymity_floor,
+        "instruct_exhaust_budget": config.instruct_exhaust_budget,
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "admin_token_path": TOKEN_PATH,
@@ -405,6 +407,7 @@ def compile_task(
         and {"sample_ids", "num_samples"}
         <= {f.name for f in dataclasses.fields(EvalRequest)}
         and any(s.access == "viewable" for s in config.splits),
+        exhaust_budget=config.instruct_exhaust_budget,
     )
     _render(jenv, "task.toml.j2", out / "task.toml", **ctx)
     _render(jenv, "instruction.md.j2", out / "instruction.md", **ctx)
