@@ -66,6 +66,10 @@ class BuildConfig(BaseModel):
     selection_split: str = "validation"
     targets: list[TargetSpec] = Field(default_factory=list)
     submit_enabled: bool = False
+    # Also admin-score the unmodified baseline on every target at finalize and
+    # write it to <admin_volume>/baseline.json, so a candidate that generalizes
+    # WORSE than the untouched repo is visible as a regression.
+    score_baseline: bool = False
 
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.
