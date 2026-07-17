@@ -31,7 +31,7 @@ directory is generated and intentionally ignored.
 
 The compiled task does not expose the upstream OpenAI key to either editable
 program. A separate inference-gateway container holds it. The outer coding
-agent uses a producer-scoped token for `gpt-5.4`; GAIA candidates use an
+agent uses a producer-scoped token for `gpt-5.4` or `gpt-5.5`; GAIA candidates use an
 evaluation-scoped token restricted to `gpt-5.4-mini-2026-03-17`. Their request
 and token budgets are recorded separately and are visible through
 `vero harbor status`.
@@ -46,7 +46,7 @@ uv run vero harbor run \
   --config ../program-opt-bench/gaia/baseline/build.yaml \
   --environment modal \
   --agent codex \
-  --model openai/gpt-5.4
+  --model openai/gpt-5.5
 ```
 
 The coding agent edits only `target/`; inner evaluations run the candidate

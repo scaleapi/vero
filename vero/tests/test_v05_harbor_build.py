@@ -35,8 +35,17 @@ def _git(path: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
-@pytest.mark.parametrize("benchmark", ["gaia", "swe-atlas-qna", "tau3"])
-def test_canonical_benchmarks_isolate_upstream_inference_credentials(benchmark):
+@pytest.mark.parametrize(
+    ("benchmark", "producer_models"),
+    [
+        ("gaia", ["gpt-5.4", "gpt-5.5"]),
+        ("swe-atlas-qna", ["gpt-5.4"]),
+        ("tau3", ["gpt-5.4"]),
+    ],
+)
+def test_canonical_benchmarks_isolate_upstream_inference_credentials(
+    benchmark, producer_models
+):
     config = load_harbor_build_config(
         BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
     )
@@ -49,7 +58,7 @@ def test_canonical_benchmarks_isolate_upstream_inference_credentials(benchmark):
     }.intersection(config.secrets)
     assert config.inference_gateway.upstream_api_key_env == "OPENAI_API_KEY"
     assert config.inference_gateway.upstream_base_url_env == "OPENAI_BASE_URL"
-    assert config.inference_gateway.producer.allowed_models == ["gpt-5.4"]
+    assert config.inference_gateway.producer.allowed_models == producer_models
     assert config.inference_gateway.producer.max_requests is None
     assert config.inference_gateway.producer.max_tokens is None
     assert config.inference_gateway.evaluation.allowed_models == [

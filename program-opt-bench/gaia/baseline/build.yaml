@@ -68,7 +68,7 @@ inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
   producer:
-    allowed_models: [gpt-5.4]
+    allowed_models: [gpt-5.4, gpt-5.5]
     max_concurrency: 8
   evaluation:
     allowed_models: [gpt-5.4-mini-2026-03-17]
