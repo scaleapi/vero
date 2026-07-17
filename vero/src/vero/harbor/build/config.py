@@ -36,6 +36,12 @@ class TargetSpec(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only):
+    # score the selected commit AND the baseline under a model it was not
+    # optimized on, so model-specific couplings (measured live: hardcoded
+    # temperature=0 crashing 72/72 on an executor that rejects it) surface at
+    # finalize instead of one substrate away.
+    model: str | None = None
 
 
 class _BuildConfigBase(BaseModel):

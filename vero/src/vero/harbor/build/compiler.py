@@ -236,6 +236,7 @@ def _serve_config(
                 "split": t.split,
                 "reward_key": t.reward_key,
                 "sample_ids": t.sample_ids,
+                "model": t.model,
             }
             for t in config.targets
         ],

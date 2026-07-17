@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -38,6 +39,15 @@ class VerificationTarget:
     split: str
     reward_key: str
     sample_ids: list[int] | None = None  # None = full split
+    # Executor-model override for this target (Mode B): score the selected
+    # commit under a DIFFERENT model than the one it was optimized on. This is
+    # the transfer probe: home-model evals cannot see model-specific couplings
+    # the optimizer bakes in (measured live: three champions independently
+    # hardcoded temperature=0 and scored 0/72 on an executor that rejects it,
+    # while looking healthy on every home-model eval). None = the task's
+    # configured model. The baseline is scored under the same override, so the
+    # comparison stays like-for-like.
+    model: str | None = None
 
 
 class Verifier:
@@ -137,23 +147,29 @@ class Verifier:
         rewards: dict[str, float] = {}
         target_errors: dict[str, str] = {}
         for target in self.targets:
-            score = await self._admin_eval_score(
+            score, cause = await self._admin_eval_score(
                 task=target.task,
                 dataset_id=target.dataset_id,
                 split=target.split,
                 commit=sha,
                 sample_ids=target.sample_ids,
+                model=target.model,
                 what=f"target '{target.reward_key}'",
             )
             if score is None:
                 # Persistent failure: floor the target so reward.json still
-                # ships, and record the failure in the wrapper (echoed to the
-                # trial's durable stdout) so a floored-by-outage reward can
-                # never masquerade as a measured 0.0.
+                # ships, and record the failure WITH ITS CAUSE in the wrapper
+                # (echoed to the trial's durable stdout). A floored-by-outage
+                # reward must never masquerade as a measured 0.0, and the cause
+                # separates the two floored cases that demand opposite actions:
+                # a champion that deterministically crashes on this target's
+                # executor (a real, reportable portability failure) vs an infra
+                # outage (invalidate and re-run).
                 rewards[target.reward_key] = float(default_minimum_score)
                 target_errors[target.reward_key] = (
                     f"eval failed after {self._baseline_score_attempts} attempt(s); "
                     f"reward floored, not measured"
+                    + (f"; cause: {cause}" if cause else "")
                 )
             else:
                 rewards[target.reward_key] = score
@@ -171,17 +187,21 @@ class Verifier:
         split: str,
         commit: str,
         sample_ids: list[int] | None = None,
+        model: str | None = None,
         what: str,
-    ) -> float | None:
+    ) -> tuple[float | None, str | None]:
         """One reward-critical admin eval with bounded retry.
 
-        Returns the eval's score with errored samples counted 0.0 (min-fill:
-        an errored sample is a failed measurement of the candidate, and
-        excluding it would reward candidates whose failures error out rather
-        than score). An eval in which NO sample scored is indistinguishable
-        from an infrastructure outage and must never quietly become 0.0, so it
-        is retried like an exception; ``None`` after the last attempt means
-        "could not measure", and the caller decides the fail-safe.
+        Returns ``(score, failure_cause)``. The score counts errored samples
+        as 0.0 (min-fill: an errored sample is a failed measurement of the
+        candidate, and excluding it would reward candidates whose failures
+        error out rather than score). An eval in which NO sample scored is
+        indistinguishable from an infrastructure outage and must never quietly
+        become 0.0, so it is retried like an exception; ``(None, cause)``
+        after the last attempt means "could not measure", and the caller
+        decides the fail-safe. ``cause`` summarizes the dominant per-sample
+        errors so the durable record can distinguish a deterministically
+        crashing candidate from an outage.
         """
         last_error: Exception | str | None = None
         for attempt in range(1, self._baseline_score_attempts + 1):
@@ -192,9 +212,13 @@ class Verifier:
                     split=split,
                     commit=commit,
                     sample_ids=sample_ids,
+                    model=model,
                 )
                 if exp.result.score(fill_score=None) is None:
-                    last_error = "eval scored no samples (all errored or empty)"
+                    last_error = (
+                        "eval scored no samples (all errored or empty); "
+                        + self._dominant_sample_errors(exp)
+                    )
                     logger.warning(
                         "%s attempt %d/%d: %s",
                         what, attempt, self._baseline_score_attempts, last_error,
@@ -207,7 +231,7 @@ class Verifier:
                     # other unmeasurable outcome, never bypass the loop.
                     last_error = "eval returned no aggregate score"
                     continue
-                return float(score)
+                return float(score), None
             except Exception as exc:  # noqa: BLE001 - retried, then surfaced as None
                 last_error = exc
                 logger.warning(
@@ -218,7 +242,34 @@ class Verifier:
             "%s failed after %d attempt(s): %s",
             what, self._baseline_score_attempts, last_error,
         )
-        return None
+        return None, str(last_error) if last_error is not None else None
+
+    @staticmethod
+    def _dominant_sample_errors(exp) -> str:
+        """Frequency summary of the per-sample error strings of an experiment
+        (e.g. "12x: No verifier rewards for task ... (attempts died:
+        UnsupportedParamsError x6)"). One identical cause across every sample
+        is the signature of a deterministic candidate crash; a mixed bag points
+        at infra. Top few only: the value is the shape, not the full list.
+        Diagnostics must never fail finalize, so any surprise shape degrades
+        to a fixed string instead of raising."""
+        try:
+            counts: dict[str, int] = {}
+            for r in exp.result.sample_results.values():
+                if r.error:
+                    # Group on the CAUSE, not the sample: runner errors embed
+                    # the task name ("No verifier rewards for task 'x/y'..."),
+                    # so keying on the raw string would leave every sample in
+                    # its own 1x bucket and a deterministic crash across a
+                    # multi-task slice would read as a mixed bag.
+                    key = re.sub(r"for task '[^']*'", "for task '…'", r.error)
+                    counts[key] = counts.get(key, 0) + 1
+            if not counts:
+                return "no per-sample errors recorded"
+            top = sorted(counts.items(), key=lambda i: -i[1])[:3]
+            return "; ".join(f"{n}x: {err}" for err, n in top)
+        except Exception:  # noqa: BLE001 - diagnostics only
+            return "no per-sample errors recorded"
 
     async def _maybe_score_baseline(self, rewards: dict[str, float]) -> dict:
         """Admin-score the unmodified baseline on every target and report it.
@@ -254,12 +305,15 @@ class Verifier:
             try:
                 baselines: dict[str, float] = {}
                 for target in self.targets:
+                    # Same executor override as the candidate's target eval, or
+                    # the baseline comparison is not like-for-like.
                     exp = await self.engine.evaluate_admin(
                         task=target.task,
                         dataset_id=target.dataset_id,
                         split=target.split,
                         commit=self.base_commit,
                         sample_ids=target.sample_ids,
+                        model=target.model,
                     )
                     if exp.result.score(fill_score=None) is None:
                         # All-error/empty is an outage, not a 0.0 baseline: a
@@ -426,7 +480,7 @@ class Verifier:
         for idx, (_, row) in enumerate(shortlist.iterrows()):
             commit = row["candidate_commit"]
             dataset_id = row.get("dataset_subset_dataset_id")
-            score = await self._admin_eval_score(
+            score, _cause = await self._admin_eval_score(
                 task=self.selection_task,
                 dataset_id=dataset_id,
                 split=self.selection_split,
@@ -462,7 +516,7 @@ class Verifier:
             base_dataset_id = self.selection_dataset_id
             if base_dataset_id is None:
                 base_dataset_id = shortlist.iloc[0].get("dataset_subset_dataset_id")
-            base_score_opt = await self._admin_eval_score(
+            base_score_opt, _cause = await self._admin_eval_score(
                 task=self.selection_task,
                 dataset_id=base_dataset_id,
                 split=self.selection_split,
