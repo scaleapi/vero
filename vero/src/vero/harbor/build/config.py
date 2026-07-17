@@ -36,6 +36,12 @@ class TargetSpec(BaseModel):
     split: str
     reward_key: str = "reward"
     sample_ids: list[int] | None = None
+    # Executor-model override for this target (transfer probe; Mode B only):
+    # score the selected commit AND the baseline under a model it was not
+    # optimized on, so model-specific couplings (measured live: hardcoded
+    # temperature=0 crashing 72/72 on an executor that rejects it) surface at
+    # finalize instead of one substrate away.
+    model: str | None = None
 
 
 class _BuildConfigBase(BaseModel):
@@ -67,6 +73,18 @@ class _BuildConfigBase(BaseModel):
     # WORSE than the untouched repo is visible as a regression.
     score_baseline: bool = False
 
+    # Minimum sample count for agent-chosen subset evals of non_viewable splits
+    # (full-split evals always pass; <=1 disables). Aggregate responses carry
+    # mean_score, so singleton subsets would hand back per-sample labels.
+    k_anonymity_floor: int = 5
+
+    # Instruction lever: render the "unspent budget is wasted" persistence
+    # bullet that tells the optimizer to keep spending (re-measure the champion,
+    # try one more variant) instead of stopping early. On by default (current
+    # behavior); off makes stopping-early a choice the agent arrives at itself,
+    # which is the ablation arm for measuring what the exhortation contributes.
+    instruct_exhaust_budget: bool = True
+
     # write-access: paths in the target repo the optimizer may NOT edit
     # (the scorer, by default). Applied as unix perms in main before the agent runs.
     read_only_paths: list[str] = Field(default_factory=list)
@@ -81,6 +99,15 @@ class _BuildConfigBase(BaseModel):
     # eval params baked into the ServeConfig
     timeout: int = 1800
     max_concurrency: int = 8
+
+    # Wall-clock budget for the VERIFIER phase (Harbor's [verifier] timeout_sec).
+    # Finalize is not one eval: it runs up to rescore_top_k shortlist re-scores
+    # + 1 floor eval + len(targets) target evals + len(targets) x
+    # baseline_score_attempts baseline evals, each a full nested run in Mode B.
+    # Sizing this at one eval's duration kills finalize mid-flight and the trial
+    # ships NO reward.json. Defaults to `timeout` when unset; size it as
+    # (rescore_top_k + 1 + 3 x len(targets)) x a single eval's duration + slack.
+    verifier_timeout: int | None = None
 
 
 class BuildConfigA(_BuildConfigBase):

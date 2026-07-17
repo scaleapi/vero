@@ -89,7 +89,7 @@ class TestAutoBestSelection:
         )
         admin_scores = {"hi": 0.1, "lo": 0.95}
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(
                 result=MagicMock(score=MagicMock(return_value=admin_scores.get(commit, 0.99)))
             )
@@ -125,7 +125,7 @@ class TestAutoBestSelection:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.7)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -172,7 +172,7 @@ class TestSubsetEvalShortlistFilter:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             # admin re-score agrees the full-split ranking is right
             score = {"solid": 0.7, "lucky": 0.3}.get(commit, 0.5)
             return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
@@ -212,7 +212,7 @@ class TestSubsetEvalShortlistFilter:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -260,7 +260,7 @@ class TestAutoBestBaselineFloor:
         # agent admin-scores 0.2 on the selection split; base admin-scores 0.3;
         # the reverted base scores 0.35 on the target split (distinct values so the
         # assertions can tell the target eval apart from the floor comparison).
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             if commit == "base":
                 score = 0.35 if split == "validation" else 0.3
             else:
@@ -296,7 +296,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.3)))  # all equal
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -327,7 +327,7 @@ class TestAutoBestBaselineFloor:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -349,7 +349,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             score = 0.3 if commit == "base" else 0.6  # agent genuinely improves
             return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
 
@@ -374,7 +374,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.2)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -476,7 +476,7 @@ class TestNoCandidateFallback:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -610,3 +610,292 @@ class TestBaselineAtFinalize:
         assert rewards == {"accuracy": 0.9}
         assert not (tmp_path / "baseline.json").exists()
         assert any("base_commit is not set" in m for m in caplog.messages)
+
+
+class TestSelectionIntegrity:
+    """PR: finalize idempotency, pooled shortlisting, retrying reward-critical
+    evals, and the fail-safe floor. Each behavior traces to a live incident:
+    optimizers farmed max-over-rows selection with re-measure commits, and a
+    disk-full trial shipped no reward.json because finalize was single-shot."""
+
+    def _submit(self, tmp_path, commit="cand"):
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": commit}))
+
+    @pytest.mark.asyncio
+    async def test_finalize_is_idempotent(self, tmp_path):
+        # A retried finalize must replay the first result verbatim, not
+        # recompute (a re-run would re-rank against a DB polluted by the first
+        # finalize's own admin evals and could crown a different champion).
+        self._submit(tmp_path)
+        engine = _engine([0.8, 0.1])  # a recompute would consume the 0.1
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        first = await v.finalize()
+        second = await v.finalize()
+        assert first == second
+        assert engine.evaluate_admin.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_same_commit_re_measures_pool_to_mean(self, tmp_path):
+        # Re-measuring a commit must reduce variance, not mint lottery draws:
+        # A's [0.9, 0.1] pools to 0.5 and loses the only shortlist slot to
+        # B's 0.6. Max-over-rows would have shortlisted A on the lucky 0.9.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["validation"] * 3,
+                "dataset_subset_dataset_id": ["ds1"] * 3,
+                "candidate_commit": ["A", "A", "B"],
+                "mean_score": [0.9, 0.1, 0.6],
+                "candidate_created_at": [1, 2, 3],
+            }
+        )
+        engine.evaluate_admin = AsyncMock(
+            side_effect=lambda **kw: MagicMock(
+                result=MagicMock(score=MagicMock(return_value=0.7))
+            )
+        )
+        engine.evaluator.workspace.tree_hash = AsyncMock(side_effect=lambda ref: ref + "-tree")
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="validation",
+            selection_task="math",
+            rescore_top_k=1,
+            auto_best_baseline_floor=False,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
+        )
+        await v.finalize()
+        rescored = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert "A" not in rescored
+        assert "B" in rescored
+
+    @pytest.mark.asyncio
+    async def test_identical_trees_pool_and_do_not_stuff_shortlist(self, tmp_path):
+        # A1/A2 are the same content (same git tree) recommitted: they must
+        # collapse into ONE candidate group (pooled 0.85), so B still gets a
+        # top-2 shortlist slot and the group is re-scored exactly once.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["validation"] * 3,
+                "dataset_subset_dataset_id": ["ds1"] * 3,
+                "candidate_commit": ["A1", "A2", "B"],
+                "mean_score": [0.9, 0.8, 0.55],
+                "candidate_created_at": [1, 2, 3],
+            }
+        )
+        engine.evaluate_admin = AsyncMock(
+            side_effect=lambda **kw: MagicMock(
+                result=MagicMock(score=MagicMock(return_value=0.7))
+            )
+        )
+        trees = {"A1": "T", "A2": "T", "B": "TB"}
+        engine.evaluator.workspace.tree_hash = AsyncMock(side_effect=lambda ref: trees[ref])
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="validation",
+            selection_task="math",
+            rescore_top_k=2,
+            auto_best_baseline_floor=False,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
+        )
+        await v.finalize()
+        # count only selection-split re-scores (the winner also gets a final
+        # eval on the TARGET split, which is not a shortlist draw)
+        rescored = [
+            c.kwargs["commit"]
+            for c in engine.evaluate_admin.await_args_list
+            if c.kwargs["split"] == "validation"
+        ]
+        assert "B" in rescored
+        assert len([c for c in rescored if c in ("A1", "A2")]) == 1
+
+    @pytest.mark.asyncio
+    async def test_floor_fail_safe_reverts_on_unmeasurable_baseline(self, tmp_path):
+        # If the floor's baseline eval cannot be measured, shipping the
+        # candidate would re-open the shipped-regression hole: revert to seed.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["validation"],
+                "dataset_subset_dataset_id": ["ds1"],
+                "candidate_commit": ["cand"],
+                "mean_score": [0.9],
+                "candidate_created_at": [1],
+            }
+        )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
+            if commit == "base" and split == "validation":
+                raise RuntimeError("nested run crashed")
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.9)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        engine.evaluator.workspace.tree_hash = AsyncMock(side_effect=lambda ref: ref + "-tree")
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="validation",
+            selection_task="math",
+            base_commit="base",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
+        )
+        await v.finalize()
+        # the final (target) eval ran on the SEED, not the unverified candidate
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "base"
+        assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_transfer_target_model_reaches_champion_and_baseline_evals(self, tmp_path):
+        # A target's executor-model override must apply to BOTH the champion
+        # eval and the baseline eval, or the comparison is not like-for-like.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(
+            return_value=MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
+        )
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            score_baseline=True,
+            base_commit="base",
+            targets=[VerificationTarget(
+                task="t", dataset_id="ds", split="test",
+                reward_key="reward_4o", model="openai/gpt-4o",
+            )],
+        )
+        await v.finalize()
+        models = [c.kwargs["model"] for c in engine.evaluate_admin.await_args_list]
+        commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert models == ["openai/gpt-4o", "openai/gpt-4o"]
+        assert set(commits) == {"cand", "base"}
+
+    @pytest.mark.asyncio
+    async def test_floored_target_records_dominant_crash_cause(self, tmp_path):
+        # An all-errored target eval floors the reward AND names the dominant
+        # per-sample cause in target_errors: a champion that deterministically
+        # crashes on this target's executor must be distinguishable from an
+        # infra outage in the one durable record.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        crash = "No verifier rewards for task 't'. (attempts died: UnsupportedParamsError x6)"
+        exp = MagicMock()
+        exp.result.score = MagicMock(return_value=None)
+        exp.result.sample_results = {
+            i: MagicMock(error=crash) for i in range(3)
+        }
+        engine.evaluate_admin = AsyncMock(return_value=exp)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"reward": 0.0}
+        assert "UnsupportedParamsError x6" in result["target_errors"]["reward"]
+        assert "3x:" in result["target_errors"]["reward"]
+
+    @pytest.mark.asyncio
+    async def test_crash_cause_clusters_across_task_names(self, tmp_path):
+        # Runner error strings embed the task name; a slice spanning several
+        # tasks that all die of the SAME exception must still cluster as one
+        # dominant cause (grouping normalizes the task name away), or the
+        # deterministic-crash signature degrades into 1x singletons.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        exp = MagicMock()
+        exp.result.score = MagicMock(return_value=None)
+        exp.result.sample_results = {
+            i: MagicMock(
+                error=(
+                    f"No verifier rewards for task 'org/task-{i}'. "
+                    f"(attempts died: UnsupportedParamsError x6)"
+                )
+            )
+            for i in range(3)
+        }
+        engine.evaluate_admin = AsyncMock(return_value=exp)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert "3x:" in result["target_errors"]["reward"]
+        assert "UnsupportedParamsError x6" in result["target_errors"]["reward"]
+
+    @pytest.mark.asyncio
+    async def test_target_eval_retries_then_floors_with_error_marker(self, tmp_path):
+        # A persistently failing target eval floors the reward (reward.json
+        # must still ship) and records the outage in the wrapper so a floored
+        # reward can never masquerade as a measured 0.0.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(side_effect=RuntimeError("boom"))
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"reward": 0.0}
+        assert "reward" in result["target_errors"]
+        assert engine.evaluate_admin.await_count == 2  # retried before flooring
+
+    @pytest.mark.asyncio
+    async def test_target_eval_transient_failure_recovers(self, tmp_path):
+        self._submit(tmp_path)
+        engine = MagicMock()
+        healthy = MagicMock(result=MagicMock(score=MagicMock(return_value=0.8)))
+        engine.evaluate_admin = AsyncMock(side_effect=[RuntimeError("blip"), healthy])
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"reward": 0.8}
+        assert "target_errors" not in result
+
+    @pytest.mark.asyncio
+    async def test_all_error_eval_is_retried_not_zeroed(self, tmp_path):
+        # An eval in which no sample scored (score(fill_score=None) is None)
+        # is an outage: retry it, never let it quietly become a measured 0.0.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        all_error = MagicMock(
+            result=MagicMock(
+                score=MagicMock(side_effect=lambda fill_score=0.0: None if fill_score is None else 0.0)
+            )
+        )
+        healthy = MagicMock(result=MagicMock(score=MagicMock(return_value=0.7)))
+        engine.evaluate_admin = AsyncMock(side_effect=[all_error, healthy])
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            baseline_score_attempts=2,
+            targets=[VerificationTarget(task="t", dataset_id="ds", split="test", reward_key="reward")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"reward": 0.7}
+        assert engine.evaluate_admin.await_count == 2

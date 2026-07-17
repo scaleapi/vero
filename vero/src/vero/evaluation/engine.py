@@ -146,8 +146,18 @@ class EvaluationEngine:
     # Evaluation
     # ------------------------------------------------------------------
 
-    async def evaluate(self, req: EvalRequest, *, admin: bool = False) -> Experiment:
-        """Meter (unless admin) and run one evaluation; return the full Experiment.
+    async def evaluate(
+        self, req: EvalRequest, *, admin: bool = False, free: bool = False
+    ) -> Experiment:
+        """Meter (unless admin or free) and run one evaluation; return the full
+        Experiment.
+
+        ``admin`` and ``free`` are distinct authorities and must stay separate:
+        ``admin`` grants ACCESS (bypasses the tier gate and the ledger), while
+        ``free`` only waives the BUDGET debit for an otherwise ordinary agent
+        eval (the sidecar's one free baseline eval). A free eval still runs as
+        the agent: conflating the two let the free-baseline path evaluate
+        ``no_access`` splits and return their aggregate score to the agent.
 
         ``no_access`` gating is EXPLICIT and fail-closed: when ``split_accesses``
         is configured, the split's tier is resolved (an unlisted split defaults
@@ -163,7 +173,7 @@ class EvaluationEngine:
                     f"and cannot be evaluated by the agent."
                 )
         sample_ids, n = self.resolve_samples(req)
-        if not admin:
+        if not admin and not free:
             await self.budget.reserve(req.dataset_id, req.split, n)
         return await self.evaluator.evaluate(
             commit=req.commit,
@@ -183,6 +193,7 @@ class EvaluationEngine:
         split: str,
         commit: str,
         sample_ids: list[int] | None = None,
+        model: str | None = None,
     ) -> Experiment:
         """Admin/verifier evaluation: explicit ``task``, no budget, no allowlist.
 
@@ -190,7 +201,23 @@ class EvaluationEngine:
         this scores an arbitrary ``(task, dataset_id, split)`` — including held-out
         tasks/splits the agent never had access to. Used by the verifier to score
         the selected commit on its configured targets.
+
+        ``model`` overrides the executor model for this one eval (rides
+        ``task_params`` so the eval strategy can honor it; the Mode-B
+        HarborRunner does, the Mode-A vero-task path ignores it). Used for
+        transfer targets: scoring the champion under a model it was NOT
+        optimized on.
         """
+        params = self.run_constraints
+        if model is not None:
+            params = params.model_copy(
+                update={
+                    "task_params": {
+                        **(params.task_params or {}),
+                        "harbor_model_override": model,
+                    }
+                }
+            )
         return await self.evaluator.evaluate(
             commit=commit,
             dataset_id=dataset_id,
@@ -198,7 +225,7 @@ class EvaluationEngine:
             task=task,
             sample_ids=sample_ids,
             db=self.db,
-            evaluation_parameters=self.run_constraints,
+            evaluation_parameters=params,
         )
 
     def status(self) -> dict[tuple[str, str], SplitBudget]:

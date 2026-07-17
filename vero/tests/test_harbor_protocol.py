@@ -91,3 +91,36 @@ class TestBuildStatus:
         assert by_split["validation"]["tier"] == str(SplitAccessLevel.non_viewable)
         assert by_split["validation"]["agent_evaluable"] is True
         assert by_split["validation"]["remaining_run_budget"] == 3
+
+    def test_advertises_subset_floor_on_non_viewable_only(self):
+        budget = {
+            ("train", "ds1"): SplitBudget(split="train", dataset_id="ds1", total_run_budget=10),
+            ("validation", "ds1"): SplitBudget(split="validation", dataset_id="ds1", total_run_budget=3),
+        }
+        accesses = [
+            SplitAccess.viewable("train"),
+            SplitAccess.non_viewable("validation"),
+        ]
+        status = build_status(
+            submit_enabled=False,
+            budget=budget,
+            split_accesses=accesses,
+            k_anonymity_floor=5,
+        )
+        by_split = {s["split"]: s for s in status.splits}
+        assert by_split["validation"]["min_subset_samples"] == 5
+        assert by_split["train"]["min_subset_samples"] == 1
+
+    def test_default_floor_matches_sidecar_enforcement_default(self):
+        # A caller that forgets to pass the floor must not advertise a laxer
+        # one than EvaluationSidecar enforces by default (5): agents would
+        # send sub-floor requests that get rejected.
+        budget = {
+            ("validation", "ds1"): SplitBudget(split="validation", dataset_id="ds1", total_run_budget=3),
+        }
+        status = build_status(
+            submit_enabled=False,
+            budget=budget,
+            split_accesses=[SplitAccess.non_viewable("validation")],
+        )
+        assert status.splits[0]["min_subset_samples"] == 5

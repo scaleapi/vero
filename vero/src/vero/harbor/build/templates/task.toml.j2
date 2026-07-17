@@ -13,8 +13,11 @@ user = "agent"
 # Shared mode: Harbor runs tests/test.sh in `main` with the whole env (incl. the
 # eval-sidecar) still up. The verifier runs as root, reads the admin token, and
 # calls the sidecar's `finalize` endpoint to score the selected commit.
+# timeout_sec must cover the WHOLE finalize battery (shortlist re-scores +
+# floor + targets + baseline attempts), each a full nested eval, or Harbor
+# kills finalize mid-flight and the trial ships no reward.json.
 environment_mode = "shared"
-timeout_sec = {{ timeout }}
+timeout_sec = {{ verifier_timeout }}
 
 [environment]
 # Compose-based environment: environment/docker-compose.yaml adds the eval-sidecar

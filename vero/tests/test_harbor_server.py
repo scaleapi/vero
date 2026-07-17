@@ -1,6 +1,7 @@
 """Tests for vero.harbor.server.EvaluationSidecar — handlers, tier-routing, submit."""
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,9 +42,19 @@ def _experiment(split: str, commit: str = "abcdef123456") -> Experiment:
     )
 
 
-def _sidecar(tmp_path, *, split, submit_enabled=False, accesses=None, base_commit=None):
+def _sidecar(
+    tmp_path,
+    *,
+    split,
+    submit_enabled=False,
+    accesses=None,
+    base_commit=None,
+    k_anonymity_floor=5,
+):
     engine = MagicMock()
     engine.evaluate = AsyncMock(return_value=_experiment(split))
+    # Full-split request by default (sample_ids None); floor tests override.
+    engine.resolve_samples = MagicMock(return_value=(None, 3))
     engine.budget = BudgetLedger(
         [SplitBudget(split=split, dataset_id="ds1", total_run_budget=5, total_sample_budget=100)]
     )
@@ -56,6 +67,7 @@ def _sidecar(tmp_path, *, split, submit_enabled=False, accesses=None, base_commi
         admin_volume=tmp_path / "admin_vol",
         submit_enabled=submit_enabled,
         base_commit=base_commit,
+        k_anonymity_floor=k_anonymity_floor,
     )
     # Stub the git transfer (integration-tested separately); pin the sha.
     sidecar._transfer_commit = AsyncMock(return_value="abcdef123456")
@@ -72,7 +84,7 @@ class TestRouting:
         )
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
 
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         assert (dest / "summary.json").exists()
         assert {(dest / f"{i}.json").exists() for i in range(3)} == {True}
         assert summary.result_path == str(dest)
@@ -83,7 +95,7 @@ class TestRouting:
         sidecar = _sidecar(tmp_path, split="validation")  # non_viewable -> partial
         summary = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
 
-        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456__e1"
         assert (dest / "summary.json").exists()
         # NO per-sample files -> the label-bearing feedback never reaches the agent
         assert not list(dest.glob("[0-9]*.json"))
@@ -117,7 +129,7 @@ class TestFeedbackTierGate:
             tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
         )
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         assert "secret-0" in (dest / "0.json").read_text()
 
     @pytest.mark.asyncio
@@ -161,7 +173,7 @@ class TestAttemptDetailTierGate:
             return_value=self._experiment_with_attempts("train")
         )
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="train"))
-        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456"
+        dest = tmp_path / "agent_vol" / "results" / "train__abcdef123456__e1"
         blob = json.loads((dest / "0.json").read_text())
         assert blob["output"]["attempts"] == [
             {"reward": 0.0, "exception": "SecretTimeoutError"}
@@ -218,6 +230,135 @@ class TestStatus:
         assert status.splits[0]["remaining_run_budget"] == 5
 
 
+class TestHonestSummary:
+    """summary.json must qualify its mean: how many samples actually scored,
+    how many errored, and the standard error — a mean over 3-of-18 scored
+    samples is a different measurement than a clean full-split mean."""
+
+    @pytest.mark.asyncio
+    async def test_summary_carries_qualifiers(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation")
+        s = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        data = json.loads((Path(s.result_path) / "summary.json").read_text())
+        # scores are [0.0, 1.0, 0.0]
+        assert data["n_samples"] == 3
+        assert data["n_scored"] == 3
+        assert data["n_errored"] == 0
+        assert data["mean_score"] == pytest.approx(1 / 3)
+        # SE of mean_score, i.e. over the zero-filled n_samples population
+        assert data["mean_score_se"] == pytest.approx(1 / 3)  # sd .5774 / sqrt(3)
+        # enum VALUE, not "ExperimentResultStatus.SUCCESS"
+        assert data["status"] == "success"
+
+    @pytest.mark.asyncio
+    async def test_reevals_get_versioned_dirs(self, tmp_path):
+        # Repeat measurements of one commit are exactly the evidence worth
+        # comparing (multifidelity confirms, champion re-evals); the second
+        # eval must not erase the first.
+        sidecar = _sidecar(tmp_path, split="validation")
+        s1 = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        s2 = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert s1.result_path != s2.result_path
+        assert s1.result_path.endswith("__e1")
+        assert s2.result_path.endswith("__e2")
+        assert (Path(s1.result_path) / "summary.json").exists()
+        assert (Path(s2.result_path) / "summary.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_volume_reuse_resumes_ordinal_past_survivors(self, tmp_path):
+        # A restarted sidecar (fresh _eval_seq) on a reused volume must not
+        # wipe the prior session's __e1..__eN evidence.
+        survivor = tmp_path / "agent_vol" / "results" / "validation__old000000000__e7"
+        survivor.mkdir(parents=True)
+        (survivor / "summary.json").write_text("{}")
+        sidecar = _sidecar(tmp_path, split="validation")
+        s = await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert s.result_path.endswith("__e8")
+        assert (survivor / "summary.json").exists()
+
+
+class TestKAnonymityFloor:
+    """Subset evals on non_viewable splits are floored: the aggregate response
+    carries mean_score, so a singleton subset returns that sample's score
+    verbatim, and n singleton evals reconstruct the split's labels wholesale."""
+
+    def _floored(self, tmp_path, **kw):
+        return _sidecar(tmp_path, split="validation", **kw)
+
+    @pytest.mark.asyncio
+    async def test_subset_below_floor_rejected_before_any_work(self, tmp_path):
+        from vero.harbor.server import KAnonymityError
+
+        sidecar = self._floored(tmp_path)
+        sidecar.engine.resolve_samples = MagicMock(return_value=([0], 1))
+        with pytest.raises(KAnonymityError):
+            await sidecar.evaluate(
+                EvalRequest(dataset_id="ds1", split="validation", sample_ids=[0])
+            )
+        # rejected up front: no commit transfer, no eval, no budget debit
+        sidecar._transfer_commit.assert_not_awaited()
+        sidecar.engine.evaluate.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_subset_at_floor_allowed(self, tmp_path):
+        sidecar = self._floored(tmp_path)
+        sidecar.engine.resolve_samples = MagicMock(return_value=(list(range(5)), 5))
+        await sidecar.evaluate(
+            EvalRequest(dataset_id="ds1", split="validation", sample_ids=list(range(5)))
+        )
+        sidecar.engine.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_full_split_always_passes(self, tmp_path):
+        # sample_ids None == the whole split; its aggregate is the intended
+        # surface, so a split smaller than the floor stays evaluable.
+        sidecar = self._floored(tmp_path)
+        sidecar.engine.resolve_samples = MagicMock(return_value=(None, 3))
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        sidecar.engine.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_viewable_split_not_floored(self, tmp_path):
+        # per-sample results are already exposed on viewable splits; nothing to protect
+        sidecar = _sidecar(
+            tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
+        )
+        sidecar.engine.resolve_samples = MagicMock(return_value=([0], 1))
+        await sidecar.evaluate(
+            EvalRequest(dataset_id="ds1", split="train", sample_ids=[0])
+        )
+        sidecar.engine.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_admin_exempt(self, tmp_path):
+        sidecar = self._floored(tmp_path)
+        sidecar.engine.resolve_samples = MagicMock(return_value=([0], 1))
+        await sidecar.evaluate(
+            EvalRequest(dataset_id="ds1", split="validation", sample_ids=[0]),
+            admin=True,
+        )
+        sidecar.engine.evaluate.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_floor_of_one_disables(self, tmp_path):
+        sidecar = self._floored(tmp_path, k_anonymity_floor=1)
+        sidecar.engine.resolve_samples = MagicMock(return_value=([0], 1))
+        await sidecar.evaluate(
+            EvalRequest(dataset_id="ds1", split="validation", sample_ids=[0])
+        )
+        sidecar.engine.evaluate.assert_awaited_once()
+
+    def test_status_advertises_floor(self, tmp_path):
+        sidecar = self._floored(tmp_path)
+        assert sidecar.status().splits[0]["min_subset_samples"] == 5
+
+    def test_status_floor_is_one_for_viewable(self, tmp_path):
+        sidecar = _sidecar(
+            tmp_path, split="train", accesses=[SplitAccess.viewable("train")]
+        )
+        assert sidecar.status().splits[0]["min_subset_samples"] == 1
+
+
 class TestFreeBaselineEval:
     """The agent's first eval of the seeded baseline is budget-free: it is the
     reference every candidate is compared to and can never win selection, so
@@ -226,13 +367,15 @@ class TestFreeBaselineEval:
     no-op edit from an improvement, and quit with budget unspent)."""
 
     @pytest.mark.asyncio
-    async def test_first_baseline_eval_is_unmetered(self, tmp_path):
+    async def test_first_baseline_eval_is_unmetered_but_not_admin(self, tmp_path):
         sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
-        # engine.evaluate was called with admin=True (bypasses the ledger)
-        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is True
-        # but results were routed with the agent tier (summary written)
-        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456"
+        # free waives the ledger; admin stays False so every access gate applies
+        # (riding admin=True here let the free baseline evaluate no_access splits)
+        assert sidecar.engine.evaluate.await_args.kwargs["free"] is True
+        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+        # and results were routed with the agent tier (summary written)
+        dest = tmp_path / "agent_vol" / "results" / "validation__abcdef123456__e1"
         assert (dest / "summary.json").exists()
 
     @pytest.mark.asyncio
@@ -240,19 +383,47 @@ class TestFreeBaselineEval:
         sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
-        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+        assert sidecar.engine.evaluate.await_args.kwargs["free"] is False
 
     @pytest.mark.asyncio
     async def test_non_baseline_commit_always_metered(self, tmp_path):
         sidecar = _sidecar(tmp_path, split="validation", base_commit="other000000")
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
-        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+        assert sidecar.engine.evaluate.await_args.kwargs["free"] is False
 
     @pytest.mark.asyncio
     async def test_no_base_commit_never_free(self, tmp_path):
         sidecar = _sidecar(tmp_path, split="validation")  # base_commit=None
         await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
-        assert sidecar.engine.evaluate.await_args.kwargs["admin"] is False
+        assert sidecar.engine.evaluate.await_args.kwargs["free"] is False
+
+    @pytest.mark.asyncio
+    async def test_failed_free_eval_does_not_consume_freebie(self, tmp_path):
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        sidecar.engine.evaluate = AsyncMock(side_effect=RuntimeError("infra"))
+        with pytest.raises(RuntimeError):
+            await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        # the failed eval gave the agent nothing; the free reference remains
+        assert sidecar.status().free_baseline_available is True
+        sidecar.engine.evaluate = AsyncMock(return_value=_experiment("validation"))
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert sidecar.engine.evaluate.await_args.kwargs["free"] is True
+
+    @pytest.mark.asyncio
+    async def test_freebie_claimed_before_eval_await(self, tmp_path):
+        # The claim must be visible DURING the eval await, or a concurrent
+        # second baseline eval would also resolve free_baseline=True and both
+        # would ride free (asyncio interleaves at await points).
+        sidecar = _sidecar(tmp_path, split="validation", base_commit="abcdef123456")
+        seen: list[bool] = []
+
+        async def _spy(req, **kwargs):
+            seen.append(sidecar._free_baseline_used)
+            return _experiment("validation")
+
+        sidecar.engine.evaluate = AsyncMock(side_effect=_spy)
+        await sidecar.evaluate(EvalRequest(dataset_id="ds1", split="validation"))
+        assert seen == [True]
 
     def test_status_surfaces_free_baseline(self, tmp_path):
         sidecar = _sidecar(tmp_path, split="train", base_commit="abcdef123456")
