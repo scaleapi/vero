@@ -402,6 +402,13 @@ class EvaluationSidecar:
         self,
         request: SidecarEvaluationRequest,
     ) -> SidecarEvaluationResult:
+        async with self.engine.agent_evaluation_scope():
+            return await self._evaluate(request)
+
+    async def _evaluate(
+        self,
+        request: SidecarEvaluationRequest,
+    ) -> SidecarEvaluationResult:
         policy = self._policy(request.backend_id, request.evaluation_set)
         unknown_parameters = sorted(
             set(request.parameters) - set(policy.allowed_parameters)

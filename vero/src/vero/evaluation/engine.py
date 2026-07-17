@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable
 
 from vero.evaluation.backend import BackendRegistry
 from vero.evaluation.budget import BudgetLedger
@@ -87,8 +89,7 @@ def authorize_evaluation_plan(plan: EvaluationPlan) -> AuthorizationResolver:
             )
         if (
             access.agent_selection == AgentSelectionMode.FIXED
-            and request.evaluation_set.selection
-            != definition.evaluation_set.selection
+            and request.evaluation_set.selection != definition.evaluation_set.selection
         ):
             return EvaluationAuthorization(
                 may_evaluate=False,
@@ -132,6 +133,111 @@ class EvaluationEngine:
         self.authorization_resolver = authorization_resolver
         self.listeners: list[Callable[[EvaluationRecord], object]] = []
         self._record_lock = asyncio.Lock()
+        self._agent_evaluations_open = True
+        self._active_agent_evaluations: dict[object, asyncio.Task[object]] = {}
+        self._agent_evaluations_idle = asyncio.Event()
+        self._agent_evaluations_idle.set()
+        self._agent_evaluation_scope_depth: ContextVar[int] = ContextVar(
+            f"vero_agent_evaluation_scope_{id(self)}",
+            default=0,
+        )
+
+    def _begin_evaluation(
+        self,
+        principal: EvaluationPrincipal,
+    ) -> object | None:
+        """Atomically admit and track an agent evaluation on this event loop."""
+
+        if principal != EvaluationPrincipal.AGENT:
+            return None
+        if not self._agent_evaluations_open:
+            raise EvaluationDeniedError("evaluation finalization has started")
+        task = asyncio.current_task()
+        if task is None:  # pragma: no cover - async entry points always have a task
+            raise RuntimeError("evaluation requires an active asyncio task")
+        token = object()
+        self._active_agent_evaluations[token] = task
+        self._agent_evaluations_idle.clear()
+        return token
+
+    def _finish_evaluation(self, token: object | None) -> None:
+        if token is None:
+            return
+        self._active_agent_evaluations.pop(token, None)
+        if not self._active_agent_evaluations:
+            self._agent_evaluations_idle.set()
+
+    @asynccontextmanager
+    async def agent_evaluation_scope(self) -> AsyncIterator[None]:
+        """Track a complete agent request, including candidate import and disclosure."""
+
+        depth = self._agent_evaluation_scope_depth.get()
+        if depth:
+            nested = self._agent_evaluation_scope_depth.set(depth + 1)
+            try:
+                yield
+            finally:
+                self._agent_evaluation_scope_depth.reset(nested)
+            return
+
+        token = self._begin_evaluation(EvaluationPrincipal.AGENT)
+        outer = self._agent_evaluation_scope_depth.set(1)
+        try:
+            yield
+        finally:
+            self._agent_evaluation_scope_depth.reset(outer)
+            self._finish_evaluation(token)
+
+    async def quiesce_agent_evaluations(
+        self,
+        *,
+        timeout_seconds: float,
+        cancellation_grace_seconds: float = 30.0,
+    ) -> int:
+        """Close agent admission and drain requests accepted before finalization.
+
+        The admission close and active-task snapshot contain no suspension point,
+        so a new agent evaluation cannot slip between them. If the bounded wait
+        expires, the remaining requests are cancelled; the normal evaluator
+        cancellation path persists terminal records and refunds their budgets.
+        Admin and system evaluations remain available to the verifier.
+        """
+
+        if timeout_seconds <= 0:
+            raise ValueError("evaluation drain timeout must be positive")
+        if cancellation_grace_seconds <= 0:
+            raise ValueError("evaluation cancellation grace must be positive")
+
+        self._agent_evaluations_open = False
+        admitted = len(self._active_agent_evaluations)
+        if not admitted:
+            return 0
+
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                await self._agent_evaluations_idle.wait()
+            return admitted
+        except TimeoutError:
+            pending = set(self._active_agent_evaluations.values())
+            logger.warning(
+                "Cancelling %d agent evaluation(s) after a %.1fs finalization drain",
+                len(pending),
+                timeout_seconds,
+            )
+            for task in pending:
+                task.cancel()
+            try:
+                async with asyncio.timeout(cancellation_grace_seconds):
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    await self._agent_evaluations_idle.wait()
+            except TimeoutError:
+                logger.error(
+                    "%d agent evaluation(s) did not stop within the %.1fs "
+                    "cancellation grace",
+                    len(self._active_agent_evaluations),
+                    cancellation_grace_seconds,
+                )
+            return admitted
 
     async def authorize(
         self,
@@ -155,6 +261,32 @@ class EvaluationEngine:
         return resolved
 
     async def _evaluate_record(
+        self,
+        *,
+        backend_id: str,
+        request: EvaluationRequest,
+        objective_spec: ObjectiveSpec | None,
+        authorization: EvaluationAuthorization | None,
+        principal: EvaluationPrincipal,
+    ) -> tuple[EvaluationRecord, EvaluationAuthorization]:
+        token = (
+            None
+            if principal == EvaluationPrincipal.AGENT
+            and self._agent_evaluation_scope_depth.get()
+            else self._begin_evaluation(principal)
+        )
+        try:
+            return await self._execute_record(
+                backend_id=backend_id,
+                request=request,
+                objective_spec=objective_spec,
+                authorization=authorization,
+                principal=principal,
+            )
+        finally:
+            self._finish_evaluation(token)
+
+    async def _execute_record(
         self,
         *,
         backend_id: str,

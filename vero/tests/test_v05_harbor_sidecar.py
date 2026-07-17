@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 import subprocess
@@ -22,6 +23,7 @@ from vero.evaluation import (
     EvaluationBudget,
     EvaluationCost,
     EvaluationDatabase,
+    EvaluationDeniedError,
     EvaluationEngine,
     EvaluationAuthorization,
     EvaluationLimits,
@@ -269,6 +271,61 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
         "secondary",
     ]
     assert status.evaluation_access[0].expose_case_resources is False
+
+
+@pytest.mark.asyncio
+async def test_sidecar_tracks_candidate_import_as_part_of_an_agent_evaluation(
+    tmp_path,
+):
+    sidecar, original_transport, _ = _sidecar(tmp_path)
+
+    class BlockingTransport(StubTransport):
+        def __init__(self, candidate):
+            super().__init__(candidate)
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def import_candidate(self, version=None):
+            self.calls.append(version)
+            self.started.set()
+            await self.release.wait()
+            return self.candidate
+
+    transport = BlockingTransport(original_transport.candidate)
+    sidecar.candidate_transport = transport
+    evaluation = asyncio.create_task(
+        sidecar.evaluate(
+            SidecarEvaluationRequest(
+                backend_id="primary",
+                evaluation_set=EvaluationSet(
+                    name="benchmark",
+                    partition="validation",
+                ),
+                version="HEAD",
+            )
+        )
+    )
+    await transport.started.wait()
+
+    drain = asyncio.create_task(
+        sidecar.engine.quiesce_agent_evaluations(timeout_seconds=1.0)
+    )
+    await asyncio.sleep(0)
+    assert not drain.done()
+    transport.release.set()
+
+    assert (await evaluation).receipt.status == EvaluationStatus.SUCCESS
+    assert await drain == 1
+    with pytest.raises(EvaluationDeniedError, match="finalization has started"):
+        await sidecar.evaluate(
+            SidecarEvaluationRequest(
+                backend_id="primary",
+                evaluation_set=EvaluationSet(
+                    name="benchmark",
+                    partition="validation",
+                ),
+            )
+        )
 
 
 def test_sidecar_status_reports_inference_usage_and_remaining_budget(tmp_path):

@@ -148,6 +148,7 @@ class HarborBuildConfig(EvaluationModel):
     max_concurrency: int = Field(default=8, ge=1)
     error_rate_threshold: float | None = Field(default=0.1, gt=0, le=1)
     verifier_timeout_seconds: int | None = Field(default=None, ge=1)
+    evaluation_drain_timeout_seconds: float | None = Field(default=None, gt=0)
 
     secrets: list[str] = Field(default_factory=list)
     inference_gateway: InferenceGatewaySpec | None = None

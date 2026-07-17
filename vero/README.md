@@ -579,6 +579,15 @@ Evaluation case budgets are cumulative rather than per-run. An agent may spend
 its entire remaining case budget in one authorized evaluation; deciding between
 wide measurements and more iterations is part of its optimization strategy.
 
+Finalization closes the agent evaluation entrance and waits for every request
+the sidecar already accepted before selecting a candidate. This includes an
+evaluation launched from a background shell, so ending the optimizer process
+cannot race a still-running validation measurement. The compiled deployment's
+`evaluation_drain_timeout_seconds` defaults to `timeout_seconds`; after that
+bounded wait, VeRO cancels the unfinished evaluation through the normal durable
+cancellation and budget-refund path. Trusted verifier evaluations remain
+available after the agent entrance closes.
+
 Because Harbor verification uses the shared environment, the verifier exports
 the complete sidecar session before teardown. Successful runs contain
 `session.tar.gz`, `session.tar.gz.sha256`, `experiment.html`, `status.json`, and

@@ -245,9 +245,7 @@ def _deployment_config(
                 INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
             ),
             "inference_gateway_token": evaluation_inference_token,
-            "case_resources_cache_path": (
-                f"{ADMIN_VOLUME}/case-resources/{partition}"
-            ),
+            "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
             "extra_args": config.extra_harbor_args,
         }
 
@@ -355,6 +353,9 @@ def _deployment_config(
         "admin_volume": ADMIN_VOLUME,
         "submit_enabled": config.reward_mode == "submit",
         "score_baseline": config.score_baseline,
+        "evaluation_drain_timeout_seconds": (
+            config.evaluation_drain_timeout_seconds or config.timeout_seconds
+        ),
         "inference_usage_path": (
             INFERENCE_STATE if config.inference_gateway is not None else None
         ),

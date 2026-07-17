@@ -84,6 +84,7 @@ class HarborDeploymentConfig(EvaluationModel):
     inference_limits: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
     submit_enabled: bool = False
     score_baseline: bool = True
+    evaluation_drain_timeout_seconds: float = Field(default=600.0, gt=0)
 
     @field_validator(
         "repo_path",
@@ -270,5 +271,6 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         targets=parsed.targets,
         admin_volume=Path(parsed.admin_volume),
         score_baseline=parsed.score_baseline,
+        evaluation_drain_timeout_seconds=parsed.evaluation_drain_timeout_seconds,
     )
     return SidecarComponents(sidecar=sidecar, verifier=verifier)

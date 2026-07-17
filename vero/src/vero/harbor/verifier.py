@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import statistics
 from collections import defaultdict
@@ -17,6 +18,7 @@ from vero.evaluation import (
     EvaluationLimits,
     EvaluationModel,
     EvaluationRecord,
+    EvaluationPrincipal,
     EvaluationRequest,
     EvaluationSet,
     ObjectiveSpec,
@@ -24,6 +26,8 @@ from vero.evaluation import (
 from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.persistence import _atomic_write_json
 from vero.harbor.sidecar import Submission
+
+logger = logging.getLogger(__name__)
 
 
 class NoCandidateError(RuntimeError):
@@ -84,7 +88,11 @@ class VerificationSelection(EvaluationModel):
             )
         if self.backend_id is not None and not self.backend_id.strip():
             raise ValueError("selection backend_id must not be empty")
-        if self.baseline_floor and self.mode == "auto_best" and self.baseline_candidate is None:
+        if (
+            self.baseline_floor
+            and self.mode == "auto_best"
+            and self.baseline_candidate is None
+        ):
             raise ValueError("baseline_floor requires baseline_candidate")
         return self
 
@@ -118,6 +126,7 @@ class CanonicalVerifier:
         targets: list[VerificationTarget],
         admin_volume: Path,
         score_baseline: bool = True,
+        evaluation_drain_timeout_seconds: float = 600.0,
     ):
         if not targets:
             raise ValueError("at least one verification target is required")
@@ -129,7 +138,10 @@ class CanonicalVerifier:
                 raise ValueError(
                     f"verification target references unknown backend {target.backend_id!r}"
                 )
-        if selection.backend_id is not None and selection.backend_id not in engine.backends:
+        if (
+            selection.backend_id is not None
+            and selection.backend_id not in engine.backends
+        ):
             raise ValueError(
                 f"selection references unknown backend {selection.backend_id!r}"
             )
@@ -138,6 +150,9 @@ class CanonicalVerifier:
         self.targets = targets
         self.admin_volume = Path(admin_volume)
         self.score_baseline = score_baseline
+        if evaluation_drain_timeout_seconds <= 0:
+            raise ValueError("evaluation drain timeout must be positive")
+        self.evaluation_drain_timeout_seconds = evaluation_drain_timeout_seconds
         self._lock = asyncio.Lock()
         self._result: VerificationResult | None = None
 
@@ -206,10 +221,7 @@ class CanonicalVerifier:
             key=lambda item: item[0],
             reverse=self.selection.objective.direction == "maximize",
         )
-        return [
-            candidate
-            for _, candidate in pooled[: self.selection.rescore_top_k]
-        ]
+        return [candidate for _, candidate in pooled[: self.selection.rescore_top_k]]
 
     async def _evaluate(
         self,
@@ -239,6 +251,7 @@ class CanonicalVerifier:
                         meter_budget=False,
                         disclosure="full",
                     ),
+                    principal=EvaluationPrincipal.ADMIN,
                 )
                 if (
                     record.objective is not None
@@ -331,8 +344,7 @@ class CanonicalVerifier:
             return target.failure_value, None, error
         assert record.objective is not None and record.objective.value is not None
         reward = (
-            target.reward_scale * float(record.objective.value)
-            + target.reward_offset
+            target.reward_scale * float(record.objective.value) + target.reward_offset
         )
         return reward, record.id, None
 
@@ -389,8 +401,18 @@ class CanonicalVerifier:
                         self.result_path.read_text(encoding="utf-8")
                     )
                 except Exception as error:
-                    raise ValueError(f"invalid durable finalization result: {error}") from error
+                    raise ValueError(
+                        f"invalid durable finalization result: {error}"
+                    ) from error
                 return self._result
+            drained = await self.engine.quiesce_agent_evaluations(
+                timeout_seconds=self.evaluation_drain_timeout_seconds,
+            )
+            if drained:
+                logger.info(
+                    "Finalization drained %d accepted agent evaluation(s)",
+                    drained,
+                )
             result = await self._finalize()
             _atomic_write_json(
                 self.result_path,

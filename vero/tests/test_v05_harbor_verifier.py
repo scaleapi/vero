@@ -54,7 +54,15 @@ class FakeEngine:
         self.database = EvaluationDatabase(id="session")
         self.scores = scores
         self.calls = []
+        self.drain_calls = []
+        self.on_drain = None
         self._sequence = 0
+
+    async def quiesce_agent_evaluations(self, *, timeout_seconds):
+        self.drain_calls.append(timeout_seconds)
+        if self.on_drain is not None:
+            self.on_drain()
+        return 0
 
     async def evaluate_record(
         self,
@@ -63,6 +71,7 @@ class FakeEngine:
         request,
         objective_spec,
         authorization,
+        principal,
     ):
         self.calls.append((request.candidate.version, request.evaluation_set.name))
         key = (request.candidate.version, request.evaluation_set.name)
@@ -82,6 +91,7 @@ class FakeEngine:
         )
         self.database.add_evaluation(record)
         assert authorization.meter_budget is False
+        assert principal.value == "admin"
         return record
 
 
@@ -176,7 +186,9 @@ async def test_verifier_pools_repeats_then_admin_rescores_and_scores_baseline(tm
         [(farmed, 0.95), (duplicate, 0.05), (steady, 0.7)]
     ):
         engine.database.add_evaluation(
-            _record(f"record-{index}", candidate, EvaluationSet(name="selection"), score)
+            _record(
+                f"record-{index}", candidate, EvaluationSet(name="selection"), score
+            )
         )
 
     result = await _verifier(tmp_path, engine, baseline=baseline).finalize()
@@ -190,6 +202,43 @@ async def test_verifier_pools_repeats_then_admin_rescores_and_scores_baseline(tm
         ("steady", "test"),
         ("baseline", "test"),
     ]
+    assert engine.drain_calls == [600.0]
+
+
+@pytest.mark.asyncio
+async def test_verifier_waits_for_an_inflight_selection_evaluation(tmp_path):
+    baseline = _candidate("baseline")
+    candidate = _candidate("candidate", seconds=1)
+    engine = FakeEngine(
+        {
+            ("candidate", "selection"): 0.8,
+            ("baseline", "selection"): 0.5,
+            ("candidate", "test"): 0.9,
+        }
+    )
+
+    def complete_inflight():
+        engine.database.add_evaluation(
+            _record(
+                "agent-selection",
+                candidate,
+                EvaluationSet(name="selection"),
+                0.75,
+            )
+        )
+
+    engine.on_drain = complete_inflight
+
+    result = await _verifier(
+        tmp_path,
+        engine,
+        baseline=baseline,
+        score_baseline=False,
+    ).finalize()
+
+    assert result.candidate == candidate
+    assert result.rewards == {"reward": 0.9}
+    assert engine.drain_calls == [600.0]
 
 
 @pytest.mark.asyncio

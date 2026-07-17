@@ -242,11 +242,13 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["selection"]["backend_id"] == "harbor-validation"
     assert serve["targets"][0]["backend_id"] == "harbor-test"
     assert serve["targets"][0]["reward_scale"] == 1.0
+    assert serve["evaluation_drain_timeout_seconds"] == config.timeout_seconds
     assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
-    assert serve["backends"]["harbor-validation"][
-        "case_resources_cache_path"
-    ] == "/state/admin/case-resources/validation"
+    assert (
+        serve["backends"]["harbor-validation"]["case_resources_cache_path"]
+        == "/state/admin/case-resources/validation"
+    )
     assert serve["access_policies"][0]["limits"]["retry"]["max_attempts"] == 1
     assert "use_evaluation_copies" not in serve
     for partition, backend in serve["backends"].items():

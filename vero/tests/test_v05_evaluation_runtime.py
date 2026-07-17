@@ -658,6 +658,103 @@ async def test_cancelled_evaluation_is_terminal_indexed_and_refunded(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_finalization_drains_admitted_agent_evaluations_and_closes_admission(
+    tmp_path: Path,
+):
+    class BlockingBackend(StubBackend):
+        def __init__(self):
+            super().__init__(
+                report=EvaluationReport(
+                    status=EvaluationStatus.SUCCESS,
+                    metrics={"score": 0.75},
+                )
+            )
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def evaluate(self, *, context, request):
+            self.evaluate_calls += 1
+            self.started.set()
+            await self.release.wait()
+            return self.report
+
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = BlockingBackend()
+    database = EvaluationDatabase(id="session")
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=database,
+        authorization_resolver=allow_all_evaluations,
+    )
+    evaluation = asyncio.create_task(
+        engine.evaluate_record(backend_id="default", request=request())
+    )
+    await backend.started.wait()
+
+    drain = asyncio.create_task(engine.quiesce_agent_evaluations(timeout_seconds=1.0))
+    await asyncio.sleep(0)
+    assert not drain.done()
+    with pytest.raises(EvaluationDeniedError, match="finalization has started"):
+        await engine.evaluate_record(backend_id="default", request=request("late"))
+
+    backend.release.set()
+
+    assert await drain == 1
+    assert (await evaluation).report.metrics == {"score": 0.75}
+    assert len(database.evaluations) == 1
+    admin = await engine.evaluate_record(
+        backend_id="default",
+        request=request("admin"),
+        principal=EvaluationPrincipal.ADMIN,
+    )
+    assert admin.request.candidate.version == "admin"
+
+
+@pytest.mark.asyncio
+async def test_finalization_cancels_an_agent_evaluation_after_drain_timeout(
+    tmp_path: Path,
+):
+    class BlockingBackend(StubBackend):
+        def __init__(self):
+            super().__init__()
+            self.started = asyncio.Event()
+
+        async def evaluate(self, *, context, request):
+            self.evaluate_calls += 1
+            self.started.set()
+            await asyncio.Event().wait()
+
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = BlockingBackend()
+    database = EvaluationDatabase(id="session")
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=database,
+        authorization_resolver=allow_all_evaluations,
+    )
+    evaluation = asyncio.create_task(
+        engine.evaluate_record(backend_id="default", request=request())
+    )
+    await backend.started.wait()
+
+    assert (
+        await engine.quiesce_agent_evaluations(
+            timeout_seconds=0.01,
+            cancellation_grace_seconds=1.0,
+        )
+        == 1
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await evaluation
+
+    assert len(database.evaluations) == 1
+    cancelled = next(iter(database.evaluations.values()))
+    assert cancelled.report.status == EvaluationStatus.CANCELLED
+
+
+@pytest.mark.asyncio
 async def test_plan_authorization_separates_agent_and_system_selection_rights(
     tmp_path: Path,
 ):
