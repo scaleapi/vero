@@ -89,7 +89,7 @@ class TestAutoBestSelection:
         )
         admin_scores = {"hi": 0.1, "lo": 0.95}
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(
                 result=MagicMock(score=MagicMock(return_value=admin_scores.get(commit, 0.99)))
             )
@@ -125,7 +125,7 @@ class TestAutoBestSelection:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.7)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -172,7 +172,7 @@ class TestSubsetEvalShortlistFilter:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             # admin re-score agrees the full-split ranking is right
             score = {"solid": 0.7, "lucky": 0.3}.get(commit, 0.5)
             return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
@@ -212,7 +212,7 @@ class TestSubsetEvalShortlistFilter:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -260,7 +260,7 @@ class TestAutoBestBaselineFloor:
         # agent admin-scores 0.2 on the selection split; base admin-scores 0.3;
         # the reverted base scores 0.35 on the target split (distinct values so the
         # assertions can tell the target eval apart from the floor comparison).
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             if commit == "base":
                 score = 0.35 if split == "validation" else 0.3
             else:
@@ -296,7 +296,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.3)))  # all equal
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -327,7 +327,7 @@ class TestAutoBestBaselineFloor:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -349,7 +349,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             score = 0.3 if commit == "base" else 0.6  # agent genuinely improves
             return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
 
@@ -374,7 +374,7 @@ class TestAutoBestBaselineFloor:
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = self._df()
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.2)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -476,7 +476,7 @@ class TestNoCandidateFallback:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
 
         engine.evaluate_admin = AsyncMock(side_effect=_admin)
@@ -733,7 +733,7 @@ class TestSelectionIntegrity:
             }
         )
 
-        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None, model=None):
             if commit == "base" and split == "validation":
                 raise RuntimeError("nested run crashed")
             return MagicMock(result=MagicMock(score=MagicMock(return_value=0.9)))
@@ -754,6 +754,32 @@ class TestSelectionIntegrity:
         # the final (target) eval ran on the SEED, not the unverified candidate
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "base"
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
+
+    @pytest.mark.asyncio
+    async def test_transfer_target_model_reaches_champion_and_baseline_evals(self, tmp_path):
+        # A target's executor-model override must apply to BOTH the champion
+        # eval and the baseline eval, or the comparison is not like-for-like.
+        self._submit(tmp_path)
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(
+            return_value=MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
+        )
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            score_baseline=True,
+            base_commit="base",
+            targets=[VerificationTarget(
+                task="t", dataset_id="ds", split="test",
+                reward_key="reward_4o", model="openai/gpt-4o",
+            )],
+        )
+        await v.finalize()
+        models = [c.kwargs["model"] for c in engine.evaluate_admin.await_args_list]
+        commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert models == ["openai/gpt-4o", "openai/gpt-4o"]
+        assert set(commits) == {"cand", "base"}
 
     @pytest.mark.asyncio
     async def test_floored_target_records_dominant_crash_cause(self, tmp_path):

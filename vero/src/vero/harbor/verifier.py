@@ -39,6 +39,15 @@ class VerificationTarget:
     split: str
     reward_key: str
     sample_ids: list[int] | None = None  # None = full split
+    # Executor-model override for this target (Mode B): score the selected
+    # commit under a DIFFERENT model than the one it was optimized on. This is
+    # the transfer probe: home-model evals cannot see model-specific couplings
+    # the optimizer bakes in (measured live: three champions independently
+    # hardcoded temperature=0 and scored 0/72 on an executor that rejects it,
+    # while looking healthy on every home-model eval). None = the task's
+    # configured model. The baseline is scored under the same override, so the
+    # comparison stays like-for-like.
+    model: str | None = None
 
 
 class Verifier:
@@ -144,6 +153,7 @@ class Verifier:
                 split=target.split,
                 commit=sha,
                 sample_ids=target.sample_ids,
+                model=target.model,
                 what=f"target '{target.reward_key}'",
             )
             if score is None:
@@ -177,6 +187,7 @@ class Verifier:
         split: str,
         commit: str,
         sample_ids: list[int] | None = None,
+        model: str | None = None,
         what: str,
     ) -> tuple[float | None, str | None]:
         """One reward-critical admin eval with bounded retry.
@@ -201,6 +212,7 @@ class Verifier:
                     split=split,
                     commit=commit,
                     sample_ids=sample_ids,
+                    model=model,
                 )
                 if exp.result.score(fill_score=None) is None:
                     last_error = (
@@ -293,12 +305,15 @@ class Verifier:
             try:
                 baselines: dict[str, float] = {}
                 for target in self.targets:
+                    # Same executor override as the candidate's target eval, or
+                    # the baseline comparison is not like-for-like.
                     exp = await self.engine.evaluate_admin(
                         task=target.task,
                         dataset_id=target.dataset_id,
                         split=target.split,
                         commit=self.base_commit,
                         sample_ids=target.sample_ids,
+                        model=target.model,
                     )
                     if exp.result.score(fill_score=None) is None:
                         # All-error/empty is an outage, not a 0.0 baseline: a
