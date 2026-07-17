@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from pathlib import Path
@@ -69,6 +70,7 @@ class HarborBuildConfig(EvaluationModel):
     agent_import_path: str
     harbor_requirement: str
     partitions: dict[str, list[str]]
+    task_manifest: str | None = None
     agent_access: list[AgentAccessSpec]
     selection_partition: str
     targets: list[VerificationTargetSpec]
@@ -158,6 +160,15 @@ class HarborBuildConfig(EvaluationModel):
     def validate_optional_identity(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
             raise ValueError("optional Harbor identity must not be empty")
+        return value
+
+    @field_validator("task_manifest")
+    @classmethod
+    def validate_task_manifest_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip() or not Path(value).is_file():
+            raise ValueError("task_manifest must be an existing JSON file")
         return value
 
     @field_validator("extra_harbor_args")
@@ -255,6 +266,44 @@ class HarborBuildConfig(EvaluationModel):
         reward_keys = [target.reward_key for target in self.targets]
         if len(reward_keys) != len(set(reward_keys)):
             raise ValueError("target reward keys must be unique")
+        if self.task_manifest is not None:
+            try:
+                manifest = json.loads(
+                    Path(self.task_manifest).read_text(encoding="utf-8")
+                )
+            except json.JSONDecodeError as error:
+                raise ValueError("task_manifest must contain valid JSON") from error
+            if not isinstance(manifest, dict):
+                raise ValueError("task_manifest must be a JSON object")
+            manifest_source = manifest.get("task_source")
+            if manifest_source != self.task_source:
+                raise ValueError(
+                    "task_manifest task_source does not match build task_source"
+                )
+            manifest_tasks = manifest.get("tasks")
+            if not isinstance(manifest_tasks, list):
+                raise ValueError("task_manifest tasks must be a JSON array")
+            names: list[str] = []
+            for item in manifest_tasks:
+                name = item.get("name") if isinstance(item, dict) else item
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError(
+                        "task_manifest tasks must be names or objects with a name"
+                    )
+                names.append(name)
+            if len(names) != len(set(names)):
+                raise ValueError("task_manifest contains duplicate task names")
+            selected = {
+                task
+                for partition_tasks in self.partitions.values()
+                for task in partition_tasks
+            }
+            unknown = sorted(selected - set(names))
+            if unknown:
+                raise ValueError(
+                    "partitions reference tasks absent from task_manifest: "
+                    + ", ".join(unknown)
+                )
         return self
 
 
@@ -272,6 +321,33 @@ def load_harbor_build_config(path: Path | str) -> HarborBuildConfig:
     if not isinstance(value, dict):
         raise ValueError("Harbor build config must be a YAML object")
     base = config_path.parent
+    partition_files = value.pop("partition_files", None)
+    if partition_files is not None:
+        if "partitions" in value:
+            raise ValueError("use either partitions or partition_files, not both")
+        if not isinstance(partition_files, dict) or not partition_files:
+            raise ValueError("partition_files must be a non-empty YAML object")
+        partitions: dict[str, list[str]] = {}
+        for partition, filename in partition_files.items():
+            if not isinstance(partition, str) or not isinstance(filename, str):
+                raise ValueError("partition_files must map names to JSON files")
+            partition_path = Path(filename).expanduser()
+            if not partition_path.is_absolute():
+                partition_path = base / partition_path
+            try:
+                tasks = json.loads(partition_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"partition file {partition_path} must contain valid JSON"
+                ) from error
+            if not isinstance(tasks, list) or any(
+                not isinstance(task, str) for task in tasks
+            ):
+                raise ValueError(
+                    f"partition file {partition_path} must be a JSON array of task names"
+                )
+            partitions[partition] = tasks
+        value["partitions"] = partitions
     agent_repo = value.get("agent_repo")
     if isinstance(agent_repo, str) and not Path(agent_repo).is_absolute():
         value["agent_repo"] = str((base / agent_repo).resolve())
@@ -280,4 +356,7 @@ def load_harbor_build_config(path: Path | str) -> HarborBuildConfig:
         local_source = base / task_source
         if not Path(task_source).is_absolute() and local_source.exists():
             value["task_source"] = str(local_source.resolve())
+    task_manifest = value.get("task_manifest")
+    if isinstance(task_manifest, str) and not Path(task_manifest).is_absolute():
+        value["task_manifest"] = str((base / task_manifest).resolve())
     return HarborBuildConfig.model_validate(value)

@@ -135,6 +135,67 @@ def test_load_build_config_resolves_relative_local_paths(tmp_path):
     assert loaded.task_source == str(tasks)
 
 
+def test_load_build_config_supports_partition_files_and_validates_manifest(tmp_path):
+    target = _target_repo(tmp_path / "target")
+    partitions = tmp_path / "partitions"
+    partitions.mkdir()
+    (partitions / "validation.json").write_text(
+        '["task-a", "task-b"]\n', encoding="utf-8"
+    )
+    (partitions / "test.json").write_text('["task-c"]\n', encoding="utf-8")
+    source = "org/benchmark@sha256:abc"
+    manifest = partitions / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "task_source": source,
+                "tasks": [
+                    {"name": "task-a", "ref": "sha256:a"},
+                    {"name": "task-b", "ref": "sha256:b"},
+                    {"name": "task-c", "ref": "sha256:c"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: org/task",
+                "agent_repo: target",
+                f"task_source: {source}",
+                "task_manifest: partitions/manifest.json",
+                "agent_import_path: target.agent:Agent",
+                "harbor_requirement: harbor==0.18.0",
+                "partition_files:",
+                "  validation: partitions/validation.json",
+                "  test: partitions/test.json",
+                "agent_access:",
+                "  - partition: validation",
+                "selection_partition: validation",
+                "targets:",
+                "  - partition: test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_harbor_build_config(config_path)
+
+    assert loaded.agent_repo == str(target)
+    assert loaded.partitions == {
+        "validation": ["task-a", "task-b"],
+        "test": ["task-c"],
+    }
+    assert loaded.task_manifest == str(manifest)
+
+    (partitions / "test.json").write_text('["task-missing"]\n', encoding="utf-8")
+    with pytest.raises(ValidationError, match="absent from task_manifest"):
+        load_harbor_build_config(config_path)
+
+
 def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     config = _config(tmp_path)
     output = compile_harbor_task(

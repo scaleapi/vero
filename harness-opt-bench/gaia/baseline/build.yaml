@@ -1,0 +1,70 @@
+name: vero/optimize-gaia-baseline
+description: >-
+  Improve a tool-using GAIA agent while preserving the Harbor agent interface.
+  The target must answer canonical GAIA tasks by writing /app/answer.txt.
+agent_repo: target
+task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
+task_manifest: ../partitions/manifest.json
+agent_import_path: gaia_agent.agent:GaiaAgent
+harbor_requirement: harbor[modal]==0.18.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: false
+    total_runs: 12
+    total_cases: 132
+    max_cases_per_run: 12
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 8
+    total_cases: 264
+    max_cases_per_run: 33
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: gaia
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: auto_best
+baseline_floor: true
+score_baseline: true
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: openai/gpt-5.4-mini-2026-03-17
+environment_name: modal
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 12000
+expose_attempt_detail: false
+timeout_seconds: 3600
+max_concurrency: 8
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 7200
+secrets:
+  - OPENAI_API_KEY
+  - OPENAI_BASE_URL
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+instruct_multifidelity: true
+instruct_exhaust_budget: true
