@@ -316,6 +316,12 @@ class GitWorkspace(Workspace):
         """Resolve a git ref (branch, tag, short hash) to a full commit hash."""
         return await self._git("rev-parse", ref)
 
+    async def tree_hash(self, ref: str) -> str:
+        """Tree hash of a commit: identical content -> identical tree, whatever
+        the commit metadata says. Lets selection pool re-committed identical
+        trees instead of treating each sha as a fresh candidate."""
+        return await self._git("rev-parse", f"{ref}^{{tree}}")
+
     async def current_branch(self) -> str | None:
         """Return current branch name, or None if detached HEAD."""
         try:

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from vero.evaluation.engine import EvalRequest
 from vero.exceptions import ExperimentBudgetExceeded, InvalidSplitError
 from vero.harbor.auth import check_admin
-from vero.harbor.server import SubmitDisabledError
+from vero.harbor.server import KAnonymityError, SubmitDisabledError
 from vero.harbor.verifier import NoCandidateError
 
 if TYPE_CHECKING:
@@ -57,6 +57,10 @@ def create_app(
     app.add_exception_handler(
         SubmitDisabledError,
         lambda r, e: JSONResponse(status_code=409, content={"error": str(e)}),
+    )
+    app.add_exception_handler(
+        KAnonymityError,
+        lambda r, e: JSONResponse(status_code=400, content={"error": str(e)}),
     )
     app.add_exception_handler(
         NoCandidateError,

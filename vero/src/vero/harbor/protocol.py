@@ -104,6 +104,10 @@ def build_status(
     split_accesses: list[SplitAccess],
     base_commit: str | None = None,
     free_baseline_available: bool = False,
+    # Default matches EvaluationSidecar's enforcement default: a caller that
+    # forgets to pass the floor must not advertise a laxer one than the
+    # sidecar enforces (agents would send sub-floor requests that 400).
+    k_anonymity_floor: int = 5,
 ) -> StatusSummary:
     """Build the agent-facing status from the budget ledger + split tiers.
 
@@ -119,6 +123,15 @@ def build_status(
                 "dataset_id": dataset_id,
                 "tier": str(tier),
                 "agent_evaluable": tier != SplitAccessLevel.no_access,
+                # Subset evals below this sample count are rejected on
+                # non_viewable splits (full-split evals always pass). Advertised
+                # so an agent plans subset probes instead of burning budget on
+                # requests the sidecar will refuse.
+                "min_subset_samples": (
+                    k_anonymity_floor
+                    if tier == SplitAccessLevel.non_viewable
+                    else 1
+                ),
                 "remaining_sample_budget": b.remaining_sample_budget,
                 "remaining_run_budget": b.remaining_run_budget,
             }
