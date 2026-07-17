@@ -6,8 +6,8 @@ ref = "HEAD"
 id = "circle-packing"
 kind = "command"
 harness_root = "./harness"
-environment = { UV_CACHE_DIR = "/tmp/vero-circle-packing-uv-cache", PYTHONHASHSEED = "0" }
-passthrough_environment = ["PATH"]
+environment = { PYTHONHASHSEED = "0" }
+passthrough_environment = ["PATH", "UV_CACHE_DIR"]
 command = [
   "uv",
   "run",

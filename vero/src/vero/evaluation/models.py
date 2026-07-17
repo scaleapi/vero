@@ -429,9 +429,7 @@ class MetricSelector(EvaluationModel):
             self.aggregation == MetricAggregation.REPORT
             and self.case_failure_value is not None
         ):
-            raise ValueError(
-                "case_failure_value requires a case metric aggregation"
-            )
+            raise ValueError("case_failure_value requires a case metric aggregation")
         return self
 
 
@@ -655,7 +653,6 @@ class EvaluationBudget(EvaluationModel):
     remaining_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
     remaining_cases: int | None = Field(default=None, ge=0)
-    max_cases_per_run: int | None = Field(default=None, ge=1)
 
     @field_validator("backend_id", "evaluation_set_key")
     @classmethod

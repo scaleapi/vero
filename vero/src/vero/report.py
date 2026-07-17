@@ -13,6 +13,8 @@ from typing import Any
 from vero.candidate import Candidate
 from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import EvaluationDatabase
+from vero.harbor.session import HarborSessionManifest
+from vero.harbor.verifier import VerificationResult
 from vero.runtime.events import RuntimeEvent
 from vero.runtime.session import SessionManifest
 
@@ -26,13 +28,17 @@ def _read_events(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         return []
     events: list[dict[str, Any]] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
         if not line.strip():
             continue
         try:
             event = RuntimeEvent.model_validate_json(line)
         except Exception as error:
-            raise ValueError(f"invalid runtime event on line {line_number}: {error}") from error
+            raise ValueError(
+                f"invalid runtime event on line {line_number}: {error}"
+            ) from error
         events.append(event.model_dump(mode="json"))
     return events
 
@@ -126,7 +132,9 @@ def _embed_artifact(
         resolved_media_type.startswith("image/")
         or resolved_media_type == "application/pdf"
     ):
-        artifact["kind"] = "image" if resolved_media_type.startswith("image/") else "binary"
+        artifact["kind"] = (
+            "image" if resolved_media_type.startswith("image/") else "binary"
+        )
         if artifact["kind"] == "image":
             encoded = base64.b64encode(payload).decode("ascii")
             artifact["content"] = f"data:{resolved_media_type};base64,{encoded}"
@@ -220,40 +228,44 @@ def _read_traces(session_dir: Path) -> list[dict[str, Any]]:
     return traces
 
 
-async def build_experiment_report_data(session_dir: Path | str) -> dict[str, Any]:
-    """Load a durable session into the presentation-neutral report data model."""
-
-    session_dir = Path(session_dir).expanduser().resolve()
-    manifest_path = session_dir / "manifest.json"
-    if not manifest_path.is_file():
-        raise FileNotFoundError(f"session manifest not found: {manifest_path}")
-    manifest = SessionManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
-
+def _load_database(session_dir: Path, database_id: str) -> EvaluationDatabase:
     database_path = session_dir / "database.json"
     database = (
         EvaluationDatabase.load_from_file(database_path)
         if database_path.is_file()
-        else EvaluationDatabase(id=manifest.id)
+        else EvaluationDatabase(id=database_id)
     )
-    if database.id != manifest.id:
+    if database.id != database_id:
         raise ValueError(
-            f"evaluation database belongs to {database.id!r}, not {manifest.id!r}"
+            f"evaluation database belongs to {database.id!r}, not {database_id!r}"
         )
-    # Reconcile in memory so a report also sees canonical evaluations written
-    # immediately before a database-index crash. Reporting must remain read-only.
     completed = EvaluationDatabase.from_evaluations_dir(
-        session_dir / "evaluations", database_id=manifest.id
+        session_dir / "evaluations", database_id=database_id
     )
     for record in completed.evaluations.values():
         if record.id not in database.evaluations:
             database.add_evaluation(record)
+    return database
+
+
+async def _build_report_data(
+    session_dir: Path,
+    *,
+    manifest: dict[str, Any],
+    database: EvaluationDatabase,
+    default_trace_id: str | None = None,
+) -> dict[str, Any]:
     evaluations = sorted(
-        database.evaluations.values(), key=lambda record: (record.completed_at, record.id)
+        database.evaluations.values(),
+        key=lambda record: (record.completed_at, record.id),
     )
 
-    if manifest.candidate_repository_family != "git":
+    if manifest["candidate_repository_family"] != "git":
         candidates = tuple(
-            sorted(database.candidates.values(), key=lambda value: (value.created_at, value.id))
+            sorted(
+                database.candidates.values(),
+                key=lambda value: (value.created_at, value.id),
+            )
         )
         repository = None
     else:
@@ -269,7 +281,7 @@ async def build_experiment_report_data(session_dir: Path | str) -> dict[str, Any
         trace_id = (
             hashlib.sha256(str(proposal_id).encode()).hexdigest()[:16]
             if proposal_id is not None
-            else None
+            else default_trace_id
         )
         item = candidate.model_dump(mode="json")
         item["trace_id"] = trace_id if trace_id in trace_ids else None
@@ -277,7 +289,9 @@ async def build_experiment_report_data(session_dir: Path | str) -> dict[str, Any
             item["diff"] = _git_diff(
                 repository.repository_path,
                 candidate,
-                candidate_by_id.get(candidate.parent_id) if candidate.parent_id else None,
+                candidate_by_id.get(candidate.parent_id)
+                if candidate.parent_id
+                else None,
                 project_subpath=repository.project_subpath,
             )
         else:
@@ -319,12 +333,166 @@ async def build_experiment_report_data(session_dir: Path | str) -> dict[str, Any
     return {
         "schema_version": 1,
         "generated_from": str(session_dir),
-        "manifest": manifest.model_dump(mode="json"),
+        "manifest": manifest,
         "candidates": candidate_data,
         "evaluations": evaluation_data,
         "events": events,
         "traces": traces,
     }
+
+
+def _harbor_presentation_manifest(
+    manifest: HarborSessionManifest,
+    database: EvaluationDatabase,
+    finalization: VerificationResult | None,
+) -> dict[str, Any]:
+    selection = manifest.selection
+    selected = finalization.candidate if finalization is not None else None
+    selection_records = [
+        record
+        for record in database.evaluations.values()
+        if selected is not None
+        and selection.backend_id is not None
+        and selection.evaluation_set is not None
+        and record.request.candidate.id == selected.id
+        and record.backend_id == selection.backend_id
+        and record.request.evaluation_set == selection.evaluation_set
+        and record.objective is not None
+        and record.objective.feasible
+        and record.objective.value is not None
+    ]
+    if selection.objective is not None:
+        selection_records.sort(key=lambda record: record.id)
+        selection_records.sort(
+            key=lambda record: record.objective.value,
+            reverse=selection.objective.direction == "maximize",
+        )
+    best_evaluation_id = selection_records[0].id if selection_records else None
+    final_evaluation_id = None
+    if finalization is not None and finalization.evaluation_ids:
+        final_evaluation_id = next(iter(finalization.evaluation_ids.values()))
+    completed_at = max(
+        (record.completed_at for record in database.evaluations.values()),
+        default=manifest.created_at,
+    )
+    errors = finalization.errors if finalization is not None else {}
+    objective = selection.objective or manifest.targets[0].objective
+    backend_id = selection.backend_id or manifest.targets[0].backend_id
+    selection_set = selection.evaluation_set
+    return {
+        "schema_version": 1,
+        "id": f"{manifest.task_name} · {manifest.id}",
+        "status": "failed" if finalization is None or errors else "completed",
+        "backend_id": backend_id,
+        "candidate_repository_family": manifest.candidate_repository_family,
+        "candidate_repository_format_version": (
+            manifest.candidate_repository_format_version
+        ),
+        "evaluation_plan": {
+            "selection_evaluation": (
+                selection_set.name if selection_set is not None else "selection"
+            ),
+            "final_evaluation": (
+                manifest.targets[0].evaluation_set.name if manifest.targets else None
+            ),
+        },
+        "selection_evaluation_set": (
+            selection_set.model_dump(mode="json") if selection_set is not None else None
+        ),
+        "objective": objective.model_dump(mode="json"),
+        "baseline": (
+            selection.baseline_candidate.model_dump(mode="json")
+            if selection.baseline_candidate is not None
+            else None
+        ),
+        "best_candidate_id": selected.id if selected is not None else None,
+        "best_evaluation_id": best_evaluation_id,
+        "final_baseline_evaluation_id": None,
+        "final_evaluation_id": final_evaluation_id,
+        "created_at": manifest.created_at.isoformat(),
+        "updated_at": completed_at.isoformat(),
+        "failure": (
+            {"type": "verification", "message": json.dumps(errors, sort_keys=True)}
+            if errors
+            else None
+        ),
+        "metadata": {
+            "task_description": manifest.task_description,
+            "verification": (
+                finalization.model_dump(mode="json")
+                if finalization is not None
+                else None
+            ),
+        },
+    }
+
+
+async def build_experiment_report_data(session_dir: Path | str) -> dict[str, Any]:
+    """Load a local or Harbor session into the portable report data model."""
+
+    session_dir = Path(session_dir).expanduser().resolve()
+    manifest_path = session_dir / "manifest.json"
+    if manifest_path.is_file():
+        parsed = SessionManifest.model_validate_json(
+            manifest_path.read_text(encoding="utf-8")
+        )
+        manifest = parsed.model_dump(mode="json")
+        manifest["selection_evaluation_set"] = (
+            parsed.evaluation_plan.selection.evaluation_set.model_dump(mode="json")
+        )
+        return await _build_report_data(
+            session_dir,
+            manifest=manifest,
+            database=_load_database(session_dir, parsed.id),
+        )
+
+    harbor_path = session_dir / "harbor-session.json"
+    if not harbor_path.is_file():
+        raise FileNotFoundError(f"session manifest not found: {manifest_path}")
+    harbor = HarborSessionManifest.model_validate_json(
+        harbor_path.read_text(encoding="utf-8")
+    )
+    database = _load_database(session_dir, harbor.id)
+    finalization_path = session_dir / "harbor-finalization.json"
+    finalization = (
+        VerificationResult.model_validate_json(
+            finalization_path.read_text(encoding="utf-8")
+        )
+        if finalization_path.is_file()
+        else None
+    )
+    traces = _read_traces(session_dir)
+    data = await _build_report_data(
+        session_dir,
+        manifest=_harbor_presentation_manifest(harbor, database, finalization),
+        database=database,
+        default_trace_id=traces[0]["id"] if traces else None,
+    )
+    if not data["events"]:
+        data["events"] = [
+            {
+                "created_at": evaluation["completed_at"],
+                "kind": "evaluation.completed",
+                "payload": {
+                    "evaluation_id": evaluation["id"],
+                    "candidate_id": evaluation["request"]["candidate"]["id"],
+                    "backend_id": evaluation["backend_id"],
+                    "evaluation_set": evaluation["request"]["evaluation_set"],
+                    "status": evaluation["report"]["status"],
+                    "objective": evaluation["objective"],
+                },
+            }
+            for evaluation in data["evaluations"]
+        ]
+        if finalization is not None:
+            data["events"].append(
+                {
+                    "created_at": data["manifest"]["updated_at"],
+                    "kind": "verification.completed",
+                    "payload": finalization.model_dump(mode="json"),
+                }
+            )
+    return data
 
 
 def _safe_json(value: Any) -> str:
@@ -355,7 +523,7 @@ async def generate_experiment_report(
     return destination
 
 
-_REPORT_HTML = r'''<!doctype html>
+_REPORT_HTML = r"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -432,7 +600,7 @@ _REPORT_HTML = r'''<!doctype html>
     <div class="notice">This portable report can contain source diffs, evaluation artifacts, prompts, and agent tool output. Treat it as sensitive experiment data.</div>
     <section class="stats" id="stats"></section>
     <section class="grid">
-      <div class="panel"><h2>Score trajectory</h2><svg class="chart" id="score-chart" role="img" aria-label="Objective score by evaluation"></svg><div class="legend"><span><i class="dot" style="background:var(--green)"></i>feasible</span><span><i class="dot" style="background:var(--red)"></i>infeasible or failed</span><span><i class="dot" style="background:var(--purple)"></i>final</span></div></div>
+      <div class="panel"><h2>Score trajectories by split</h2><svg class="chart" id="score-chart" role="img" aria-label="Objective scores separated by evaluation split"></svg><div class="legend" id="score-legend"></div></div>
       <div class="panel"><h2>Candidate lineage</h2><svg class="chart" id="lineage" role="img" aria-label="Candidate lineage graph"></svg><div class="legend"><span>Click a node to inspect it</span><span><i class="dot" style="background:var(--accent)"></i>baseline</span><span><i class="dot" style="background:var(--green)"></i>best</span></div></div>
     </section>
     <section class="panel wide"><h2>Candidates</h2><div class="detail-grid"><div class="candidate-list" id="candidate-list"></div><div id="candidate-detail"></div></div></section>
@@ -455,32 +623,43 @@ _REPORT_HTML = r'''<!doctype html>
     evaluations.forEach(e => { const id=e.request.candidate.id; if(!evalsByCandidate.has(id)) evalsByCandidate.set(id,[]); evalsByCandidate.get(id).push(e); });
     let selectedCandidateId = manifest.best_candidate_id || (manifest.baseline && manifest.baseline.id) || (candidates[0] && candidates[0].id);
     let selectedEvaluationId = manifest.best_evaluation_id || null;
+    const selectionTarget = manifest.selection_evaluation_set || null;
     const ns='http://www.w3.org/2000/svg';
     const node=(tag,cls,text) => { const value=document.createElement(tag); if(cls)value.className=cls; if(text!==undefined)value.textContent=String(text); return value; };
     const svg=(tag,attrs={}) => { const value=document.createElementNS(ns,tag); Object.entries(attrs).forEach(([k,v])=>value.setAttribute(k,String(v))); return value; };
     const short=value => value ? String(value).slice(0,12) : '—';
     const score=e => e && e.objective ? e.objective.value : null;
     const number=value => typeof value==='number' ? value.toLocaleString(undefined,{maximumFractionDigits:6}) : 'n/a';
-    const primaryEval=id => { const values=evalsByCandidate.get(id)||[]; const exact=values.find(e=>e.id===manifest.best_evaluation_id); if(exact)return exact; const selection=values.filter(e=>e.request.evaluation_set.name===manifest.evaluation_plan.selection_evaluation); const feasible=selection.filter(e=>e.objective&&e.objective.feasible&&typeof e.objective.value==='number'); if(feasible.length){ const sign=manifest.objective.direction==='maximize' ? -1 : 1; return feasible.sort((a,b)=>sign*(a.objective.value-b.objective.value))[0]; } return selection.at(-1)||values.find(e=>e.id===manifest.final_evaluation_id)||values.at(-1); };
+    const selectionKey=selection => { if(!selection||selection.kind==='all')return 'all'; if(selection.kind==='range')return `range:${selection.start||0}:${selection.stop}`; if(selection.kind==='ids')return `ids:${JSON.stringify(selection.ids||[])}`; return JSON.stringify(selection); };
+    const evaluationSetKey=set => `${set.name}\u0000${set.partition||''}\u0000${selectionKey(set.selection)}`;
+    const splitKey=set => `${set.name}\u0000${set.partition||''}`;
+    const splitLabel=set => set.partition ? `${set.name} / ${set.partition}` : set.name;
+    const subsetLabel=selection => { if(!selection||selection.kind==='all')return 'all cases'; if(selection.kind==='range')return `range [${selection.start||0}, ${selection.stop})`; if(selection.kind==='ids')return `${(selection.ids||[]).length} named cases`; return selection.kind||'custom subset'; };
+    const evaluationSetLabel=set => `${splitLabel(set)} · ${subsetLabel(set.selection)}`;
+    const sameEvaluationSet=(left,right) => !!left&&!!right&&evaluationSetKey(left)===evaluationSetKey(right);
+    const primaryEval=id => { const values=evalsByCandidate.get(id)||[]; const exact=values.find(e=>e.id===manifest.best_evaluation_id); if(exact)return exact; const selection=values.filter(e=>selectionTarget ? e.request.evaluation_set.name===selectionTarget.name&&e.request.evaluation_set.partition===selectionTarget.partition : e.request.evaluation_set.name===manifest.evaluation_plan.selection_evaluation); const feasible=selection.filter(e=>e.objective&&e.objective.feasible&&typeof e.objective.value==='number'); if(feasible.length){ const sign=manifest.objective.direction==='maximize' ? -1 : 1; return feasible.sort((a,b)=>sign*(a.objective.value-b.objective.value))[0]; } return selection.at(-1)||values.find(e=>e.id===manifest.final_evaluation_id)||values.at(-1); };
 
     document.getElementById('title').textContent = manifest.id;
-    document.getElementById('subtitle').textContent = `${manifest.objective.direction} ${manifest.objective.selector.metric} · ${manifest.backend_id}`;
-    document.getElementById('status').textContent = manifest.status;
     const bestEval=evaluations.find(e=>e.id===manifest.best_evaluation_id);
-    const baselineEval=manifest.baseline && primaryEval(manifest.baseline.id);
-    const statValues=[['Candidates',candidates.length],['Evaluations',evaluations.length],['Baseline',number(score(baselineEval))],['Best',number(score(bestEval))],['Improvement',(score(bestEval)!==null&&score(baselineEval)!==null)?number(score(bestEval)-score(baselineEval)):'n/a']];
+    document.getElementById('subtitle').textContent = `${manifest.objective.direction} ${manifest.objective.selector.metric} · ${bestEval?evaluationSetLabel(bestEval.request.evaluation_set):manifest.backend_id}`;
+    document.getElementById('status').textContent = manifest.status;
+    const baselineEvals=manifest.baseline?(evalsByCandidate.get(manifest.baseline.id)||[]):[];
+    const preferredBaseline=baselineEvals.find(e=>e.id===manifest.final_baseline_evaluation_id);
+    const baselineEval=preferredBaseline&&bestEval&&sameEvaluationSet(preferredBaseline.request.evaluation_set,bestEval.request.evaluation_set)?preferredBaseline:(bestEval?baselineEvals.filter(e=>sameEvaluationSet(e.request.evaluation_set,bestEval.request.evaluation_set)).at(-1):null);
+    const comparable=score(bestEval)!==null&&score(baselineEval)!==null;
+    const statValues=[['Candidates',candidates.length],['Evaluations',evaluations.length],['Comparable baseline',number(score(baselineEval))],['Selected score',number(score(bestEval))],['Comparable delta',comparable?number(score(bestEval)-score(baselineEval)):'n/a']];
     const stats=document.getElementById('stats'); statValues.forEach(([label,value])=>{const box=node('div','stat');box.append(node('span','',label),node('strong','',value));stats.append(box);});
 
-    function drawScoreChart(){ const root=document.getElementById('score-chart'); root.replaceChildren(); const points=evaluations.filter(e=>typeof score(e)==='number'); if(!points.length){root.append(svg('text',{x:20,y:40,fill:'#9ca6b8'})).textContent='No objective values';return;} const W=760,H=320,p={l:58,r:20,t:25,b:42}; root.setAttribute('viewBox',`0 0 ${W} ${H}`); const vals=points.map(score), min=Math.min(...vals), max=Math.max(...vals), pad=(max-min||1)*.12; const lo=min-pad, hi=max+pad; const x=i=>p.l+i*Math.max(1,(W-p.l-p.r)/(points.length-1)); const y=v=>p.t+(hi-v)/(hi-lo)*(H-p.t-p.b); for(let i=0;i<5;i++){const yy=p.t+i*(H-p.t-p.b)/4;root.append(svg('line',{x1:p.l,y1:yy,x2:W-p.r,y2:yy,stroke:'#2a3140'}));const t=svg('text',{x:p.l-8,y:yy+4,fill:'#9ca6b8','text-anchor':'end','font-size':11});t.textContent=number(hi-i*(hi-lo)/4);root.append(t);} const path=svg('path',{d:points.map((e,i)=>`${i?'L':'M'} ${x(i)} ${y(score(e))}`).join(' '),fill:'none',stroke:'#56627a','stroke-width':2});root.append(path); points.forEach((e,i)=>{const final=e.id===manifest.final_evaluation_id||e.id===manifest.final_baseline_evaluation_id;const good=e.objective&&e.objective.feasible&&e.report.status==='success';const c=svg('circle',{cx:x(i),cy:y(score(e)),r:final?7:5,fill:final?'#c39bff':good?'#63d49a':'#ff7d87',stroke:'#0b0d12','stroke-width':2,tabindex:0});c.style.cursor='pointer';c.addEventListener('click',()=>selectCandidate(e.request.candidate.id,e.id));const title=svg('title');title.textContent=`${e.request.evaluation_set.name}: ${number(score(e))} · ${e.request.candidate.id}`;c.append(title);root.append(c);}); }
+    function drawScoreChart(){const root=document.getElementById('score-chart'),legend=document.getElementById('score-legend');root.replaceChildren();legend.replaceChildren();const points=evaluations.map((evaluation,index)=>({evaluation,index})).filter(point=>typeof score(point.evaluation)==='number');if(!points.length){root.append(svg('text',{x:20,y:40,fill:'#9ca6b8'})).textContent='No objective values';return;}const splits=new Map();points.forEach(point=>{const set=point.evaluation.request.evaluation_set,key=splitKey(set);if(!splits.has(key))splits.set(key,{set,points:[]});splits.get(key).points.push(point);});const palette=['#63d49a','#87a6ff','#f5b75b','#c39bff','#55c7d9','#f08bb4'];const W=760,rowH=132,p={l:118,r:22,t:18,b:38},H=Math.max(320,p.t+p.b+splits.size*rowH);root.setAttribute('viewBox',`0 0 ${W} ${H}`);root.style.height=`${Math.min(640,H)}px`;const vals=points.map(point=>score(point.evaluation)),min=Math.min(...vals),max=Math.max(...vals),pad=(max-min||1)*.12,lo=min-pad,hi=max+pad;const x=index=>p.l+index*Math.max(1,(W-p.l-p.r)/Math.max(1,evaluations.length-1));[...splits.values()].forEach((group,row)=>{const color=palette[row%palette.length],top=p.t+row*rowH,bottom=top+rowH-18,y=value=>top+18+(hi-value)/(hi-lo)*(bottom-top-30);root.append(svg('rect',{x:p.l-8,y:top,width:W-p.l-p.r+16,height:rowH-12,rx:8,fill:row%2?'#0c1017':'#0f131b'}));const label=svg('text',{x:p.l-14,y:top+20,fill:color,'text-anchor':'end','font-size':11,'font-weight':700});label.textContent=splitLabel(group.set);root.append(label);const subsets=new Set(group.points.map(point=>evaluationSetKey(point.evaluation.request.evaluation_set)));const detail=svg('text',{x:p.l-14,y:top+37,fill:'#9ca6b8','text-anchor':'end','font-size':9});detail.textContent=`${group.points.length} eval${group.points.length===1?'':'s'} · ${subsets.size} subset${subsets.size===1?'':'s'}`;root.append(detail);for(let grid=0;grid<3;grid++){const value=hi-grid*(hi-lo)/2,yy=y(value);root.append(svg('line',{x1:p.l,y1:yy,x2:W-p.r,y2:yy,stroke:'#2a3140'}));const tick=svg('text',{x:p.l-10,y:yy+4,fill:'#788397','text-anchor':'end','font-size':9});tick.textContent=number(value);root.append(tick);}const exactSets=new Map();group.points.forEach(point=>{const key=evaluationSetKey(point.evaluation.request.evaluation_set);if(!exactSets.has(key))exactSets.set(key,[]);exactSets.get(key).push(point);});exactSets.forEach(series=>{if(series.length<2)return;root.append(svg('path',{d:series.map((point,i)=>`${i?'L':'M'} ${x(point.index)} ${y(score(point.evaluation))}`).join(' '),fill:'none',stroke:color,'stroke-opacity':.65,'stroke-width':2}));});group.points.forEach(point=>{const e=point.evaluation,final=e.id===manifest.final_evaluation_id||e.id===manifest.final_baseline_evaluation_id,good=e.objective&&e.objective.feasible&&e.report.status==='success',circle=svg('circle',{cx:x(point.index),cy:y(score(e)),r:final?7:5,fill:good?color:'#ff7d87',stroke:final?'#c39bff':'#0b0d12','stroke-width':final?3:2,tabindex:0});circle.style.cursor='pointer';circle.addEventListener('click',()=>selectCandidate(e.request.candidate.id,e.id));const title=svg('title');title.textContent=`${evaluationSetLabel(e.request.evaluation_set)}: ${number(score(e))} · ${e.request.candidate.id}`;circle.append(title);root.append(circle);});const item=node('span');const dot=node('i','dot');dot.style.background=color;item.append(dot,document.createTextNode(splitLabel(group.set)));legend.append(item);});const note=node('span','', 'Lines connect exact case selections only');legend.append(note);const failure=node('span');const failureDot=node('i','dot');failureDot.style.background='var(--red)';failure.append(failureDot,document.createTextNode('failed or infeasible'));legend.append(failure);const final=node('span');const finalDot=node('i','dot');finalDot.style.background='var(--purple)';final.append(finalDot,document.createTextNode('final measurement'));legend.append(final);}
 
     function depths(){ const memo=new Map(); const visit=(id,seen=new Set())=>{if(memo.has(id))return memo.get(id);if(seen.has(id))return 0;seen.add(id);const c=byCandidate.get(id);const d=c&&c.parent_id&&byCandidate.has(c.parent_id)?visit(c.parent_id,seen)+1:0;memo.set(id,d);return d;};candidates.forEach(c=>visit(c.id));return memo; }
     function drawLineage(){const root=document.getElementById('lineage');root.replaceChildren();if(!candidates.length)return;const ds=depths(),groups=new Map();candidates.forEach(c=>{const d=ds.get(c.id);if(!groups.has(d))groups.set(d,[]);groups.get(d).push(c);});const maxDepth=Math.max(...groups.keys()),maxGroup=Math.max(...[...groups.values()].map(g=>g.length));const W=Math.max(760,(maxDepth+1)*180+90),H=Math.max(320,maxGroup*82+60);root.setAttribute('viewBox',`0 0 ${W} ${H}`);const positions=new Map();[...groups.entries()].forEach(([d,group])=>group.forEach((c,i)=>positions.set(c.id,{x:55+d*180,y:40+(i+1)*H/(group.length+1)})));candidates.forEach(c=>{if(c.parent_id&&positions.has(c.parent_id)){const a=positions.get(c.parent_id),b=positions.get(c.id);root.append(svg('path',{d:`M ${a.x+55} ${a.y} C ${a.x+105} ${a.y}, ${b.x-50} ${b.y}, ${b.x} ${b.y}`,fill:'none',stroke:'#3a4355','stroke-width':2}));}});candidates.forEach(c=>{const p=positions.get(c.id),g=svg('g',{tabindex:0});g.style.cursor='pointer';const isBase=manifest.baseline&&c.id===manifest.baseline.id,isBest=c.id===manifest.best_candidate_id;g.append(svg('rect',{x:p.x,y:p.y-20,width:110,height:40,rx:9,fill:c.id===selectedCandidateId?'#253453':'#151b25',stroke:isBest?'#63d49a':isBase?'#87a6ff':'#394255','stroke-width':isBest||isBase?3:1.5}));const t=svg('text',{x:p.x+55,y:p.y+4,fill:'#eef1f7','text-anchor':'middle','font-size':11});t.textContent=short(c.id);g.append(t);g.addEventListener('click',()=>selectCandidate(c.id));root.append(g);}); }
 
-    function renderCandidateList(){const root=document.getElementById('candidate-list');root.replaceChildren();candidates.forEach((c,index)=>{const e=primaryEval(c.id),button=node('button',`candidate${c.id===selectedCandidateId?' active':''}`);const top=node('div','top');top.append(node('strong','',c.description?`Candidate ${index}`:(index===0?'Baseline':`Candidate ${index}`)),node('span','score',number(score(e))));button.append(top,node('small','mono',short(c.id)));const tags=node('div','tags');if(manifest.baseline&&c.id===manifest.baseline.id)tags.append(node('span','tag','baseline'));if(c.id===manifest.best_candidate_id)tags.append(node('span','tag','best'));if(c.trace_id)tags.append(node('span','tag','trace'));button.append(tags);button.addEventListener('click',()=>selectCandidate(c.id));root.append(button);});}
+    function renderCandidateList(){const root=document.getElementById('candidate-list');root.replaceChildren();candidates.forEach((c,index)=>{const e=primaryEval(c.id),button=node('button',`candidate${c.id===selectedCandidateId?' active':''}`);const top=node('div','top');top.append(node('strong','',c.description?`Candidate ${index}`:(index===0?'Baseline':`Candidate ${index}`)),node('span','score',number(score(e))));button.append(top,node('small','mono',short(c.id)));const tags=node('div','tags');if(manifest.baseline&&c.id===manifest.baseline.id)tags.append(node('span','tag','baseline'));if(c.id===manifest.best_candidate_id)tags.append(node('span','tag','best'));if(e)tags.append(node('span','tag',evaluationSetLabel(e.request.evaluation_set)));if(c.trace_id)tags.append(node('span','tag','trace'));button.append(tags);button.addEventListener('click',()=>selectCandidate(c.id));root.append(button);});}
 
     function renderArtifacts(evaluation){const root=node('div','artifact-grid');if(!evaluation||!evaluation.artifacts.length){root.append(node('div','empty','No evaluation artifacts.'));return root;}evaluation.artifacts.forEach(a=>{const card=node('article','artifact');card.append(node('h3','',a.description||a.path),node('div','muted mono',`${a.path} · ${a.media_type||'unknown'} · ${a.size===null?'missing':a.size.toLocaleString()+' bytes'}`));if(a.kind==='image'&&a.content){const image=node('img');image.src=a.content;image.alt=a.description||a.path;card.append(image);}else if(a.kind==='text'&&a.content!==null){card.append(node('pre','',a.content));}else card.append(node('p','muted',a.omitted_reason||'No preview available.'));root.append(card);});return root;}
 
-    function renderCandidateDetail(){const root=document.getElementById('candidate-detail');root.replaceChildren();const c=byCandidate.get(selectedCandidateId);if(!c){root.append(node('div','empty','No candidate selected.'));return;}const head=node('div','candidate-head'),left=node('div');left.append(node('div','eyebrow',c.id===manifest.best_candidate_id?'Best candidate':manifest.baseline&&c.id===manifest.baseline.id?'Baseline':'Candidate'),node('h2','identifier mono',c.id));if(c.description)left.append(node('p','description',c.description));left.append(node('p','muted',`Version ${short(c.version)} · parent ${short(c.parent_id)} · ${new Date(c.created_at).toLocaleString()}`));head.append(left);root.append(head);const values=evalsByCandidate.get(c.id)||[];const cards=node('div','evaluations');values.forEach(e=>{const card=node('button',`evaluation${e.id===selectedEvaluationId?' active':''}`);card.append(node('span','eyebrow',e.request.evaluation_set.name),node('strong','',number(score(e))),node('small','muted',`${e.report.status} · ${e.principal} · ${new Date(e.completed_at).toLocaleString()}`));card.addEventListener('click',()=>{selectedEvaluationId=e.id;renderCandidateDetail();});cards.append(card);});root.append(cards);let selected=values.find(e=>e.id===selectedEvaluationId)||primaryEval(c.id)||values[0];if(selected)selectedEvaluationId=selected.id;const tabs=node('div','tabs');const content=node('div');const options=[['diff','Program diff'],['artifacts','Artifacts'],['evaluation','Evaluation JSON'],['metadata','Candidate metadata']];let active='diff';const show=kind=>{active=kind;[...tabs.children].forEach(b=>b.classList.toggle('active',b.dataset.kind===kind));content.replaceChildren();if(kind==='diff'){if(c.diff.error)content.append(node('p','muted',c.diff.error));content.append(node('h3','',c.diff.label));content.append(node('pre','codebox',c.diff.text||'No textual changes.'));if(c.diff.truncated)content.append(node('p','muted','Diff was truncated in this report.'));}else if(kind==='artifacts')content.append(renderArtifacts(selected));else if(kind==='evaluation')content.append(node('pre','codebox',selected?JSON.stringify(selected,null,2):'No evaluation.'));else content.append(node('pre','codebox',JSON.stringify(c,null,2)));};options.forEach(([kind,label])=>{const b=node('button',`tab${kind===active?' active':''}`,label);b.dataset.kind=kind;b.addEventListener('click',()=>show(kind));tabs.append(b);});root.append(tabs,content);show(active);if(c.trace_id)selectTrace(c.trace_id,false);}
+    function renderCandidateDetail(){const root=document.getElementById('candidate-detail');root.replaceChildren();const c=byCandidate.get(selectedCandidateId);if(!c){root.append(node('div','empty','No candidate selected.'));return;}const head=node('div','candidate-head'),left=node('div');left.append(node('div','eyebrow',c.id===manifest.best_candidate_id?'Best candidate':manifest.baseline&&c.id===manifest.baseline.id?'Baseline':'Candidate'),node('h2','identifier mono',c.id));if(c.description)left.append(node('p','description',c.description));left.append(node('p','muted',`Version ${short(c.version)} · parent ${short(c.parent_id)} · ${new Date(c.created_at).toLocaleString()}`));head.append(left);root.append(head);const values=evalsByCandidate.get(c.id)||[];const cards=node('div','evaluations');values.forEach(e=>{const card=node('button',`evaluation${e.id===selectedEvaluationId?' active':''}`);card.append(node('span','eyebrow',evaluationSetLabel(e.request.evaluation_set)),node('strong','',number(score(e))),node('small','muted',`${e.report.status} · ${e.principal} · ${new Date(e.completed_at).toLocaleString()}`));card.addEventListener('click',()=>{selectedEvaluationId=e.id;renderCandidateDetail();});cards.append(card);});root.append(cards);let selected=values.find(e=>e.id===selectedEvaluationId)||primaryEval(c.id)||values[0];if(selected)selectedEvaluationId=selected.id;const tabs=node('div','tabs');const content=node('div');const options=[['diff','Program diff'],['artifacts','Artifacts'],['evaluation','Evaluation JSON'],['metadata','Candidate metadata']];let active='diff';const show=kind=>{active=kind;[...tabs.children].forEach(b=>b.classList.toggle('active',b.dataset.kind===kind));content.replaceChildren();if(kind==='diff'){if(c.diff.error)content.append(node('p','muted',c.diff.error));content.append(node('h3','',c.diff.label));content.append(node('pre','codebox',c.diff.text||'No textual changes.'));if(c.diff.truncated)content.append(node('p','muted','Diff was truncated in this report.'));}else if(kind==='artifacts')content.append(renderArtifacts(selected));else if(kind==='evaluation')content.append(node('pre','codebox',selected?JSON.stringify(selected,null,2):'No evaluation.'));else content.append(node('pre','codebox',JSON.stringify(c,null,2)));};options.forEach(([kind,label])=>{const b=node('button',`tab${kind===active?' active':''}`,label);b.dataset.kind=kind;b.addEventListener('click',()=>show(kind));tabs.append(b);});root.append(tabs,content);show(active);if(c.trace_id)selectTrace(c.trace_id,false);}
 
     function selectCandidate(id,evaluationId=null){selectedCandidateId=id;if(evaluationId)selectedEvaluationId=evaluationId;else{const e=primaryEval(id);selectedEvaluationId=e&&e.id;}renderCandidateList();renderCandidateDetail();drawLineage();}
 
@@ -495,4 +674,4 @@ _REPORT_HTML = r'''<!doctype html>
   </script>
 </body>
 </html>
-'''
+"""

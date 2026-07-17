@@ -2190,6 +2190,7 @@ claude = [
 ]
 harbor = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "pyyaml" },
     { name = "uvicorn" },
@@ -2223,6 +2224,7 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'claude'", specifier = ">=0.1.56" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "fastapi", marker = "extra == 'harbor'", specifier = ">=0.110" },
+    { name = "httpx", marker = "extra == 'harbor'", specifier = ">=0.28.1" },
     { name = "httpx", marker = "extra == 'optimize'", specifier = ">=0.28.1" },
     { name = "jinja2", marker = "extra == 'harbor'", specifier = ">=3.1.6" },
     { name = "lxml", marker = "extra == 'optimize'", specifier = ">=6.0.2" },

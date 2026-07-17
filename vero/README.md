@@ -92,7 +92,7 @@ disclosure = "aggregate"
 
 [evaluations.agent_budget]
 total_runs = 50
-max_cases_per_run = 100
+total_cases = 5000
 
 [[evaluations]]
 name = "test"
@@ -515,6 +515,15 @@ agent_import_path: my_program.agent:Agent
 harbor_requirement: harbor[modal]==0.18.0
 environment_name: modal
 secrets: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: [gpt-5]
+  evaluation:
+    allowed_models: [gpt-5-mini]
+    max_requests: 5000
+    max_tokens: 20000000
 
 partitions:
   validation: [example/task-a, example/task-b, example/task-c,
@@ -527,7 +536,6 @@ agent_access:
     expose_case_resources: false
     total_runs: 10
     total_cases: 50
-    max_cases_per_run: 5
 
 selection_partition: validation
 targets:
@@ -536,15 +544,50 @@ targets:
 ```
 
 Compile it with `vero harbor build --config build.yaml --output task`. The
-`environment_name` selects Modal for each nested evaluation; the listed secrets
-are forwarded as environment references, never embedded in the compiled task.
-Run the outer optimization on Modal as well:
+`environment_name` selects Modal for each nested evaluation. `secrets` are
+sidecar-only environment references and are explicitly removed from the
+optimizer container. The inference gateway runs as a third, trusted service:
+it alone receives the upstream provider credential. The optimizer receives a
+producer-scoped token with no default request or token ceiling, while candidate
+evaluations receive an independently budgeted evaluation token and a URL
+attributed to the evaluation ID.
+For a real optimization, use the VeRO launcher so provider credentials are
+renamed for the gateway before Harbor constructs the coding agent:
 
 ```bash
-harbor run --path task --env modal --agent codex --model openai/gpt-5
+vero harbor run \
+  --config build.yaml \
+  --environment modal \
+  --agent codex \
+  --model openai/gpt-5
 ```
 
-Configure the outer agent's model credentials through Harbor's agent environment.
+Do not invoke `harbor run` directly for a gateway-enabled build: Harbor coding
+agent adapters otherwise discover the upstream provider credential from their
+own host process before entering the task container.
+
+The gateway implements the Responses, Chat Completions, and Embeddings HTTP
+surfaces, restricts each scope to configured models, and records requests and
+provider-reported token usage durably. Request and token limits are optional per
+scope; omit them to record usage without enforcing a ceiling. `vero harbor
+status` includes used inference and any configured remaining budgets. Request
+limits are exact; token limits stop the next request after reported usage
+reaches the limit, so already accepted concurrent responses can cross a token
+boundary.
+
+Evaluation case budgets are cumulative rather than per-run. An agent may spend
+its entire remaining case budget in one authorized evaluation; deciding between
+wide measurements and more iterations is part of its optimization strategy.
+
+Because Harbor verification uses the shared environment, the verifier exports
+the complete sidecar session before teardown. Successful runs contain
+`session.tar.gz`, `session.tar.gz.sha256`, `experiment.html`, `status.json`, and
+`finalization.json` under the verifier artifacts. The archive contains the bare
+candidate Git repository, canonical evaluation records and artifacts, budget
+state, finalization result, and an available producer trajectory. Export or
+report-generation failure fails verification rather than silently deleting the
+only durable copy with an ephemeral environment.
+
 The test partition and task source exist only in the sidecar image; the optimizer
 container receives the editable baseline, the agent-facing CLI, and approved
 result projections. Exact Harbor and registry task-source versions are required
@@ -561,6 +604,12 @@ The generated shared-container topology protects the admin credential with
 Unix ownership and permissions. It assumes candidate code cannot gain root in
 that container; higher-assurance deployments should keep finalization
 credentials outside the candidate workbench entirely.
+
+The inference boundary protects provider credentials, not infrastructure
+credentials. A Harbor controller using Modal still needs Modal authorization;
+arbitrary target code imported into that controller is not isolated from its
+OS process. Use a separately sandboxed runner or infrastructure broker when
+target programs themselves are adversarial.
 
 `EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
 `SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
@@ -616,7 +665,12 @@ a disposable view: durable candidate and evaluation stores remain the trusted
 source. In Harbor, the sidecar owns the writable volume and the coding-agent
 container mounts the same directory read-only. Case resources are exported only
 when the evaluation authorization explicitly permits them and the backend
-provides a safe export.
+provides a safe export. For Harbor datasets, an authorized partition contains
+the complete pinned task directories and dataset-level files—not merely case
+identifiers. Full-disclosure Harbor evaluations also expose the complete
+downloaded trial record for every successful or failed case, including exact
+failure results, exception tracebacks, trial logs, and target-agent artifacts;
+aggregate projections expose neither case records nor their trial artifacts.
 
 Strategies can propose a batch of candidates and route each proposal to a named
 producer. Set `max_concurrency` to produce and evaluate independent candidates in

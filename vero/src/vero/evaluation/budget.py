@@ -71,21 +71,9 @@ class BudgetLedger:
             budget = self._budgets.get(key)
             if budget is None:
                 return None
-            if cost.cases is None and (
-                budget.max_cases_per_run is not None
-                or budget.remaining_cases is not None
-            ):
+            if cost.cases is None and budget.remaining_cases is not None:
                 raise EvaluationBudgetExceeded(
                     "evaluation case cost is unknown but the budget has a case limit"
-                )
-            if (
-                budget.max_cases_per_run is not None
-                and cost.cases is not None
-                and cost.cases > budget.max_cases_per_run
-            ):
-                raise EvaluationBudgetExceeded(
-                    f"evaluation requests {cost.cases} cases, exceeding the per-run "
-                    f"limit of {budget.max_cases_per_run}"
                 )
             if budget.remaining_runs is not None and cost.runs > budget.remaining_runs:
                 raise EvaluationBudgetExceeded("evaluation run budget exhausted")
@@ -182,9 +170,7 @@ class BudgetLedger:
 
     def _serialize(
         self,
-        budgets: dict[
-            tuple[str, str, EvaluationPrincipal], EvaluationBudget
-        ]
+        budgets: dict[tuple[str, str, EvaluationPrincipal], EvaluationBudget]
         | None = None,
     ) -> dict[str, Any]:
         values = budgets if budgets is not None else self._budgets

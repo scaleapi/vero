@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import posixpath
 from pathlib import Path
 
@@ -153,6 +154,7 @@ class EvaluationAccessStatus(EvaluationModel):
 class SidecarStatus(EvaluationModel):
     submit_enabled: bool
     evaluation_access: list[EvaluationAccessStatus]
+    inference_usage: dict[str, JsonValue] | None = None
 
 
 class Submission(EvaluationModel):
@@ -175,12 +177,18 @@ class EvaluationSidecar:
         access_policies: list[SidecarEvaluationPolicy],
         agent_volume: Path | None = None,
         admin_volume: Path | None = None,
+        inference_usage_path: Path | None = None,
+        inference_limits: dict[str, dict[str, JsonValue]] | None = None,
         submit_enabled: bool = False,
     ):
         self.engine = engine
         self.candidate_transport = candidate_transport
         self.agent_volume = Path(agent_volume) if agent_volume is not None else None
         self.admin_volume = Path(admin_volume) if admin_volume is not None else None
+        self.inference_usage_path = (
+            Path(inference_usage_path) if inference_usage_path is not None else None
+        )
+        self.inference_limits = inference_limits or {}
         self.submit_enabled = submit_enabled
         self._context_lock = asyncio.Lock()
         self._context_initialized = False
@@ -196,9 +204,7 @@ class EvaluationSidecar:
             if self.agent_volume is not None
             else None
         )
-        self._policies: dict[
-            tuple[str, str, str | None], SidecarEvaluationPolicy
-        ] = {}
+        self._policies: dict[tuple[str, str, str | None], SidecarEvaluationPolicy] = {}
         for policy in access_policies:
             if policy.key in self._policies:
                 raise ValueError(
@@ -494,7 +500,42 @@ class EvaluationSidecar:
                     budget=budget,
                 )
             )
+        inference_usage: dict[str, JsonValue] | None = None
+        observed_scopes: dict[str, object] = {}
+        if self.inference_usage_path is not None and self.inference_usage_path.exists():
+            try:
+                value = self.inference_usage_path.read_text(encoding="utf-8")
+                parsed = json.loads(value)
+                scopes = parsed.get("scopes") if isinstance(parsed, dict) else None
+                if isinstance(scopes, dict):
+                    observed_scopes = scopes
+            except (OSError, ValueError):
+                observed_scopes = {}
+        if self.inference_limits:
+            inference_usage = {}
+            for name, limits in self.inference_limits.items():
+                observed = observed_scopes.get(name)
+                usage = observed if isinstance(observed, dict) else {}
+                requests = usage.get("requests", 0)
+                total_tokens = usage.get("total_tokens", 0)
+                max_requests = limits.get("max_requests")
+                max_tokens = limits.get("max_tokens")
+                inference_usage[name] = {
+                    **limits,
+                    **usage,
+                    "remaining_requests": (
+                        None
+                        if max_requests is None
+                        else max(0, int(max_requests) - int(requests))
+                    ),
+                    "remaining_tokens": (
+                        None
+                        if max_tokens is None
+                        else max(0, int(max_tokens) - int(total_tokens))
+                    ),
+                }
         return SidecarStatus(
             submit_enabled=self.submit_enabled,
             evaluation_access=access,
+            inference_usage=inference_usage,
         )

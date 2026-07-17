@@ -537,22 +537,21 @@ async def test_budget_ledger_reserves_and_restores(tmp_path: Path):
                 evaluation_set_key=evaluation_set.budget_key("command"),
                 total_runs=2,
                 total_cases=10,
-                max_cases_per_run=6,
             )
         ],
         path=path,
     )
 
     remaining = await ledger.reserve(
-        "command", evaluation_set, EvaluationCost(runs=1, cases=4)
+        "command", evaluation_set, EvaluationCost(runs=1, cases=7)
     )
 
     assert remaining.remaining_runs == 1
-    assert remaining.remaining_cases == 6
+    assert remaining.remaining_cases == 3
     assert BudgetLedger.load(path).get("command", evaluation_set) == remaining
 
     with pytest.raises(EvaluationBudgetExceeded):
-        await ledger.reserve("command", evaluation_set, EvaluationCost(runs=1, cases=7))
+        await ledger.reserve("command", evaluation_set, EvaluationCost(runs=1, cases=4))
 
 
 @pytest.mark.asyncio

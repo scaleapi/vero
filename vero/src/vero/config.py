@@ -71,7 +71,6 @@ class BackendConfig(EvaluationModel):
 class BudgetConfig(EvaluationModel):
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
-    max_cases_per_run: int | None = Field(default=None, ge=1)
 
     def to_model(
         self,
@@ -86,7 +85,6 @@ class BudgetConfig(EvaluationModel):
             principal=principal,
             total_runs=self.total_runs,
             total_cases=self.total_cases,
-            max_cases_per_run=self.max_cases_per_run,
         )
 
 

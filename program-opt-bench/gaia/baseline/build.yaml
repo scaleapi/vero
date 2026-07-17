@@ -16,17 +16,15 @@ partition_files:
 agent_access:
   - partition: development
     disclosure: full
-    expose_case_resources: false
+    expose_case_resources: true
     total_runs: 12
     total_cases: 132
-    max_cases_per_run: 12
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
     min_aggregate_cases: 5
     total_runs: 8
     total_cases: 264
-    max_cases_per_run: 33
 
 selection_partition: validation
 targets:
@@ -62,9 +60,18 @@ max_concurrency: 8
 error_rate_threshold: 0.1
 verifier_timeout_seconds: 7200
 secrets:
-  - OPENAI_API_KEY
-  - OPENAI_BASE_URL
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: [gpt-5.4]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini-2026-03-17]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true

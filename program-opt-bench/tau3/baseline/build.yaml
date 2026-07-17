@@ -1,0 +1,77 @@
+name: vero/optimize-tau3-baseline
+description: >-
+  Improve a customer-service agent on canonical tau3-bench tasks while
+  preserving the task-owned MCP protocol and evaluation.
+agent_repo: target
+task_source: sierra-research/tau3-bench@sha256:a57304f682894ac061090769af771a3617664f3ff6e5417d4eadf8e30433e4d9
+task_manifest: ../partitions/manifest.json
+agent_import_path: tau3_agent.agent:Tau3Agent
+harbor_requirement: harbor[modal]==0.18.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 12
+    total_cases: 120
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 8
+    total_cases: 300
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: tau3
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: auto_best
+baseline_floor: true
+score_baseline: true
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: openai/gpt-5.4-mini-2026-03-17
+environment_name: modal
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+timeout_seconds: 14400
+max_concurrency: 8
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 14400
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: [gpt-5.4]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini-2026-03-17]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true

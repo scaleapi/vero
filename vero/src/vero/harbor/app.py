@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import shutil
+import tempfile
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.background import BackgroundTask
 
 from vero.evaluation import (
     EvaluationBudgetExceeded,
@@ -15,6 +20,7 @@ from vero.evaluation import (
 )
 from vero.evaluation.exceptions import EvaluationExecutionError
 from vero.harbor.auth import check_admin_token
+from vero.harbor.session import create_harbor_session_archive
 from vero.harbor.sidecar import (
     EvaluationAccessError,
     EvaluationSidecar,
@@ -117,5 +123,28 @@ def create_app(
             reverse=True,
         )
         return {"evaluations": records}
+
+    @app.get("/session/export")
+    async def export_session(
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        directory = Path(tempfile.mkdtemp(prefix="vero-harbor-export-"))
+        archive = directory / "session.tar.gz"
+        try:
+            await asyncio.to_thread(
+                create_harbor_session_archive,
+                sidecar.engine.evaluator.session_dir,
+                archive,
+            )
+        except BaseException:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+        return FileResponse(
+            archive,
+            media_type="application/gzip",
+            filename="vero-session.tar.gz",
+            background=BackgroundTask(shutil.rmtree, directory, ignore_errors=True),
+        )
 
     return app

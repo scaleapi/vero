@@ -11,6 +11,7 @@ RUN uv pip install --system "/opt/vero[harbor]"
 {% else %}
 RUN uv pip install --system "{{ vero_requirement }}"
 {% endif %}
+RUN uv pip install --system "{{ harbor_requirement }}"
 
 COPY agent-baseline /opt/agent-baseline
 COPY sidecar/cases /opt/cases

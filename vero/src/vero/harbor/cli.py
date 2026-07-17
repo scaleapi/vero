@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
 import urllib.request
@@ -22,6 +25,11 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.harbor.auth import read_admin_token
+from vero.harbor.session import (
+    create_harbor_session_archive,
+    extract_harbor_session_archive,
+    file_sha256,
+)
 from vero.harbor.sidecar import SidecarEvaluationRequest
 
 
@@ -58,6 +66,182 @@ def _request(
         raise click.ClickException(
             f"could not reach evaluation sidecar: {error}"
         ) from error
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            file.write(payload)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _download(
+    path: str,
+    destination: Path,
+    *,
+    headers: dict[str, str] | None = None,
+) -> None:
+    request = urllib.request.Request(
+        f"{_base_url()}{path}",
+        method="GET",
+        headers=headers or {},
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as file:
+            try:
+                with urllib.request.urlopen(request) as response:
+                    shutil.copyfileobj(response, file, length=1024 * 1024)
+            except urllib.error.HTTPError as error:
+                message = error.read().decode("utf-8", errors="replace")
+                raise click.ClickException(
+                    f"GET {path} returned {error.code}: {message}"
+                ) from error
+            except urllib.error.URLError as error:
+                raise click.ClickException(
+                    f"could not reach evaluation sidecar: {error}"
+                ) from error
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _redact_trace_text(value: str) -> str:
+    value = re.sub(
+        r"(?m)^([A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD)=).*$",
+        r"\1[REDACTED]",
+        value,
+    )
+    value = re.sub(
+        r"(?i)(bearer\s+)[A-Za-z0-9._~-]{16,}",
+        r"\1[REDACTED]",
+        value,
+    )
+    return re.sub(r"\bsk-[A-Za-z0-9_-]{12,}\b", "[REDACTED]", value)
+
+
+def _redact_trace_value(value: object) -> object:
+    if isinstance(value, str):
+        return _redact_trace_text(value)
+    if isinstance(value, list):
+        return [_redact_trace_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_trace_value(item) for key, item in value.items()}
+    return value
+
+
+def _load_agent_trace(path: Path) -> object:
+    text = _redact_trace_text(path.read_text(encoding="utf-8", errors="replace"))
+    try:
+        return _redact_trace_value(json.loads(text))
+    except json.JSONDecodeError:
+        values = []
+        for line in text.splitlines():
+            try:
+                values.append(_redact_trace_value(json.loads(line)))
+            except json.JSONDecodeError:
+                continue
+        if not values:
+            return [{"role": "assistant", "content": text}]
+
+    entries: list[dict] = []
+    for value in values:
+        if not isinstance(value, dict):
+            entries.append({"type": "event", "value": value})
+            continue
+        item = value.get("item")
+        if value.get("type") != "item.completed" or not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "agent_message":
+            entries.append({"role": "assistant", "content": item.get("text", "")})
+        elif item_type == "command_execution":
+            entries.extend(
+                [
+                    {
+                        "type": "function_call",
+                        "name": "exec_command",
+                        "arguments": item.get("command", ""),
+                    },
+                    {
+                        "type": "function_call_output",
+                        "output": item.get("aggregated_output", ""),
+                    },
+                ]
+            )
+        elif item_type == "error":
+            entries.append(
+                {"type": "error", "message": item.get("message", "unknown error")}
+            )
+    return entries or values
+
+
+def _compiled_run_environment(task: Path) -> dict[str, str]:
+    """Separate provider credentials from the environment seen by Harbor agents."""
+    environment = os.environ.copy()
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return environment
+    try:
+        launch = json.loads(path.read_text(encoding="utf-8"))
+        api_source = launch["upstream_api_key_source"]
+        api_target = launch["upstream_api_key_target"]
+        producer_api_key = launch["producer_api_key"]
+        producer_base_url = launch["producer_base_url"]
+        base_source = launch.get("upstream_base_url_source")
+        base_target = launch["upstream_base_url_target"]
+    except (KeyError, json.JSONDecodeError, OSError, TypeError) as error:
+        raise click.ClickException(
+            f"invalid compiled gateway launch config: {error}"
+        ) from error
+    for name, value in (
+        ("upstream_api_key_source", api_source),
+        ("upstream_api_key_target", api_target),
+        ("producer_api_key", producer_api_key),
+        ("producer_base_url", producer_base_url),
+        ("upstream_base_url_target", base_target),
+    ):
+        if not isinstance(value, str) or not value:
+            raise click.ClickException(f"invalid compiled gateway field {name}")
+    upstream_api_key = environment.get(api_source)
+    if not upstream_api_key:
+        raise click.ClickException(
+            f"upstream inference credential {api_source} is missing"
+        )
+    environment[api_target] = upstream_api_key
+    if base_source is not None:
+        if not isinstance(base_source, str) or not base_source:
+            raise click.ClickException(
+                "invalid compiled gateway field upstream_base_url_source"
+            )
+        upstream_base_url = environment.get(base_source)
+        if not upstream_base_url:
+            raise click.ClickException(
+                f"upstream inference base URL {base_source} is missing"
+            )
+        environment[base_target] = upstream_base_url
+    environment["OPENAI_API_KEY"] = producer_api_key
+    environment["OPENAI_BASE_URL"] = producer_base_url
+    return environment
 
 
 def _parameters(values: tuple[str, ...]) -> dict:
@@ -130,13 +314,18 @@ def run_command(config_path, agent, model, environment, extra):
     uvx = shutil.which("uvx")
     if uvx is None:
         raise click.ClickException("uvx is required to run a compiled Harbor task")
+    config = load_harbor_build_config(config_path)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(
-            load_harbor_build_config(config_path),
+            config,
             Path(temporary) / "task",
         )
         command = [
             uvx,
+            "--python",
+            sys.executable,
+            "--from",
+            config.harbor_requirement,
             "harbor",
             "run",
             "-p",
@@ -150,7 +339,10 @@ def run_command(config_path, agent, model, environment, extra):
             command.extend(["-m", model])
         command.extend(extra)
         click.echo(shlex.join(command))
-        completed = subprocess.run(command)
+        completed = subprocess.run(
+            command,
+            env=_compiled_run_environment(task),
+        )
         if completed.returncode:
             raise SystemExit(completed.returncode)
 
@@ -184,6 +376,22 @@ def serve_command(factory_path, config_path, admin_token_path, host, port):
         host=host,
         port=port,
     )
+
+
+@harbor.command("inference-gateway")
+@click.option(
+    "--config",
+    "config_path",
+    required=True,
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+)
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=8001, type=click.IntRange(1, 65535), show_default=True)
+def inference_gateway_command(config_path, host, port):
+    """Serve the credential-isolating, budgeted inference proxy."""
+    from vero.harbor.inference import serve_inference_gateway
+
+    serve_inference_gateway(config_path=config_path, host=host, port=port)
 
 
 @harbor.command("eval")
@@ -327,3 +535,120 @@ def finalize_command(token_file, output):
         encoding="utf-8",
     )
     click.echo(json.dumps(result, indent=2))
+
+
+@harbor.command("export-session")
+@click.option(
+    "--token-file",
+    required=True,
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+)
+@click.option(
+    "--output",
+    default="/logs/verifier/session.tar.gz",
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option(
+    "--report-output",
+    default="/logs/verifier/experiment.html",
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option(
+    "--status-output",
+    default="/logs/verifier/status.json",
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option(
+    "--finalization-output",
+    default="/logs/verifier/finalization.json",
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+@click.option(
+    "--agent-trace",
+    default="/logs/agent/trajectory.json",
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+def export_session_command(
+    token_file,
+    output,
+    report_output,
+    status_output,
+    finalization_output,
+    agent_trace,
+):
+    """Persist the complete sidecar session and portable experiment report."""
+    from vero.report import generate_experiment_report
+
+    token = read_admin_token(token_file)
+    headers = {"Authorization": f"Bearer {token}"}
+    finalization = _request("POST", "/finalize", headers=headers)
+    status = _request("GET", "/status")
+    output = Path(output).expanduser().resolve()
+    report_output = Path(report_output).expanduser().resolve()
+    status_output = Path(status_output).expanduser().resolve()
+    finalization_output = Path(finalization_output).expanduser().resolve()
+    with tempfile.TemporaryDirectory(prefix="vero-harbor-session-") as directory:
+        temporary = Path(directory)
+        downloaded = temporary / "sidecar-session.tar.gz"
+        _download("/session/export", downloaded, headers=headers)
+        session = extract_harbor_session_archive(downloaded, temporary / "extracted")
+        encoded_finalization = (
+            json.dumps(finalization, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        encoded_status = (
+            json.dumps(status, ensure_ascii=False, indent=2) + "\n"
+        ).encode("utf-8")
+        _atomic_write_bytes(session / "harbor-finalization.json", encoded_finalization)
+        _atomic_write_bytes(session / "harbor-status.json", encoded_status)
+
+        requested_trace = Path(agent_trace).expanduser()
+        trace_path = next(
+            (
+                path
+                for path in (
+                    requested_trace,
+                    Path("/logs/agent/trajectory.json"),
+                    Path("/logs/agent/codex.txt"),
+                )
+                if path.is_file() and not path.is_symlink()
+            ),
+            None,
+        )
+        if trace_path is not None:
+            trace = _load_agent_trace(trace_path)
+            trace_destination = (
+                session / "artifacts" / "agents" / "harbor-producer" / "trace.json"
+            )
+            _atomic_write_bytes(
+                trace_destination,
+                (json.dumps(trace, ensure_ascii=False, indent=2) + "\n").encode(
+                    "utf-8"
+                ),
+            )
+
+        generated_report = temporary / "experiment.html"
+        asyncio.run(generate_experiment_report(session, generated_report))
+        create_harbor_session_archive(session, output)
+        digest = file_sha256(output)
+        _atomic_write_bytes(report_output, generated_report.read_bytes())
+        _atomic_write_bytes(status_output, encoded_status)
+        _atomic_write_bytes(finalization_output, encoded_finalization)
+        _atomic_write_bytes(
+            output.with_name(f"{output.name}.sha256"),
+            f"{digest}  {output.name}\n".encode("ascii"),
+        )
+    click.echo(
+        json.dumps(
+            {
+                "session": str(output),
+                "sha256": digest,
+                "report": str(report_output),
+            },
+            indent=2,
+        )
+    )

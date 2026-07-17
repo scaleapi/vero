@@ -112,9 +112,12 @@ class StubWorkspace(Workspace):
 class StubCandidateRepository:
     family = "stub"
 
+    def __init__(self, root: Path):
+        self.root = root
+
     @asynccontextmanager
     async def checkout(self, candidate, *, sandbox, name=None):
-        yield StubWorkspace(Path("/tmp/vero-stub-workspace"), candidate.version)
+        yield StubWorkspace(self.root, candidate.version)
 
 
 class StubBackend:
@@ -187,7 +190,7 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False):
     )
     engine = EvaluationEngine(
         evaluator=Evaluator(
-            candidate_repository=StubCandidateRepository(),
+            candidate_repository=StubCandidateRepository(tmp_path / "stub-workspace"),
             sandbox=workspace.sandbox,
             session_dir=tmp_path / "session",
         ),
@@ -266,6 +269,42 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
         "secondary",
     ]
     assert status.evaluation_access[0].expose_case_resources is False
+
+
+def test_sidecar_status_reports_inference_usage_and_remaining_budget(tmp_path):
+    sidecar, _, _ = _sidecar(tmp_path)
+    usage_path = tmp_path / "inference/usage.json"
+    usage_path.parent.mkdir()
+    usage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scopes": {
+                    "producer": {
+                        "requests": 3,
+                        "total_tokens": 120,
+                        "active_requests": 0,
+                    }
+                },
+            }
+        )
+    )
+    sidecar.inference_usage_path = usage_path
+    sidecar.inference_limits = {
+        "producer": {
+            "allowed_models": ["gpt-test"],
+            "max_requests": 10,
+            "max_tokens": 1000,
+            "max_concurrency": 2,
+        }
+    }
+
+    usage = sidecar.status().inference_usage
+
+    assert usage is not None
+    assert usage["producer"]["requests"] == 3
+    assert usage["producer"]["remaining_requests"] == 7
+    assert usage["producer"]["remaining_tokens"] == 880
 
 
 @pytest.mark.asyncio

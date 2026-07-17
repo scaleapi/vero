@@ -6,11 +6,13 @@ import asyncio
 import hashlib
 import json
 import math
+import mimetypes
 import os
 import re
 import shutil
+import tempfile
 from collections import defaultdict
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -115,11 +117,16 @@ class HarborBackendConfig(EvaluationModel):
     default_index: str = "https://pypi.org/simple"
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
+    inference_gateway_url: str | None = None
+    inference_gateway_token: str | None = None
+    case_resources_cache_path: str | None = None
     extra_args: list[str] = Field(default_factory=list)
 
-    @field_validator("cases_path")
+    @field_validator("cases_path", "case_resources_cache_path")
     @classmethod
-    def validate_absolute_file(cls, value: str) -> str:
+    def validate_absolute_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if not value.strip() or not Path(value).is_absolute():
             raise ValueError("Harbor backend file paths must be absolute")
         return value
@@ -161,7 +168,13 @@ class HarborBackendConfig(EvaluationModel):
             )
         return value
 
-    @field_validator("partition", "model", "reward_key")
+    @field_validator(
+        "partition",
+        "model",
+        "reward_key",
+        "inference_gateway_url",
+        "inference_gateway_token",
+    )
     @classmethod
     def validate_optional_identity(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -242,6 +255,26 @@ class HarborBackendConfig(EvaluationModel):
             raise ValueError(
                 "environment and passthrough_environment overlap for: "
                 + ", ".join(sorted(overlap))
+            )
+        if (self.inference_gateway_url is None) != (
+            self.inference_gateway_token is None
+        ):
+            raise ValueError(
+                "inference_gateway_url and inference_gateway_token must be set together"
+            )
+        if (
+            self.inference_gateway_url is not None
+            and not self.inference_gateway_url.startswith(("http://", "https://"))
+        ):
+            raise ValueError("inference_gateway_url must be HTTP(S)")
+        gateway_names = {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+        gateway_overlap = gateway_names & (
+            set(self.environment) | set(self.passthrough_environment)
+        )
+        if self.inference_gateway_url is not None and gateway_overlap:
+            raise ValueError(
+                "gateway-managed environment variables must not also be configured: "
+                + ", ".join(sorted(gateway_overlap))
             )
         return self
 
@@ -333,31 +366,163 @@ class HarborBackend:
         destination: str,
         sandbox: Sandbox,
     ) -> None:
-        """Expose configured case identities, never the hidden task source."""
+        """Expose complete task resources for an explicitly authorized partition."""
 
-        index = []
-        for case in self._selected_cases(evaluation_set):
-            digest = hashlib.sha256(case.id.encode()).hexdigest()
-            filename = f"{digest}.json"
-            await sandbox.write_file(
-                str(PurePosixPath(destination) / filename),
-                case.model_dump_json(indent=2) + "\n",
+        cases = self._selected_cases(evaluation_set)
+        configured_cache = self.config.case_resources_cache_path
+        if configured_cache is None:
+            with tempfile.TemporaryDirectory(prefix="vero-harbor-cases-") as temporary:
+                root = Path(temporary)
+                await self._materialize_case_resources(root, cases, evaluation_set)
+                await sandbox.upload(str(root), destination)
+            return
+
+        cache = Path(configured_cache)
+        if not (cache / "index.json").is_file():
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            temporary = Path(
+                tempfile.mkdtemp(
+                    dir=cache.parent,
+                    prefix=f".{cache.name}.",
+                )
             )
-            index.append({"case_id": case.id, "path": filename})
-        await sandbox.write_file(
-            str(PurePosixPath(destination) / "index.json"),
+            try:
+                await self._materialize_case_resources(
+                    temporary,
+                    cases,
+                    evaluation_set,
+                )
+                if cache.exists():
+                    shutil.rmtree(cache)
+                os.replace(temporary, cache)
+            finally:
+                shutil.rmtree(temporary, ignore_errors=True)
+        self._make_agent_readable(cache)
+        await sandbox.upload(str(cache), destination)
+
+    async def _materialize_case_resources(
+        self,
+        root: Path,
+        cases: list[HarborCase],
+        evaluation_set: EvaluationSet,
+    ) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        source = Path(self.config.task_source).expanduser()
+        if source.exists():
+            case_paths = self._materialize_local_case_resources(root, source, cases)
+            dataset_files_path = None
+        else:
+            case_paths, dataset_files_path = await self._materialize_package_resources(
+                root,
+                cases,
+            )
+        (root / "index.json").write_text(
             json.dumps(
                 {
                     "schema_version": 1,
                     "evaluation_set": evaluation_set.model_dump(mode="json"),
-                    "cases": index,
-                    "task_source_exposed": False,
+                    "task_source": self.config.task_source,
+                    "task_source_exposed": True,
+                    "dataset_files_path": dataset_files_path,
+                    "cases": [
+                        {
+                            "case_id": case.id,
+                            "task_name": case.task_name,
+                            "path": case_paths[case.id],
+                        }
+                        for case in cases
+                    ],
                 },
                 ensure_ascii=False,
                 indent=2,
             )
             + "\n",
+            encoding="utf-8",
         )
+        self._make_agent_readable(root)
+
+    @staticmethod
+    def _make_agent_readable(root: Path) -> None:
+        """Allow the non-root producer to traverse its read-only context mount."""
+
+        for path in (root, *root.rglob("*")):
+            if path.is_symlink():
+                continue
+            mode = path.stat().st_mode & 0o777
+            if path.is_dir():
+                path.chmod((mode | 0o055) & ~0o022)
+            elif path.is_file():
+                path.chmod((mode | 0o044) & ~0o022)
+
+    def _materialize_local_case_resources(
+        self,
+        root: Path,
+        source: Path,
+        cases: list[HarborCase],
+    ) -> dict[str, str]:
+        tasks = root / "tasks"
+        tasks.mkdir()
+        paths: dict[str, str] = {}
+        resolved_source = source.resolve()
+        for case in cases:
+            task = (resolved_source / case.task_name).resolve()
+            if task.parent != resolved_source or not task.is_dir():
+                raise ValueError(
+                    f"local Harbor case {case.task_name!r} is not a direct task directory"
+                )
+            destination = tasks / hashlib.sha256(case.id.encode()).hexdigest()
+            shutil.copytree(task, destination)
+            paths[case.id] = destination.relative_to(root).as_posix()
+        dataset_files = root / "dataset-files"
+        dataset_files.mkdir()
+        for path in resolved_source.iterdir():
+            if path.is_file() and not path.is_symlink():
+                shutil.copy2(path, dataset_files / path.name)
+        if not any(dataset_files.iterdir()):
+            dataset_files.rmdir()
+        return paths
+
+    async def _materialize_package_resources(
+        self,
+        root: Path,
+        cases: list[HarborCase],
+    ) -> tuple[dict[str, str], str | None]:
+        try:
+            from harbor.registry.client.package import PackageDatasetClient
+            from harbor.tasks.client import TaskClient
+        except ImportError as error:
+            raise RuntimeError(
+                "the pinned Harbor package must be installed to expose remote case resources"
+            ) from error
+
+        client = PackageDatasetClient()
+        metadata = await client.get_dataset_metadata(self.config.task_source)
+        by_name = {task_id.get_name(): task_id for task_id in metadata.task_ids}
+        missing = sorted(
+            case.task_name for case in cases if case.task_name not in by_name
+        )
+        if missing:
+            raise ValueError(
+                "authorized cases are absent from the pinned Harbor dataset: "
+                + ", ".join(missing)
+            )
+        task_ids = [by_name[case.task_name] for case in cases]
+        tasks_root = root / "tasks"
+        result = await TaskClient().download_tasks(
+            task_ids=task_ids,
+            output_dir=tasks_root,
+            export=True,
+        )
+        paths = {
+            case.id: download.path.relative_to(root).as_posix()
+            for case, download in zip(cases, result.results, strict=True)
+        }
+        dataset_root = root / "dataset-files"
+        files = await client.download_dataset_files(
+            metadata,
+            output_dir=dataset_root,
+        )
+        return paths, "dataset-files" if files else None
 
     def _secrets(self) -> list[str]:
         values = list(self.config.environment.values())
@@ -366,6 +531,8 @@ class HarborBackend:
             for name in self.config.passthrough_environment
             if name in os.environ
         )
+        if self.config.inference_gateway_token is not None:
+            values.append(self.config.inference_gateway_token)
         return values
 
     def sanitize_error(self, message: str) -> str:
@@ -393,7 +560,7 @@ class HarborBackend:
                 "pass secrets through the backend environment"
             )
 
-    def _environment(self) -> dict[str, str]:
+    def _environment(self, evaluation_id: str) -> dict[str, str]:
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
         for name in ("TMPDIR", "TMP", "TEMP", "SYSTEMROOT"):
             if name in os.environ:
@@ -402,6 +569,12 @@ class HarborBackend:
         for name in self.config.passthrough_environment:
             if name in os.environ:
                 environment[name] = os.environ[name]
+        if self.config.inference_gateway_url is not None:
+            environment["OPENAI_API_KEY"] = self.config.inference_gateway_token or ""
+            environment["OPENAI_BASE_URL"] = (
+                f"{self.config.inference_gateway_url.rstrip('/')}/scopes/evaluation/"
+                f"{evaluation_id}/v1"
+            )
         return environment
 
     def _source_args(self, task_source: str, *, local: bool) -> list[str]:
@@ -558,11 +731,65 @@ class HarborBackend:
                     )
         return None
 
+    def _trial_artifacts(
+        self,
+        attempts: list[dict[str, Any]],
+        artifact_root: Path,
+    ) -> list[EvaluationArtifact]:
+        """Reference complete Harbor trial records and redact configured credentials."""
+
+        resolved_root = artifact_root.resolve()
+        artifacts: list[EvaluationArtifact] = []
+        seen: set[str] = set()
+        for attempt in attempts:
+            trial_dir_value = attempt.get("_trial_dir")
+            if not trial_dir_value:
+                continue
+            trial_root = Path(trial_dir_value)
+            if not trial_root.is_dir() or trial_root.is_symlink():
+                continue
+            for path in sorted(trial_root.rglob("*")):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                try:
+                    resolved = path.resolve(strict=True)
+                    resolved.relative_to(resolved_root)
+                except (OSError, ValueError):
+                    continue
+                relative = resolved.relative_to(resolved_root).as_posix()
+                if relative in seen:
+                    continue
+                seen.add(relative)
+                try:
+                    payload = resolved.read_bytes()
+                    if b"\x00" not in payload:
+                        text = payload.decode("utf-8")
+                        sanitized = sanitize_text(text, self._secrets())
+                        if sanitized != text:
+                            resolved.write_text(sanitized, encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    pass
+                media_type = mimetypes.guess_type(resolved.name)[0]
+                artifacts.append(
+                    EvaluationArtifact(
+                        path=relative,
+                        media_type=media_type,
+                        description=(
+                            "Harbor trial record: "
+                            + path.relative_to(trial_root).as_posix()
+                        ),
+                    )
+                )
+        return artifacts
+
     def _case_result(
         self,
         case: HarborCase,
         attempts: list[dict[str, Any]],
+        *,
+        artifact_root: Path,
     ) -> tuple[CaseResult, float]:
+        trial_artifacts = self._trial_artifacts(attempts, artifact_root)
         attempt_detail = [
             {
                 "reward": self._attempt_reward(attempt),
@@ -607,6 +834,7 @@ class HarborBackend:
                             if score == self.config.failure_score
                             else None
                         ),
+                        artifacts=trial_artifacts,
                     ),
                     score,
                 )
@@ -639,6 +867,7 @@ class HarborBackend:
                         if score == self.config.failure_score
                         else None
                     ),
+                    artifacts=trial_artifacts,
                 ),
                 score,
             )
@@ -663,6 +892,7 @@ class HarborBackend:
                 input={"task_name": case.task_name, **case.metadata},
                 output=output,
                 feedback=self._transcript_feedback(attempts),
+                artifacts=trial_artifacts,
                 errors=[
                     CaseError(
                         message=message,
@@ -763,7 +993,7 @@ class HarborBackend:
                     command,
                     cwd=context.workspace.project_path,
                     timeout=request.limits.timeout_seconds,
-                    env=self._environment(),
+                    env=self._environment(context.evaluation_id),
                 )
                 await staging.download("jobs", attempt_jobs_dir)
             stdout = self.sanitize_error(result.stdout)
@@ -820,6 +1050,7 @@ class HarborBackend:
             case_result, score = self._case_result(
                 case,
                 groups.get(case.expected_result_task_name, []),
+                artifact_root=context.artifact_dir,
             )
             case_results.append(case_result)
             scores.append(score)

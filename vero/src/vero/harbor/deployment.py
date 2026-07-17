@@ -22,6 +22,7 @@ from vero.evaluation import (
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
 from vero.harbor.serve import SidecarComponents
+from vero.harbor.session import initialize_harbor_session_manifest
 from vero.harbor.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
 from vero.harbor.transport import GitCandidateTransport
 from vero.harbor.verifier import (
@@ -66,6 +67,8 @@ class DeploymentSelection(EvaluationModel):
 
 
 class HarborDeploymentConfig(EvaluationModel):
+    task_name: str = "harbor-session"
+    task_description: str = ""
     repo_path: str
     agent_repo_path: str
     session_dir: str
@@ -77,6 +80,8 @@ class HarborDeploymentConfig(EvaluationModel):
     targets: list[VerificationTarget]
     agent_volume: str | None = None
     admin_volume: str
+    inference_usage_path: str | None = None
+    inference_limits: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
     submit_enabled: bool = False
     score_baseline: bool = True
 
@@ -93,6 +98,15 @@ class HarborDeploymentConfig(EvaluationModel):
             raise ValueError("deployment paths must be absolute")
         return value
 
+    @field_validator("inference_usage_path")
+    @classmethod
+    def validate_optional_file_path(cls, value: str | None) -> str | None:
+        if value is not None:
+            path = PurePosixPath(value)
+            if not value.startswith("/") or ".." in path.parts:
+                raise ValueError("deployment paths must be absolute")
+        return value
+
     @field_validator("agent_volume")
     @classmethod
     def validate_optional_path(cls, value: str | None) -> str | None:
@@ -102,7 +116,7 @@ class HarborDeploymentConfig(EvaluationModel):
             raise ValueError("deployment paths must be absolute")
         return value
 
-    @field_validator("session_id")
+    @field_validator("session_id", "task_name")
     @classmethod
     def validate_session_id(cls, value: str) -> str:
         if not value.strip():
@@ -120,6 +134,11 @@ class HarborDeploymentConfig(EvaluationModel):
         for name, value in (
             ("session_dir", self.session_dir),
             ("admin_volume", self.admin_volume),
+            *(
+                (("inference_usage_path", self.inference_usage_path),)
+                if self.inference_usage_path is not None
+                else ()
+            ),
         ):
             path = PurePosixPath(value)
             if any(
@@ -216,6 +235,18 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         rescore_attempts=parsed.selection.rescore_attempts,
         baseline_floor=parsed.selection.baseline_floor,
     )
+    initialize_harbor_session_manifest(
+        session_dir,
+        session_id=parsed.session_id,
+        task_name=parsed.task_name,
+        task_description=parsed.task_description,
+        backends={
+            backend_id: engine.backends.resolve(backend_id).provenance
+            for backend_id in parsed.backends
+        },
+        selection=selection,
+        targets=parsed.targets,
+    )
     sidecar = EvaluationSidecar(
         engine=engine,
         candidate_transport=transport,
@@ -225,6 +256,12 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         ),
         admin_volume=Path(parsed.admin_volume),
         submit_enabled=parsed.submit_enabled,
+        inference_usage_path=(
+            Path(parsed.inference_usage_path)
+            if parsed.inference_usage_path is not None
+            else None
+        ),
+        inference_limits=parsed.inference_limits,
     )
     await sidecar.initialize_context()
     verifier = CanonicalVerifier(

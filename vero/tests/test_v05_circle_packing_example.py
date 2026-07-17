@@ -112,7 +112,9 @@ def initialize_repository(path: Path) -> str:
 
 
 @pytest.mark.skipif(shutil.which("uv") is None, reason="uv is required")
-def test_circle_packing_example_evaluates_and_preserves_artifacts(tmp_path: Path):
+def test_circle_packing_example_evaluates_and_preserves_artifacts(
+    tmp_path: Path, monkeypatch
+):
     source = Path(__file__).parents[1] / "examples" / "circle-packing"
     example = tmp_path / "circle-packing"
     shutil.copytree(
@@ -121,6 +123,7 @@ def test_circle_packing_example_evaluates_and_preserves_artifacts(tmp_path: Path
         ignore=shutil.ignore_patterns(".git", ".vero", ".venv", "__pycache__"),
     )
     baseline_version = initialize_repository(example / "target")
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))
 
     result = CliRunner().invoke(
         main,

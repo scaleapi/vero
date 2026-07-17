@@ -21,6 +21,7 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.harbor.build.config import HarborBuildConfig
+from vero.harbor.inference import generate_inference_token, token_digest
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,10 @@ ADMIN_VOLUME = "/state/admin"
 SESSION_DIR = "/state/admin/session"
 TOKEN_PATH = "/state/token/admin.token"
 SESSION_ID = "trial"
+INFERENCE_STATE = "/state/inference/usage.json"
+INFERENCE_GATEWAY_URL = "http://inference-gateway:8001"
+UPSTREAM_API_KEY_ENV = "VERO_INFERENCE_UPSTREAM_API_KEY"
+UPSTREAM_BASE_URL_ENV = "VERO_INFERENCE_UPSTREAM_BASE_URL"
 
 
 def _backend_id(partition: str) -> str:
@@ -208,6 +213,7 @@ def _deployment_config(
     *,
     baseline_version: str,
     local_task_source: bool,
+    evaluation_inference_token: str | None,
 ) -> dict:
     task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
     backends = {}
@@ -235,6 +241,13 @@ def _deployment_config(
             "feedback_max_bytes": config.feedback_max_bytes,
             "expose_attempt_detail": config.expose_attempt_detail,
             "passthrough_environment": config.secrets,
+            "inference_gateway_url": (
+                INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
+            ),
+            "inference_gateway_token": evaluation_inference_token,
+            "case_resources_cache_path": (
+                f"{ADMIN_VOLUME}/case-resources/{partition}"
+            ),
             "extra_args": config.extra_harbor_args,
         }
 
@@ -267,18 +280,13 @@ def _deployment_config(
                 "limits": limits.model_dump(mode="json"),
             }
         )
-        if (
-            access.total_runs is not None
-            or access.total_cases is not None
-            or access.max_cases_per_run is not None
-        ):
+        if access.total_runs is not None or access.total_cases is not None:
             budgets.append(
                 EvaluationBudget(
                     backend_id=backend_id,
                     evaluation_set_key=evaluation_set.budget_key(backend_id),
                     total_runs=access.total_runs,
                     total_cases=access.total_cases,
-                    max_cases_per_run=access.max_cases_per_run,
                 ).model_dump(mode="json")
             )
 
@@ -311,6 +319,8 @@ def _deployment_config(
             }
         )
     return {
+        "task_name": config.name,
+        "task_description": config.description,
         "repo_path": TRUSTED_REPO,
         "agent_repo_path": AGENT_REPO,
         "session_dir": SESSION_DIR,
@@ -345,6 +355,19 @@ def _deployment_config(
         "admin_volume": ADMIN_VOLUME,
         "submit_enabled": config.reward_mode == "submit",
         "score_baseline": config.score_baseline,
+        "inference_usage_path": (
+            INFERENCE_STATE if config.inference_gateway is not None else None
+        ),
+        "inference_limits": (
+            {
+                "producer": config.inference_gateway.producer.model_dump(mode="json"),
+                "evaluation": config.inference_gateway.evaluation.model_dump(
+                    mode="json"
+                ),
+            }
+            if config.inference_gateway is not None
+            else {}
+        ),
     }
 
 
@@ -393,16 +416,27 @@ def compile_harbor_task(
             raise ValueError(
                 f"output directory {output} overlaps protected source {path}"
             )
+    gateway_environment: list[str] = []
+    credential_sources: list[str] = []
+    if config.inference_gateway is not None:
+        gateway_environment.append(UPSTREAM_API_KEY_ENV)
+        credential_sources.append(config.inference_gateway.upstream_api_key_env)
+        if config.inference_gateway.upstream_base_url_env is not None:
+            gateway_environment.append(UPSTREAM_BASE_URL_ENV)
+            credential_sources.append(config.inference_gateway.upstream_base_url_env)
+    task_environment = list(dict.fromkeys([*config.secrets, *gateway_environment]))
     if os.environ.get("VERO_SKIP_SECRET_CHECK") is None:
-        missing = [name for name in config.secrets if not os.environ.get(name)]
+        required_sources = list(dict.fromkeys([*config.secrets, *credential_sources]))
+        missing = [name for name in required_sources if not os.environ.get(name)]
         if missing:
             raise ValueError(
-                "declared sidecar secrets are missing: " + ", ".join(missing)
+                "declared task credentials are missing: " + ", ".join(missing)
             )
     if output.exists():
         shutil.rmtree(output)
     environment_dir = output / "environment"
     sidecar_dir = environment_dir / "sidecar"
+    gateway_dir = environment_dir / "gateway"
     environment_dir.mkdir(parents=True)
     if use_local_vero:
         _copy_vero_source(source_root, environment_dir / "vero")
@@ -423,15 +457,74 @@ def compile_harbor_task(
             Path(config.task_source),
             sidecar_dir / "task-source",
         )
+    producer_inference_token = (
+        generate_inference_token() if config.inference_gateway is not None else None
+    )
+    evaluation_inference_token = (
+        generate_inference_token() if config.inference_gateway is not None else None
+    )
     deployment = _deployment_config(
         config,
         baseline_version=baseline,
         local_task_source=local_task_source,
+        evaluation_inference_token=evaluation_inference_token,
     )
     (sidecar_dir / "serve.json").write_text(
         json.dumps(deployment, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    if config.inference_gateway is not None:
+        assert producer_inference_token is not None
+        assert evaluation_inference_token is not None
+        gateway_dir.mkdir(parents=True, exist_ok=True)
+        gateway_config = {
+            "upstream_api_key_env": UPSTREAM_API_KEY_ENV,
+            "upstream_base_url_env": (
+                UPSTREAM_BASE_URL_ENV
+                if config.inference_gateway.upstream_base_url_env is not None
+                else None
+            ),
+            "default_upstream_base_url": (
+                config.inference_gateway.default_upstream_base_url
+            ),
+            "state_path": INFERENCE_STATE,
+            "scopes": {
+                "producer": {
+                    "token_sha256": token_digest(producer_inference_token),
+                    **config.inference_gateway.producer.model_dump(mode="json"),
+                },
+                "evaluation": {
+                    "token_sha256": token_digest(evaluation_inference_token),
+                    **config.inference_gateway.evaluation.model_dump(mode="json"),
+                },
+            },
+        }
+        (gateway_dir / "config.json").write_text(
+            json.dumps(gateway_config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (gateway_dir / "launch.json").write_text(
+            json.dumps(
+                {
+                    "upstream_api_key_source": (
+                        config.inference_gateway.upstream_api_key_env
+                    ),
+                    "upstream_api_key_target": UPSTREAM_API_KEY_ENV,
+                    "upstream_base_url_source": (
+                        config.inference_gateway.upstream_base_url_env
+                    ),
+                    "upstream_base_url_target": UPSTREAM_BASE_URL_ENV,
+                    "producer_api_key": producer_inference_token,
+                    "producer_base_url": (
+                        f"{INFERENCE_GATEWAY_URL}/scopes/producer/optimizer/v1"
+                    ),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
     selection_access = next(
         access
@@ -450,7 +543,19 @@ def compile_harbor_task(
             if use_local_vero
             else f"scale-vero[harbor]=={distribution_version('scale-vero')}"
         ),
-        "secrets": config.secrets,
+        "harbor_requirement": config.harbor_requirement,
+        "secrets": task_environment,
+        "sidecar_secrets": config.secrets,
+        "inference_gateway": config.inference_gateway,
+        "gateway_environment": gateway_environment,
+        "scrubbed_main_environment": [
+            name
+            for name in task_environment
+            if name not in {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+        ],
+        "producer_inference_token": producer_inference_token,
+        "evaluation_inference_token": evaluation_inference_token,
+        "inference_gateway_url": INFERENCE_GATEWAY_URL,
         "read_only_paths": config.read_only_paths,
         "local_task_source": local_task_source,
         "selection_backend": _backend_id(config.selection_partition),
@@ -463,6 +568,11 @@ def compile_harbor_task(
             if selection_access.disclosure == "aggregate"
             else 1
         ),
+        "exposed_partitions": [
+            access.partition
+            for access in config.agent_access
+            if access.expose_case_resources
+        ],
         "exhaust_budget": config.instruct_exhaust_budget,
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
@@ -476,6 +586,12 @@ def compile_harbor_task(
         sidecar_dir / "Dockerfile",
         **context,
     )
+    if config.inference_gateway is not None:
+        _render(
+            "Dockerfile.gateway.j2",
+            gateway_dir / "Dockerfile",
+            **context,
+        )
     _render(
         "docker-compose.yaml.j2",
         environment_dir / "docker-compose.yaml",

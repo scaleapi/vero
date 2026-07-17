@@ -4,7 +4,7 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -154,7 +154,15 @@ class FakeSandbox(LocalSandbox):
                     "finished_at": f"2026-01-01T00:00:0{index}Z",
                     **attempt,
                 }
+                agent_files = payload.pop("_agent_files", {})
                 (trial_dir / "result.json").write_text(json.dumps(payload))
+                for relative_path, content in agent_files.items():
+                    path = trial_dir / "agent" / relative_path
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    if isinstance(content, bytes):
+                        path.write_bytes(content)
+                    else:
+                        path.write_text(content, encoding="utf-8")
         return self.result
 
 
@@ -200,8 +208,32 @@ async def test_harbor_backend_resolves_canonical_case_selections(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_harbor_backend_exports_case_manifest_without_task_source(tmp_path):
-    backend = HarborBackend(_config(tmp_path))
+async def test_harbor_backend_exports_complete_authorized_local_tasks(tmp_path):
+    task_source = tmp_path / "tasks"
+    task_source.mkdir()
+    (task_source / "metric.py").write_text("def score(): return 1\n")
+    cases_path = tmp_path / "local-cases.json"
+    cases_path.write_text(
+        json.dumps(
+            [
+                {"id": "case-a", "task_name": "alpha"},
+                {"id": "case-b", "task_name": "beta"},
+            ]
+        )
+    )
+    for task_name in ("alpha", "beta"):
+        task = task_source / task_name
+        task.mkdir()
+        (task / "task.toml").write_text(f'[task]\nname="example/{task_name}"\n')
+        (task / "instruction.md").write_text(f"Question for {task_name}\n")
+        (task / "attachment.txt").write_text(f"attachment for {task_name}\n")
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            task_source=str(task_source),
+            cases_path=str(cases_path),
+        )
+    )
     destination = tmp_path / "context"
     destination.mkdir()
 
@@ -216,16 +248,188 @@ async def test_harbor_backend_exports_case_manifest_without_task_source(tmp_path
     )
 
     index = json.loads((destination / "index.json").read_text())
-    assert index["task_source_exposed"] is False
+    assert index["task_source_exposed"] is True
     assert [item["case_id"] for item in index["cases"]] == ["case-b"]
-    exported = json.loads((destination / index["cases"][0]["path"]).read_text())
-    assert exported == {
-        "id": "case-b",
-        "task_name": "example/beta",
-        "result_task_name": None,
-        "metadata": {},
+    exported = destination / index["cases"][0]["path"]
+    assert (exported / "task.toml").is_file()
+    assert (exported / "instruction.md").read_text() == "Question for beta\n"
+    assert (exported / "attachment.txt").read_text() == "attachment for beta\n"
+    assert (destination / "dataset-files/metric.py").is_file()
+    assert not (destination / "tasks" / "alpha").exists()
+    assert destination.stat().st_mode & 0o005 == 0o005
+    assert exported.stat().st_mode & 0o005 == 0o005
+    assert (exported / "attachment.txt").stat().st_mode & 0o004 == 0o004
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_maps_remote_download_results_by_request_order(
+    tmp_path, monkeypatch
+):
+    class FakeTaskId:
+        def __init__(self, name: str):
+            self.name = name
+
+        def get_name(self) -> str:
+            return self.name
+
+    async def get_dataset_metadata(_client, _source):
+        return SimpleNamespace(
+            task_ids=[
+                FakeTaskId("example/alpha"),
+                FakeTaskId("example/beta"),
+                FakeTaskId("example/gamma"),
+            ]
+        )
+
+    async def download_tasks(_client, *, task_ids, output_dir, export):
+        assert export is True
+        results = []
+        for task_id in task_ids:
+            path = output_dir / task_id.get_name().split("/")[-1]
+            path.mkdir(parents=True)
+            (path / "instruction.md").write_text(task_id.get_name())
+            results.append(SimpleNamespace(path=path))
+        return SimpleNamespace(results=results)
+
+    async def download_dataset_files(_client, _metadata, *, output_dir):
+        output_dir.mkdir()
+        path = output_dir / "metric.py"
+        path.write_text("def score(): return 1\n")
+        return [path]
+
+    class PackageDatasetClient:
+        pass
+
+    class TaskClient:
+        pass
+
+    PackageDatasetClient.get_dataset_metadata = get_dataset_metadata
+    PackageDatasetClient.download_dataset_files = download_dataset_files
+    TaskClient.download_tasks = download_tasks
+
+    modules = {
+        name: ModuleType(name)
+        for name in (
+            "harbor",
+            "harbor.registry",
+            "harbor.registry.client",
+            "harbor.registry.client.package",
+            "harbor.tasks",
+            "harbor.tasks.client",
+        )
     }
-    assert "example/tasks@1.0" not in json.dumps(index)
+    modules["harbor.registry.client.package"].PackageDatasetClient = (
+        PackageDatasetClient
+    )
+    modules["harbor.tasks.client"].TaskClient = TaskClient
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    backend = HarborBackend(_config(tmp_path))
+    destination = tmp_path / "context"
+    destination.mkdir()
+
+    await backend.export_case_resources(
+        evaluation_set=EvaluationSet(
+            name="harbor-bench",
+            partition="test",
+            selection=CaseIds(ids=["case-c", "case-a"]),
+        ),
+        destination=str(destination),
+        sandbox=await LocalSandbox.create(root=tmp_path),
+    )
+
+    index = json.loads((destination / "index.json").read_text())
+    assert [item["case_id"] for item in index["cases"]] == ["case-c", "case-a"]
+    assert [
+        (destination / item["path"] / "instruction.md").read_text()
+        for item in index["cases"]
+    ] == ["example/gamma", "example/alpha"]
+    assert (destination / "dataset-files/metric.py").is_file()
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_exposes_complete_successful_trial_records(tmp_path):
+    secret = "evaluation-scope-secret"
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "_agent_files": {
+                        "trajectory.json": json.dumps(
+                            {"steps": [{"message": f"used {secret}"}]}
+                        ),
+                        "gaia-trace.jsonl": (
+                            '{"turn":1,"action":"search"}\n'
+                            '{"turn":2,"answer":"done"}\n'
+                        ),
+                    },
+                }
+            ]
+        },
+    )
+    backend = HarborBackend(
+        _config(tmp_path, environment={"EVALUATION_TOKEN": secret})
+    )
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a"])),
+    )
+
+    artifacts = report.cases[0].artifacts
+    assert {Path(artifact.path).name for artifact in artifacts} == {
+        "trajectory.json",
+        "gaia-trace.jsonl",
+        "result.json",
+    }
+    for artifact in artifacts:
+        content = (tmp_path / "result/artifacts" / artifact.path).read_text()
+        assert secret not in content
+    trajectory = next(
+        artifact
+        for artifact in artifacts
+        if Path(artifact.path).name == "trajectory.json"
+    )
+    assert "[REDACTED]" in (
+        tmp_path / "result/artifacts" / trajectory.path
+    ).read_text()
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_exposes_exact_failed_trial_result(tmp_path):
+    detail = "Invalid schema for function 'transcribe_audio': Missing 'language'."
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "verifier_result": None,
+                    "exception_info": {
+                        "exception_type": "BadRequestError",
+                        "exception_message": detail,
+                    },
+                }
+            ]
+        },
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a"])),
+    )
+
+    artifacts = report.cases[0].artifacts
+    result_artifact = next(
+        artifact for artifact in artifacts if Path(artifact.path).name == "result.json"
+    )
+    result = json.loads(
+        (tmp_path / "result/artifacts" / result_artifact.path).read_text()
+    )
+    assert result["exception_info"]["exception_message"] == detail
+    assert result_artifact.description.endswith("result.json")
 
 
 @pytest.mark.asyncio
@@ -284,6 +488,35 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     ]
     checkpoints = await runtime_context.case_store.load_all()
     assert [case.case_id for case in checkpoints] == ["case-a", "case-b"]
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_routes_candidate_inference_through_scoped_gateway(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "raw-provider-key")
+    sandbox = FakeSandbox(
+        tmp_path,
+        {"example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}]},
+    )
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            inference_gateway_url="http://inference-gateway:8001",
+            inference_gateway_token="evaluation-scope-token",
+        )
+    )
+
+    await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a"])),
+    )
+
+    assert sandbox.env["OPENAI_API_KEY"] == "evaluation-scope-token"
+    assert sandbox.env["OPENAI_BASE_URL"] == (
+        "http://inference-gateway:8001/scopes/evaluation/evaluation/v1"
+    )
+    assert "raw-provider-key" not in sandbox.env.values()
 
 
 @pytest.mark.asyncio

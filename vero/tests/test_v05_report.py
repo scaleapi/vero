@@ -216,6 +216,9 @@ def test_report_command_builds_portable_full_experiment_view(tmp_path: Path):
     assert payload["traces"][0]["entries"][1]["kind"] == "tool-call"
     assert payload["events"][0]["kind"] == "evaluation_completed"
     assert "</script><script>alert('unsafe')</script>" not in html
+    assert "Score trajectories by split" in html
+    assert "Lines connect exact case selections only" in html
+    assert "Comparable baseline" in html
 
 
 def test_report_command_fails_clearly_without_a_manifest(tmp_path: Path):

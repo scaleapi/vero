@@ -19,6 +19,7 @@ from vero.evaluation import (
     EvaluationStatus,
 )
 from vero.harbor.app import create_app
+from vero.harbor.cli import _compiled_run_environment, _load_agent_trace, harbor
 from vero.harbor.auth import (
     check_admin_token,
     read_admin_token,
@@ -92,9 +93,125 @@ def test_admin_token_is_atomic_restrictive_and_constant_time_checked(tmp_path):
     assert not check_admin_token(None, "secret-token")
 
 
-def test_http_app_separates_agent_and_admin_surfaces():
+def test_compiled_run_environment_keeps_upstream_credentials_from_agent(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "upstream-secret")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://provider.example/v1")
+    launch = tmp_path / "environment/gateway/launch.json"
+    launch.parent.mkdir(parents=True)
+    launch.write_text(
+        json.dumps(
+            {
+                "upstream_api_key_source": "OPENAI_API_KEY",
+                "upstream_api_key_target": "VERO_INFERENCE_UPSTREAM_API_KEY",
+                "upstream_base_url_source": "OPENAI_BASE_URL",
+                "upstream_base_url_target": "VERO_INFERENCE_UPSTREAM_BASE_URL",
+                "producer_api_key": "producer-scope-token",
+                "producer_base_url": "http://inference/scopes/producer/optimizer/v1",
+            }
+        )
+    )
+
+    environment = _compiled_run_environment(tmp_path)
+
+    assert environment["OPENAI_API_KEY"] == "producer-scope-token"
+    assert environment["OPENAI_BASE_URL"].startswith("http://inference/")
+    assert environment["VERO_INFERENCE_UPSTREAM_API_KEY"] == "upstream-secret"
+    assert environment["VERO_INFERENCE_UPSTREAM_BASE_URL"] == (
+        "https://provider.example/v1"
+    )
+
+
+def test_codex_jsonl_is_converted_to_a_redacted_producer_trace(tmp_path):
+    path = tmp_path / "codex.txt"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {"type": "agent_message", "text": "Inspecting."},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "item.completed",
+                        "item": {
+                            "type": "command_execution",
+                            "command": "env",
+                            "aggregated_output": "OPENAI_API_KEY=sk-secretvalue123\n",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    trace = _load_agent_trace(path)
+
+    assert trace[0] == {"role": "assistant", "content": "Inspecting."}
+    assert trace[-1]["output"] == "OPENAI_API_KEY=[REDACTED]\n"
+
+
+def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkeypatch):
+    import vero.harbor.build as harbor_build
+    import vero.harbor.cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("task_name: unused\n")
+    config = SimpleNamespace(harbor_requirement="harbor[modal]==0.18.0")
+    observed = {}
+
+    def compile_task(_config, output):
+        output.mkdir(parents=True)
+        return output
+
+    def run(command, *, env):
+        observed["command"] = command
+        observed["environment"] = env
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda _path: config)
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", compile_task)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda _name: "/usr/bin/uvx")
+    monkeypatch.setattr(harbor_cli.subprocess, "run", run)
+
+    result = CliRunner().invoke(
+        harbor,
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "codex",
+            "--environment",
+            "modal",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["command"][:6] == [
+        "/usr/bin/uvx",
+        "--python",
+        harbor_cli.sys.executable,
+        "--from",
+        "harbor[modal]==0.18.0",
+        "harbor",
+    ]
+
+
+def test_http_app_separates_agent_and_admin_surfaces(tmp_path, monkeypatch):
     sidecar = FakeSidecar()
+    sidecar.engine.evaluator = SimpleNamespace(session_dir=tmp_path / "session")
     verifier = FakeVerifier()
+
+    def create_archive(_session_dir, destination):
+        destination.write_bytes(b"portable-session")
+        return destination
+
+    monkeypatch.setattr("vero.harbor.app.create_harbor_session_archive", create_archive)
     client = TestClient(
         create_app(
             sidecar=sidecar,
@@ -116,6 +233,12 @@ def test_http_app_separates_agent_and_admin_surfaces():
     assert sidecar.requests[0].evaluation_set.name == "public"
     assert client.get("/status").json()["submit_enabled"] is True
     assert client.post("/finalize").status_code == 403
+    assert client.get("/session/export").status_code == 403
+    exported = client.get(
+        "/session/export",
+        headers={"Authorization": "Bearer admin-secret"},
+    )
+    assert exported.content == b"portable-session"
     finalized = client.post(
         "/finalize",
         headers={"Authorization": "Bearer admin-secret"},
@@ -240,3 +363,74 @@ def test_harbor_finalize_cli_writes_only_rewards(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert json.loads(output.read_text()) == {"accuracy": 0.9}
+
+
+def test_harbor_export_session_persists_archive_report_and_checksum(
+    tmp_path, monkeypatch
+):
+    import vero.harbor.cli as harbor_cli
+    import vero.report as report_module
+
+    token_file = write_admin_token(tmp_path / "token", "admin-secret")
+    output = tmp_path / "logs/session.tar.gz"
+    report = tmp_path / "logs/experiment.html"
+    status_output = tmp_path / "logs/status.json"
+    finalization_output = tmp_path / "logs/finalization.json"
+    trace = tmp_path / "trajectory.json"
+    trace.write_text("[]\n")
+
+    def fake_request(method, path, *, payload=None, headers=None):
+        if path == "/finalize":
+            assert method == "POST"
+            assert headers == {"Authorization": "Bearer admin-secret"}
+            return {"candidate": None, "rewards": {"reward": 0.0}, "errors": {}}
+        assert (method, path) == ("GET", "/status")
+        return {"submit_enabled": False, "evaluation_access": []}
+
+    def fake_download(path, destination, *, headers=None):
+        assert path == "/session/export"
+        assert headers == {"Authorization": "Bearer admin-secret"}
+        destination.write_bytes(b"sidecar archive")
+
+    def fake_extract(_archive, destination):
+        session = destination / "session"
+        session.mkdir(parents=True)
+        (session / "harbor-session.json").write_text("{}\n")
+        return session
+
+    async def fake_report(_session, destination):
+        destination.write_text("<html>experiment</html>\n")
+        return destination
+
+    monkeypatch.setattr(harbor_cli, "_request", fake_request)
+    monkeypatch.setattr(harbor_cli, "_download", fake_download)
+    monkeypatch.setattr(harbor_cli, "extract_harbor_session_archive", fake_extract)
+    monkeypatch.setattr(report_module, "generate_experiment_report", fake_report)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "export-session",
+            "--token-file",
+            str(token_file),
+            "--output",
+            str(output),
+            "--report-output",
+            str(report),
+            "--status-output",
+            str(status_output),
+            "--finalization-output",
+            str(finalization_output),
+            "--agent-trace",
+            str(trace),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert output.is_file()
+    assert report.read_text() == "<html>experiment</html>\n"
+    assert json.loads(status_output.read_text())["submit_enabled"] is False
+    assert json.loads(finalization_output.read_text())["rewards"] == {"reward": 0.0}
+    checksum = output.with_name(f"{output.name}.sha256").read_text()
+    assert output.name in checksum

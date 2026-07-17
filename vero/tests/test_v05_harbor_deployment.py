@@ -20,6 +20,7 @@ from vero.harbor import (
     VerificationTarget,
     build_harbor_components,
 )
+from vero.report import generate_experiment_report
 
 
 def _git(path: Path, *arguments: str) -> str:
@@ -116,10 +117,22 @@ async def test_standard_deployment_factory_builds_one_canonical_runtime(tmp_path
     assert components.verifier.selection.baseline_candidate.version == baseline
     assert components.sidecar.status().evaluation_access[0].budget.remaining_runs == 4
     assert (tmp_path / "state/session/budgets.json").is_file()
+    manifest = json.loads((tmp_path / "state/session/harbor-session.json").read_text())
+    assert manifest["id"] == "trial"
+    assert manifest["selection"]["evaluation_set"] == {
+        "name": "benchmark",
+        "partition": "validation",
+        "selection": {"kind": "all"},
+    }
     assert (tmp_path / "state/agent/manifest.json").is_file()
     assert json.loads(
         (tmp_path / "state/agent/evaluations/index.json").read_text()
     ) == {"schema_version": 1, "evaluations": []}
+    report = await generate_experiment_report(
+        tmp_path / "state/session",
+        tmp_path / "experiment.html",
+    )
+    assert baseline in report.read_text()
 
 
 @pytest.mark.asyncio

@@ -25,7 +25,6 @@ class AgentAccessSpec(EvaluationModel):
     min_aggregate_cases: int = Field(default=1, ge=1)
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
-    max_cases_per_run: int | None = Field(default=None, ge=1)
 
     @field_validator("partition")
     @classmethod
@@ -58,8 +57,50 @@ class VerificationTargetSpec(EvaluationModel):
         return value
 
 
+class InferenceBudgetSpec(EvaluationModel):
+    """Routing policy and optional limits for one inference-gateway scope."""
+
+    allowed_models: list[str]
+    max_requests: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_concurrency: int = Field(default=8, ge=1)
+
+    @field_validator("allowed_models")
+    @classmethod
+    def validate_models(cls, value: list[str]) -> list[str]:
+        if not value or any(not model.strip() for model in value):
+            raise ValueError("allowed_models must contain non-empty model names")
+        if len(value) != len(set(value)):
+            raise ValueError("allowed_models must be unique")
+        return value
+
+
+class InferenceGatewaySpec(EvaluationModel):
+    """Credential source and independent producer/evaluator policies."""
+
+    upstream_api_key_env: str = "OPENAI_API_KEY"
+    upstream_base_url_env: str | None = "OPENAI_BASE_URL"
+    default_upstream_base_url: str = "https://api.openai.com/v1"
+    producer: InferenceBudgetSpec
+    evaluation: InferenceBudgetSpec
+
+    @field_validator("upstream_api_key_env", "upstream_base_url_env")
+    @classmethod
+    def validate_environment_name(cls, value: str | None) -> str | None:
+        if value is not None and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value) is None:
+            raise ValueError("gateway environment names must be valid identifiers")
+        return value
+
+    @field_validator("default_upstream_base_url")
+    @classmethod
+    def validate_upstream_url(cls, value: str) -> str:
+        if not value.startswith(("http://", "https://")):
+            raise ValueError("default_upstream_base_url must be HTTP(S)")
+        return value.rstrip("/")
+
+
 class HarborBuildConfig(EvaluationModel):
-    """Everything needed to emit a two-container Harbor optimization task."""
+    """Everything needed to emit an isolated Harbor optimization task."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -109,6 +150,7 @@ class HarborBuildConfig(EvaluationModel):
     verifier_timeout_seconds: int | None = Field(default=None, ge=1)
 
     secrets: list[str] = Field(default_factory=list)
+    inference_gateway: InferenceGatewaySpec | None = None
     read_only_paths: list[str] = Field(default_factory=list)
     instruct_multifidelity: bool = True
     instruct_exhaust_budget: bool = True
@@ -303,6 +345,16 @@ class HarborBuildConfig(EvaluationModel):
                 raise ValueError(
                     "partitions reference tasks absent from task_manifest: "
                     + ", ".join(unknown)
+                )
+        if self.inference_gateway is not None:
+            gateway_environment = {self.inference_gateway.upstream_api_key_env}
+            if self.inference_gateway.upstream_base_url_env is not None:
+                gateway_environment.add(self.inference_gateway.upstream_base_url_env)
+            overlap = sorted(set(self.secrets) & gateway_environment)
+            if overlap:
+                raise ValueError(
+                    "inference gateway credentials must not also be sidecar secrets: "
+                    + ", ".join(overlap)
                 )
         return self
 

@@ -34,10 +34,13 @@ budget, and final candidate selection.
 {% endif %}
 
 {% if multifidelity %}
-## Screen cheaply, then confirm
+## Allocate the evaluation budget
 
-Use `--start 0 --stop N` or repeated `--case-id ID` flags to evaluate a stable
-subset while screening ideas. Confirm survivors on the full selection set.
+You decide how to allocate the finite case budget. Use `--start 0 --stop N` or
+repeated `--case-id ID` flags for subsets, or omit them to evaluate the complete
+set. A request may consume the entire remaining case budget. VeRO does not
+reserve cases for later runs, so keep enough only if your strategy requires a
+final confirmation.
 {% if minimum_subset_cases > 1 %}
 Aggregate-only subsets must include at least {{ minimum_subset_cases }} cases;
 this prevents singleton aggregates from exposing individual hidden results.
@@ -47,10 +50,26 @@ optimization data, while the final evaluation remains hidden.
 {% endif %}
 
 {% endif %}
+{% if exposed_partitions %}
+## Inspect cases and traces
+
+Complete task resources for the following authorized partitions are mounted
+read-only under `.vero/cases/`: {{ exposed_partitions | join(", ") }}. Start at
+`.vero/cases/index.json`; each listed partition has its own task index,
+attachments, instructions, and task files.
+
+After a full-disclosure evaluation, `.vero/evaluations/` contains one file per
+case plus the complete Harbor trial records: exact failure results, exception
+tracebacks, trial logs, and target-agent artifacts. Use these files to inspect
+successful as well as failed trajectories without putting long traces into the
+CLI response.
+
+{% endif %}
 ## Rules
 
-- Only the sidecar evaluates candidates. Evaluation cases and final targets are
-  not mounted into this container.
+- Only the sidecar evaluates candidates. Only explicitly authorized case
+  resources are mounted; validation and final targets remain outside this
+  container.
 - Evaluation budgets are finite and are charged by backend and evaluation set.
 - Scores may be noisy; compare candidates on the same selection whenever possible.
 {% if exhaust_budget %}

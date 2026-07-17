@@ -13,10 +13,15 @@ from vero.harbor import (
     AgentAccessSpec,
     HarborBuildConfig,
     HarborDeploymentConfig,
+    InferenceBudgetSpec,
+    InferenceGatewaySpec,
     VerificationTargetSpec,
     compile_harbor_task,
     load_harbor_build_config,
 )
+
+
+BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "program-opt-bench"
 
 
 def _git(path: Path, *arguments: str) -> str:
@@ -28,6 +33,30 @@ def _git(path: Path, *arguments: str) -> str:
         capture_output=True,
     )
     return result.stdout.strip()
+
+
+@pytest.mark.parametrize("benchmark", ["gaia", "swe-atlas-qna", "tau3"])
+def test_canonical_benchmarks_isolate_upstream_inference_credentials(benchmark):
+    config = load_harbor_build_config(
+        BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
+    )
+
+    assert config.inference_gateway is not None
+    assert not {
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+    }.intersection(config.secrets)
+    assert config.inference_gateway.upstream_api_key_env == "OPENAI_API_KEY"
+    assert config.inference_gateway.upstream_base_url_env == "OPENAI_BASE_URL"
+    assert config.inference_gateway.producer.allowed_models == ["gpt-5.4"]
+    assert config.inference_gateway.producer.max_requests is None
+    assert config.inference_gateway.producer.max_tokens is None
+    assert config.inference_gateway.evaluation.allowed_models == [
+        "gpt-5.4-mini-2026-03-17"
+    ]
+    assert config.inference_gateway.evaluation.max_requests == 15000
+    assert config.inference_gateway.evaluation.max_tokens == 100000000
 
 
 def _target_repo(path: Path) -> Path:
@@ -74,7 +103,6 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
                 expose_case_resources=True,
                 total_runs=5,
                 total_cases=25,
-                max_cases_per_run=5,
             )
         ],
         "selection_partition": "validation",
@@ -216,6 +244,9 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["targets"][0]["reward_scale"] == 1.0
     assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
+    assert serve["backends"]["harbor-validation"][
+        "case_resources_cache_path"
+    ] == "/state/admin/case-resources/validation"
     assert serve["access_policies"][0]["limits"]["retry"]["max_attempts"] == 1
     assert "use_evaluation_copies" not in serve
     for partition, backend in serve["backends"].items():
@@ -238,6 +269,8 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "## Objective\n\nImprove the program" in instruction
     assert "--backend harbor-validation" in instruction
     assert "arbitrary subsets" in instruction
+    assert "Complete task resources" in instruction
+    assert ".vero/evaluations/" in instruction
     task_toml = (output / "task.toml").read_text(encoding="utf-8")
     assert 'name = "org/optimize-\\"program\\""' in task_toml
     assert tomllib.loads(task_toml)["task"]["name"] == 'org/optimize-"program"'
@@ -247,10 +280,14 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "agent_context:/work/agent/.vero:ro" in compose
     assert "agent_context:/state/agent-context" in compose
     assert set(yaml.safe_load(compose)["services"]) == {"main", "eval-sidecar"}
+    sidecar_dockerfile = (output / "environment/sidecar/Dockerfile").read_text()
+    assert 'uv pip install --system "harbor==0.1.17"' in sidecar_dockerfile
     seed = (output / "environment/main/seed.sh").read_text()
     assert "-path /work/agent/.vero -prune" in seed
     assert "'/.vero/' >> /work/agent/.git/info/exclude" in seed
-    assert (output / "tests/test.sh").stat().st_mode & 0o111
+    test_script = output / "tests/test.sh"
+    assert test_script.stat().st_mode & 0o111
+    assert "vero harbor export-session" in test_script.read_text()
 
 
 def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
@@ -298,6 +335,79 @@ def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
             tmp_path / "reserved-context",
             vero_root=Path(__file__).parents[1],
         )
+
+
+def test_compiler_isolates_upstream_inference_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_UPSTREAM_KEY", "real-provider-secret")
+    monkeypatch.setenv("TEST_UPSTREAM_URL", "https://provider.example/v1")
+    monkeypatch.setenv("TEST_MODAL_TOKEN", "modal-secret")
+    config = _config(
+        tmp_path,
+        secrets=["TEST_MODAL_TOKEN"],
+        inference_gateway=InferenceGatewaySpec(
+            upstream_api_key_env="TEST_UPSTREAM_KEY",
+            upstream_base_url_env="TEST_UPSTREAM_URL",
+            producer=InferenceBudgetSpec(
+                allowed_models=["gpt-producer"],
+                max_requests=10,
+                max_tokens=1000,
+            ),
+            evaluation=InferenceBudgetSpec(
+                allowed_models=["gpt-target"],
+                max_requests=20,
+                max_tokens=2000,
+            ),
+        ),
+    )
+
+    output = compile_harbor_task(
+        config,
+        tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+
+    task = tomllib.loads((output / "task.toml").read_text())
+    assert task["environment"]["env"] == {
+        "TEST_MODAL_TOKEN": "${TEST_MODAL_TOKEN}",
+        "VERO_INFERENCE_UPSTREAM_API_KEY": "${VERO_INFERENCE_UPSTREAM_API_KEY}",
+        "VERO_INFERENCE_UPSTREAM_BASE_URL": "${VERO_INFERENCE_UPSTREAM_BASE_URL}",
+    }
+    compose = yaml.safe_load((output / "environment/docker-compose.yaml").read_text())
+    assert set(compose["services"]) == {
+        "main",
+        "eval-sidecar",
+        "inference-gateway",
+    }
+    main_environment = compose["services"]["main"]["environment"]
+    assert main_environment["TEST_MODAL_TOKEN"] == ""
+    assert main_environment["VERO_INFERENCE_UPSTREAM_API_KEY"] == ""
+    assert main_environment["OPENAI_API_KEY"]
+    assert main_environment["OPENAI_API_KEY"] != "real-provider-secret"
+    assert main_environment["OPENAI_BASE_URL"].endswith("/scopes/producer/optimizer/v1")
+    assert compose["services"]["eval-sidecar"]["environment"] == {
+        "TEST_MODAL_TOKEN": "${TEST_MODAL_TOKEN:?TEST_MODAL_TOKEN must be set for the eval sidecar}"
+    }
+    assert compose["services"]["inference-gateway"]["environment"] == {
+        "VERO_INFERENCE_UPSTREAM_API_KEY": "${VERO_INFERENCE_UPSTREAM_API_KEY:?VERO_INFERENCE_UPSTREAM_API_KEY must be set for the inference gateway}",
+        "VERO_INFERENCE_UPSTREAM_BASE_URL": "${VERO_INFERENCE_UPSTREAM_BASE_URL:?VERO_INFERENCE_UPSTREAM_BASE_URL must be set for the inference gateway}",
+    }
+    gateway = json.loads((output / "environment/gateway/config.json").read_text())
+    assert "real-provider-secret" not in json.dumps(gateway)
+    assert gateway["scopes"]["producer"]["token_sha256"]
+    launch = json.loads((output / "environment/gateway/launch.json").read_text())
+    assert launch["upstream_api_key_source"] == "TEST_UPSTREAM_KEY"
+    assert launch["upstream_api_key_target"] == "VERO_INFERENCE_UPSTREAM_API_KEY"
+    assert launch["producer_api_key"] == main_environment["OPENAI_API_KEY"]
+    seed = (output / "environment/main/seed.sh").read_text()
+    assert 'model_provider = "vero_gateway"' in seed
+    assert "supports_websockets = false" in seed
+    serve = json.loads((output / "environment/sidecar/serve.json").read_text())
+    backend = serve["backends"]["harbor-validation"]
+    assert backend["passthrough_environment"] == ["TEST_MODAL_TOKEN"]
+    assert backend["inference_gateway_token"]
+    assert backend["inference_gateway_token"] != "real-provider-secret"
+    assert "real-provider-secret" not in json.dumps(serve)
+    assert (output / "environment/gateway/Dockerfile").is_file()
 
 
 def test_compiler_uses_published_version_outside_a_source_checkout(

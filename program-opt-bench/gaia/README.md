@@ -14,7 +14,11 @@ All 165 cases come from the immutable dataset reference recorded in
 [`partitions/manifest.json`](partitions/manifest.json). The development set is
 available to the optimization agent with full result disclosure. Validation is
 aggregate-only and is used to select candidates. Test is held out until Harbor
-grades the completed outer task.
+grades the completed outer task. The complete development task packages and
+attachments are mounted read-only under `.vero/cases/`; successful and failed
+development evaluations place their complete Harbor trial records—including
+exact failures and target-agent logs—under
+`.vero/evaluations/`. Neither validation nor test resources are mounted.
 
 To verify or regenerate the split after downloading the pinned Harbor dataset:
 

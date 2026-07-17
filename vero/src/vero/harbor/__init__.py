@@ -4,6 +4,8 @@ from vero.harbor.backend import HarborBackend, HarborBackendConfig, HarborCase
 from vero.harbor.build import (
     AgentAccessSpec,
     HarborBuildConfig,
+    InferenceBudgetSpec,
+    InferenceGatewaySpec,
     VerificationTargetSpec,
     compile_harbor_task,
     load_harbor_build_config,
@@ -20,6 +22,7 @@ from vero.harbor.sidecar import (
     Submission,
     SubmissionDisabledError,
 )
+from vero.harbor.session import HarborSessionManifest
 from vero.harbor.transport import (
     CandidateTransferError,
     CandidateTransport,
@@ -38,8 +41,11 @@ __all__ = [
     "HarborBackendConfig",
     "HarborCase",
     "HarborDeploymentConfig",
+    "HarborSessionManifest",
     "AgentAccessSpec",
     "HarborBuildConfig",
+    "InferenceBudgetSpec",
+    "InferenceGatewaySpec",
     "VerificationTargetSpec",
     "CandidateTransferError",
     "CandidateTransport",

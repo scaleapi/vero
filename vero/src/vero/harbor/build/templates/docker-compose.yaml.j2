@@ -4,6 +4,18 @@ services:
     command: ["/opt/seed.sh"]
     environment:
       VERO_EVAL_URL: "http://eval-sidecar:8000"
+{% for secret in scrubbed_main_environment %}
+      {{ secret }}: ""
+{% endfor %}
+{% if inference_gateway %}
+      OPENAI_API_KEY: "{{ producer_inference_token }}"
+      OPENAI_BASE_URL: "{{ inference_gateway_url }}/scopes/producer/optimizer/v1"
+{% elif "OPENAI_API_KEY" in secrets %}
+      OPENAI_API_KEY: ""
+{% if "OPENAI_BASE_URL" in secrets %}
+      OPENAI_BASE_URL: ""
+{% endif %}
+{% endif %}
     volumes:
       - agent_repo:/work/agent
       - agent_context:/work/agent/.vero:ro
@@ -11,6 +23,10 @@ services:
     depends_on:
       eval-sidecar:
         condition: service_healthy
+{% if inference_gateway %}
+      inference-gateway:
+        condition: service_healthy
+{% endif %}
 
   eval-sidecar:
     build:
@@ -27,8 +43,8 @@ services:
       - "--admin-token"
       - "/state/token/admin.token"
     environment:
-{% if secrets %}
-{% for secret in secrets %}
+{% if sidecar_secrets %}
+{% for secret in sidecar_secrets %}
       {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the eval sidecar{{ '}' }}"
 {% endfor %}
 {% else %}
@@ -39,6 +55,9 @@ services:
       - agent_context:/state/agent-context
       - admin_state:/state/admin
       - token_state:/state/token
+{% if inference_gateway %}
+      - inference_state:/state/inference:ro
+{% endif %}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -46,8 +65,36 @@ services:
       retries: 30
       start_period: 10s
 
+{% if inference_gateway %}
+  inference-gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command:
+      - "vero"
+      - "harbor"
+      - "inference-gateway"
+      - "--config"
+      - "/opt/inference.json"
+    environment:
+{% for secret in gateway_environment %}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the inference gateway{{ '}' }}"
+{% endfor %}
+    volumes:
+      - inference_state:/state/inference
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+{% endif %}
+
 volumes:
   agent_repo:
   agent_context:
   admin_state:
   token_state:
+{% if inference_gateway %}
+  inference_state:
+{% endif %}
