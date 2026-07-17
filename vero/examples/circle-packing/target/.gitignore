@@ -1,0 +1,4 @@
+.vero/
+.venv/
+__pycache__/
+*.py[oc]

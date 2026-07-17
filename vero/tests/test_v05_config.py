@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from vero.config import AgentOptimizerConfig, VeroConfig, load_config
+from vero.config import AgentOptimizerConfig, VeroConfig, _producer, load_config
 
 
 def _config(optimizer: dict) -> dict:
@@ -26,13 +26,35 @@ def test_agent_optimizer_accepts_only_agent_fields():
             {
                 "kind": "vero",
                 "instruction": "Improve the program",
+                "model": "openai/gpt-5",
                 "max_turns": 10,
             }
         )
     )
 
     assert isinstance(config.optimizer, AgentOptimizerConfig)
+    assert config.optimizer.model == "openai/gpt-5"
     assert config.optimizer.max_turns == 10
+
+
+def test_agent_optimizer_rejects_empty_model():
+    with pytest.raises(ValidationError, match="model must not be empty"):
+        VeroConfig.model_validate(_config({"kind": "vero", "model": " "}))
+
+
+@pytest.mark.parametrize(
+    ("kind", "model"),
+    [("vero", "openai/gpt-5"), ("claude", "claude-opus-4-1")],
+)
+def test_agent_optimizer_applies_configured_model(kind, model):
+    producer = _producer(AgentOptimizerConfig(kind=kind, model=model))
+
+    configured = (
+        producer.agent.model_str()
+        if kind == "vero"
+        else producer.agent.options.model
+    )
+    assert configured == model
 
 
 @pytest.mark.parametrize(

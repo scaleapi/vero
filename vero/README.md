@@ -44,6 +44,12 @@ commit, selects the faster feasible result, and leaves the original target
 untouched. See [`examples/c-matmul`](examples/c-matmul/) for the complete target,
 harness, optimizer, and config.
 
+For a more demanding coding-agent run, use the
+[`examples/circle-packing`](examples/circle-packing/) benchmark adapted from
+ShinkaEvolve. It asks an agent to improve a 26-circle packing, exposes exact
+geometric diagnostics and layout artifacts after each authorized evaluation,
+and re-evaluates the selected candidate through a hidden final evaluation.
+
 ## Configure an optimization
 
 `vero.toml` is the shortest path from a program to a repeatable optimization:
@@ -118,6 +124,7 @@ value = 1.0
 
 [optimizer]
 kind = "claude"
+model = "claude-sonnet-4-5-20250929"
 instruction = "Make the program faster without changing its output"
 
 [session]
@@ -188,7 +195,9 @@ vero optimize ./my-program \
   --max-proposals 5
 ```
 
-Use `--agent vero` for VeRO's OpenAI Agents SDK implementation. Provider-specific
+Use `--agent vero` for VeRO's OpenAI Agents SDK implementation. In
+`vero.toml`, `optimizer.model` selects an explicit Claude or LiteLLM model
+identifier; omitting it preserves that adapter's default. Provider-specific
 dependencies and credentials are required for either built-in coding agent.
 
 ### Optimize with any external producer

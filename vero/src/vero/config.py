@@ -249,7 +249,14 @@ class CommandOptimizerConfig(BaseOptimizerConfig):
 
 class AgentOptimizerConfig(BaseOptimizerConfig):
     kind: Literal["vero", "claude"]
+    model: str | None = None
     max_turns: int = Field(default=200, ge=1)
+
+    @model_validator(mode="after")
+    def validate_model(self) -> AgentOptimizerConfig:
+        if self.model is not None and not self.model.strip():
+            raise ValueError("agent optimizer model must not be empty")
+        return self
 
 
 OptimizerConfig = Annotated[
@@ -433,10 +440,16 @@ def _producer(config: CommandOptimizerConfig | AgentOptimizerConfig):
         from vero.agents import ClaudeCodeAgent
 
         agent = ClaudeCodeAgent()
+        if config.model is not None:
+            agent.options.model = config.model
     else:
         from vero.agents import VeroAgent
 
-        agent = VeroAgent()
+        agent = (
+            VeroAgent.for_model(config.model)
+            if config.model is not None
+            else VeroAgent()
+        )
     from vero.agents import AgentCandidateProducer
 
     return AgentCandidateProducer(

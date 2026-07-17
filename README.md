@@ -32,10 +32,12 @@ includes a no-bind-mount `DockerSandbox` example.
 | [`vero-agents/`](vero-agents/) | Benchmark target programs; not part of the optimizer runtime |
 | [`vero-benchmarking/`](vero-benchmarking/) | Reproducible experiment configurations and drivers |
 
-Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/)
-or the [core guide](vero/README.md). The C target has no Python or VeRO
-dependency; it is compiled, checked, benchmarked, and optimized through the
-language-neutral command protocol.
+Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/),
+try the [26-circle packing benchmark](vero/examples/circle-packing/), or read the
+[core guide](vero/README.md). The C example demonstrates the language-neutral
+command protocol without model credentials. Circle packing is a substantive
+coding-agent benchmark with exact geometry checks and inspectable search
+artifacts.
 
 ```bash
 cd vero

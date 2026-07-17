@@ -121,7 +121,9 @@ class VeroAgentHook(AgentHooks):
             )
 
 
-def _default_oai_agent() -> Agent:
+def _default_oai_agent(
+    model: str = "anthropic/claude-sonnet-4-5-20250929",
+) -> Agent:
     import os
 
     litellm_kwargs = {}
@@ -132,11 +134,11 @@ def _default_oai_agent() -> Agent:
         if litellm_kwargs["base_url"]:
             litellm_kwargs["base_url"] = litellm_kwargs["base_url"].rstrip("/")
 
-    model = LitellmModel(model="anthropic/claude-sonnet-4-5-20250929", **litellm_kwargs)
+    configured_model = LitellmModel(model=model, **litellm_kwargs)
 
     return Agent(
         name="VeroAgent",
-        model=model,
+        model=configured_model,
         model_settings=ModelSettings(
             include_usage=True,
             max_tokens=None,
@@ -178,6 +180,14 @@ class VeroAgent:
     )
     _agent_hook: VeroAgentHook | None = field(default=None, repr=False)
     _run_result: RunResultStreaming | None = field(default=None, repr=False)
+
+    @classmethod
+    def for_model(cls, model: str) -> VeroAgent:
+        """Construct an agent using an explicit LiteLLM model identifier."""
+
+        if not model.strip():
+            raise ValueError("model must not be empty")
+        return cls(oai_agent=_default_oai_agent(model))
 
     @property
     def trace(self) -> list[TResponseInputItem] | None:

@@ -1,0 +1,9 @@
+[project]
+name = "vero-circle-packing-candidate"
+version = "0.1.0"
+description = "An editable 26-circle packing program"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
