@@ -28,7 +28,7 @@ class TestSubmitSelection:
             reward_mode="submit",
             targets=[VerificationTarget(task="t", dataset_id="ds1", split="test", reward_key="reward")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"reward": 0.8}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "deadbeef"
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
@@ -48,7 +48,7 @@ class TestSubmitSelection:
                 VerificationTarget(task="t2", dataset_id="ds2", split="test", reward_key="held_out"),
             ],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"reward": 0.0, "held_out": 0.0}
         engine.evaluate_admin.assert_not_awaited()
 
@@ -67,7 +67,7 @@ class TestMultiTarget:
                 VerificationTarget(task="t2", dataset_id="ds2", split="test", reward_key="held_out"),
             ],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"in_domain": 0.9, "held_out": 0.4}
         assert engine.evaluate_admin.await_count == 2
 
@@ -103,7 +103,7 @@ class TestAutoBestSelection:
             selection_task="math",
             targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         # the final (target) eval is on the WINNER 'lo', chosen by admin re-score
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "lo"
         assert engine.evaluate_admin.await_args.kwargs["split"] == "test"
@@ -111,7 +111,9 @@ class TestAutoBestSelection:
         assert rewards["reward"] == 0.95
 
     @pytest.mark.asyncio
-    async def test_auto_best_excludes_baseline_after_rescore(self, tmp_path):
+    async def test_auto_best_excludes_baseline_from_ranking(self, tmp_path):
+        # base_commit is excluded from the candidate ranking pool. Floor off here so
+        # the test isolates ranking-exclusion (the floor is covered separately below).
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = pd.DataFrame(
             {
@@ -134,12 +136,176 @@ class TestAutoBestSelection:
             selection_split="validation",
             base_commit="base",
             selection_task="math",
+            auto_best_baseline_floor=False,
             targets=[VerificationTarget(task="math", dataset_id="ds1", split="test", reward_key="reward")],
         )
         await v.finalize()
         # baseline 'base' was never re-scored; 'agent' is selected + target-scored
         rescored_commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
         assert "base" not in rescored_commits
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
+
+
+class TestAutoBestBaselineFloor:
+    """auto_best never ships a candidate that fails to beat the baseline.
+
+    auto_best excludes base_commit from the candidate pool, so without a floor it
+    selects the least-bad candidate even when every candidate regressed (observed
+    live: a weak inner model, every candidate below baseline, shipped a -0.10
+    regression despite the free baseline being available). The floor reverts to the
+    seed instead.
+    """
+
+    def _df(self):
+        return pd.DataFrame(
+            {
+                "dataset_subset_split": ["train", "train"],
+                "dataset_subset_dataset_id": ["ds1", "ds1"],
+                "candidate_commit": ["base", "agent"],
+                "mean_score": [0.3, 0.9],  # agent inflated its own recorded score
+                "candidate_created_at": [1, 2],
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_reverts_to_base_when_no_candidate_beats_baseline(self, tmp_path):
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = self._df()
+
+        # agent admin-scores 0.2 on the selection split; base admin-scores 0.3;
+        # the reverted base scores 0.35 on the target split (distinct values so the
+        # assertions can tell the target eval apart from the floor comparison).
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            if commit == "base":
+                score = 0.35 if split == "validation" else 0.3
+            else:
+                score = 0.2
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="validation", reward_key="reward")],
+        )
+        result = await v.finalize()
+        # winner reverted to base -> the emitted reward is the SEED's target-split
+        # score, not the regressed candidate's
+        assert result["rewards"] == {"reward": 0.35}
+        rescored = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert "base" in rescored  # base was admin-scored for the floor comparison
+        # the final call is the target eval of the reverted commit (validation split),
+        # not the floor comparison (train split)
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "base"
+        assert engine.evaluate_admin.await_args.kwargs["split"] == "validation"
+
+    @pytest.mark.asyncio
+    async def test_exact_tie_reverts_to_base(self, tmp_path):
+        # The floor uses '<=': a statistical tie reverts. If the optimizer cannot
+        # show an improvement, shipping the seed is the safe outcome. Pins the
+        # boundary so a refactor to '<' regresses loudly.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = self._df()
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.3)))  # all equal
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="validation", reward_key="reward")],
+        )
+        await v.finalize()
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "base"
+
+    @pytest.mark.asyncio
+    async def test_floor_noop_without_base_commit(self, tmp_path):
+        # floor on (default) but base_commit=None: the floor must silently no-op,
+        # never issuing an eval with commit=None, and the best candidate ships.
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = pd.DataFrame(
+            {
+                "dataset_subset_split": ["train"],
+                "dataset_subset_dataset_id": ["ds1"],
+                "candidate_commit": ["agent"],
+                "mean_score": [0.9],
+                "candidate_created_at": [1],
+            }
+        )
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="validation", reward_key="reward")],
+        )
+        await v.finalize()
+        commits = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert None not in commits
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
+
+    @pytest.mark.asyncio
+    async def test_keeps_candidate_that_beats_baseline(self, tmp_path):
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = self._df()
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            score = 0.3 if commit == "base" else 0.6  # agent genuinely improves
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=score)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            selection_task="math",
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="validation", reward_key="reward")],
+        )
+        await v.finalize()
+        # 'agent' beats base -> it is selected and target-scored
+        assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
+
+    @pytest.mark.asyncio
+    async def test_floor_off_ships_least_bad_candidate(self, tmp_path):
+        # With the floor disabled, the old behavior stands: the best candidate is
+        # shipped even if it did not beat the baseline (base is never scored).
+        engine = MagicMock()
+        engine.db.get_experiments_df.return_value = self._df()
+
+        async def _admin(*, task, dataset_id, split, commit, sample_ids=None):
+            return MagicMock(result=MagicMock(score=MagicMock(return_value=0.2)))
+
+        engine.evaluate_admin = AsyncMock(side_effect=_admin)
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="auto_best",
+            selection_split="train",
+            base_commit="base",
+            selection_task="math",
+            auto_best_baseline_floor=False,
+            targets=[VerificationTarget(task="math", dataset_id="ds1", split="validation", reward_key="reward")],
+        )
+        await v.finalize()
+        rescored = [c.kwargs["commit"] for c in engine.evaluate_admin.await_args_list]
+        assert "base" not in rescored
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
 
 
@@ -173,7 +339,7 @@ class TestNoCandidateFallback:
             base_commit="base",
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.0}
         # no candidate -> nothing re-scored, no target eval spent
         engine.evaluate_admin.assert_not_awaited()
@@ -190,7 +356,7 @@ class TestNoCandidateFallback:
             selection_split="train",
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.0}
         engine.evaluate_admin.assert_not_awaited()
 
@@ -212,7 +378,8 @@ class TestNoCandidateFallback:
 
     @pytest.mark.asyncio
     async def test_candidates_present_keeps_normal_selection(self, tmp_path):
-        # Regression guard: the fallback must not swallow the normal path.
+        # Regression guard: the fallback must not swallow the normal path. Floor off
+        # so this isolates candidate selection (the floor is covered separately).
         engine = MagicMock()
         engine.db.get_experiments_df.return_value = pd.DataFrame(
             {
@@ -234,9 +401,10 @@ class TestNoCandidateFallback:
             reward_mode="auto_best",
             selection_split="train",
             base_commit="base",
+            auto_best_baseline_floor=False,
             targets=[VerificationTarget(task=None, dataset_id="ds1", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.5}
         assert engine.evaluate_admin.await_args.kwargs["commit"] == "agent"
 
@@ -260,8 +428,11 @@ class TestBaselineAtFinalize:
             score_baseline=True,
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
-        assert rewards == {"accuracy": 0.2}  # reward.json content unchanged
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.2}  # reward.json content unchanged
+        # the baseline outcome is surfaced in the finalize response (durable channel:
+        # echoed to the trial stdout, which survives teardown; the admin volume does not)
+        assert result["baseline"]["scores"] == {"accuracy": 0.3}
         data = json.loads((tmp_path / "baseline.json").read_text())
         assert data == {"accuracy": 0.3}
         # second admin eval was the baseline commit
@@ -278,18 +449,23 @@ class TestBaselineAtFinalize:
             base_commit="base",
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
+        rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.9}
         assert engine.evaluate_admin.await_count == 1
         assert not (tmp_path / "baseline.json").exists()
 
     @pytest.mark.asyncio
-    async def test_baseline_failure_never_fails_trial(self, tmp_path):
+    async def test_baseline_failure_retries_then_reports_error_without_failing_trial(self, tmp_path):
+        # The baseline eval fails on every attempt (2 by default). The trial reward
+        # must survive, AND the failure must be surfaced in the finalize response
+        # (not silently swallowed): a live trial once lost its baseline check because
+        # the only record was a log line that died with the container at teardown.
         (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
         engine = MagicMock()
         engine.evaluate_admin = AsyncMock(
             side_effect=[MagicMock(result=MagicMock(score=MagicMock(return_value=0.7))),
-                         RuntimeError("modal down")]
+                         RuntimeError("modal down"),   # baseline attempt 1
+                         RuntimeError("modal down")]   # baseline attempt 2 (retry)
         )
         v = Verifier(
             engine=engine,
@@ -299,8 +475,37 @@ class TestBaselineAtFinalize:
             score_baseline=True,
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
-        rewards = await v.finalize()
-        assert rewards == {"accuracy": 0.7}  # trial reward survives baseline failure
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.7}  # trial reward survives baseline failure
+        assert result["baseline"]["error_type"] == "RuntimeError"
+        assert result["baseline"]["attempts"] == 2  # tried twice before reporting
+        # 1 target eval + 2 baseline attempts
+        assert engine.evaluate_admin.await_count == 3
+        assert not (tmp_path / "baseline.json").exists()  # nothing persisted on failure
+
+    @pytest.mark.asyncio
+    async def test_baseline_transient_failure_recovers_on_retry(self, tmp_path):
+        # A single transient blip on the baseline eval must not drop the check: the
+        # retry succeeds and the baseline score is reported normally.
+        (tmp_path / "submission.json").write_text(json.dumps({"commit": "cand"}))
+        engine = MagicMock()
+        engine.evaluate_admin = AsyncMock(
+            side_effect=[MagicMock(result=MagicMock(score=MagicMock(return_value=0.7))),  # target
+                         RuntimeError("transient"),                                        # baseline attempt 1
+                         MagicMock(result=MagicMock(score=MagicMock(return_value=0.5)))]   # baseline attempt 2 ok
+        )
+        v = Verifier(
+            engine=engine,
+            admin_volume=tmp_path,
+            reward_mode="submit",
+            base_commit="base",
+            score_baseline=True,
+            targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
+        )
+        result = await v.finalize()
+        assert result["rewards"] == {"accuracy": 0.7}
+        assert result["baseline"]["scores"] == {"accuracy": 0.5}
+        assert result["baseline"]["attempts"] == 2
 
     @pytest.mark.asyncio
     async def test_missing_base_commit_warns(self, tmp_path, caplog):
@@ -316,7 +521,7 @@ class TestBaselineAtFinalize:
             targets=[VerificationTarget(task=None, dataset_id="ds", split="validation", reward_key="accuracy")],
         )
         with caplog.at_level("WARNING", logger="vero.harbor.verifier"):
-            rewards = await v.finalize()
+            rewards = (await v.finalize())["rewards"]
         assert rewards == {"accuracy": 0.9}
         assert not (tmp_path / "baseline.json").exists()
         assert any("base_commit is not set" in m for m in caplog.messages)
