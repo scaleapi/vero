@@ -110,3 +110,17 @@ class TestBuildStatus:
         by_split = {s["split"]: s for s in status.splits}
         assert by_split["validation"]["min_subset_samples"] == 5
         assert by_split["train"]["min_subset_samples"] == 1
+
+    def test_default_floor_matches_sidecar_enforcement_default(self):
+        # A caller that forgets to pass the floor must not advertise a laxer
+        # one than EvaluationSidecar enforces by default (5): agents would
+        # send sub-floor requests that get rejected.
+        budget = {
+            ("validation", "ds1"): SplitBudget(split="validation", dataset_id="ds1", total_run_budget=3),
+        }
+        status = build_status(
+            submit_enabled=False,
+            budget=budget,
+            split_accesses=[SplitAccess.non_viewable("validation")],
+        )
+        assert status.splits[0]["min_subset_samples"] == 5

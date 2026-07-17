@@ -183,6 +183,25 @@ class TestFreeEval:
         assert svc.status()[("dev", "ds1")].remaining_sample_budget == 100
 
     @pytest.mark.asyncio
+    async def test_admin_model_override_rides_task_params(self, monkeypatch):
+        # Transfer targets: evaluate_admin(model=...) must reach the eval
+        # strategy via task_params without mutating the shared run_constraints.
+        svc = _make_service(monkeypatch=monkeypatch)
+        await svc.evaluate_admin(
+            task="t", dataset_id="ds1", split="dev", commit="c1", model="openai/gpt-4o"
+        )
+        params = svc.evaluator.evaluate.await_args.kwargs["evaluation_parameters"]
+        assert params.task_params["harbor_model_override"] == "openai/gpt-4o"
+        assert svc.run_constraints.task_params.get("harbor_model_override") is None
+
+    @pytest.mark.asyncio
+    async def test_admin_no_override_keeps_shared_constraints(self, monkeypatch):
+        svc = _make_service(monkeypatch=monkeypatch)
+        await svc.evaluate_admin(task="t", dataset_id="ds1", split="dev", commit="c1")
+        params = svc.evaluator.evaluate.await_args.kwargs["evaluation_parameters"]
+        assert params is svc.run_constraints
+
+    @pytest.mark.asyncio
     async def test_free_does_not_bypass_no_access_gate(self, monkeypatch):
         from vero.core.dataset import SplitAccess
 
