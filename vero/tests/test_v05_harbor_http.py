@@ -111,7 +111,10 @@ def test_admin_token_is_atomic_restrictive_and_constant_time_checked(tmp_path):
     path = write_admin_token(tmp_path / "admin/token", "secret-token")
 
     assert read_admin_token(path) == "secret-token"
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    # Read-only file inside a root-only directory: an unprivileged agent that
+    # shares the token volume can neither read the file nor traverse to it.
+    assert stat.S_IMODE(path.stat().st_mode) == 0o400
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert check_admin_token("Bearer secret-token", "secret-token")
     assert not check_admin_token("Bearer wrong", "secret-token")
     assert not check_admin_token(None, "secret-token")

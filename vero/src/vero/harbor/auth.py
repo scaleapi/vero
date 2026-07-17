@@ -16,13 +16,30 @@ def write_admin_token(
     path: Path | str,
     token: str,
     *,
-    mode: int = 0o600,
+    mode: int = 0o400,
 ) -> Path:
-    """Atomically write a restrictive token file for the trusted verifier."""
+    """Atomically write a read-only token file for the trusted verifier.
+
+    The token gates the full-disclosure admin endpoints (``/finalize``,
+    ``/evaluations``, ``/session/export``). Under the shared-verifier topology
+    the token volume is also mounted into the *untrusted* agent container, so
+    the file (``0o400``) and its parent directory (``0o700``) are locked to the
+    writing user — root in the sidecar. The agent runs unprivileged
+    (``task.toml`` ``[agent].user``) and can therefore neither read the file nor
+    traverse into its directory; only the root-run verifier phase can. This is
+    what stops an untrusted agent from bypassing the aggregate-disclosure floor
+    through the admin endpoints.
+    """
     if not token.strip() or "\x00" in token:
         raise ValueError("admin token must not be empty")
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Block traversal by any non-owner (e.g. the unprivileged agent user), so
+    # the token is unreachable even if its own mode were ever relaxed.
+    try:
+        destination.parent.chmod(0o700)
+    except OSError:
+        pass
     descriptor, name = tempfile.mkstemp(
         dir=destination.parent,
         prefix=f".{destination.name}.",
