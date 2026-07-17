@@ -22,7 +22,7 @@ from vero.evaluation import (
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
 from vero.harbor.serve import SidecarComponents
-from vero.harbor.sidecar import EvaluationAccessPolicy, EvaluationSidecar
+from vero.harbor.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
 from vero.harbor.transport import GitCandidateTransport
 from vero.harbor.verifier import (
     CanonicalVerifier,
@@ -71,7 +71,7 @@ class HarborDeploymentConfig(EvaluationModel):
     session_dir: str
     session_id: str = "trial"
     backends: dict[str, HarborBackendConfig]
-    access_policies: list[EvaluationAccessPolicy]
+    access_policies: list[SidecarEvaluationPolicy]
     budgets: list[EvaluationBudget] = Field(default_factory=list)
     selection: DeploymentSelection
     targets: list[VerificationTarget]

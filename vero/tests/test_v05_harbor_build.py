@@ -175,7 +175,7 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert not (output / "environment/agent-seed/protected-tasks").exists()
     instruction = (output / "instruction.md").read_text(encoding="utf-8")
     assert "--backend harbor-validation" in instruction
-    assert "at least 5 cases" in instruction
+    assert "arbitrary subsets" in instruction
     task_toml = (output / "task.toml").read_text(encoding="utf-8")
     assert 'name = "org/optimize-\\"program\\""' in task_toml
     assert tomllib.loads(task_toml)["task"]["name"] == 'org/optimize-"program"'

@@ -6,6 +6,7 @@ from vero.optimization.command import (
 )
 from vero.optimization.models import (
     CandidateChange,
+    CandidateProductionContext,
     CandidateProposal,
     OptimizationContext,
     OptimizationResult,
@@ -21,6 +22,7 @@ from vero.optimization.strategy import ObjectiveSelectionPolicy, SequentialStrat
 
 __all__ = [
     "CandidateChange",
+    "CandidateProductionContext",
     "CandidateEvaluationGateway",
     "CandidateProducer",
     "CandidateProposal",

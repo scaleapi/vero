@@ -13,8 +13,14 @@ from vero.evaluation import (
     CaseResult,
     CaseStatus,
     DiagnosticSeverity,
+    DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationArtifact,
+    EvaluationBudget,
+    EvaluationDefinition,
     EvaluationDiagnostic,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationRecord,
     EvaluationReport,
     EvaluationRequest,
@@ -256,7 +262,7 @@ def test_record_is_schema_one_and_requires_aware_ordered_timestamps():
         completed_at=created_at + timedelta(seconds=1),
     )
 
-    assert record.schema_version == 1
+    assert record.schema_version == 2
     assert record.request.candidate.version == "snapshot:candidate-1"
 
     with pytest.raises(ValidationError, match="must not be before"):
@@ -266,4 +272,55 @@ def test_record_is_schema_one_and_requires_aware_ordered_timestamps():
             record.model_copy(
                 update={"completed_at": created_at - timedelta(seconds=1)}
             ).model_dump()
+        )
+
+
+def test_evaluation_plan_models_selection_visibility_and_principal_budgets():
+    validation = EvaluationSet(name="validation", partition="validation")
+    test = EvaluationSet(name="test", partition="test")
+    plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(
+                evaluation_set=validation,
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.AGGREGATE,
+                ),
+                agent_budget=EvaluationBudget(
+                    backend_id="command",
+                    evaluation_set_key=validation.budget_key("command"),
+                    principal=EvaluationPrincipal.AGENT,
+                    total_runs=10,
+                ),
+                system_budget=EvaluationBudget(
+                    backend_id="command",
+                    evaluation_set_key=validation.budget_key("command"),
+                    principal=EvaluationPrincipal.SYSTEM,
+                    total_runs=100,
+                ),
+            ),
+            EvaluationDefinition(
+                evaluation_set=test,
+                access=EvaluationAccessPolicy(
+                    agent_can_evaluate=False,
+                    agent_visible=False,
+                    disclosure=DisclosureLevel.NONE,
+                ),
+            ),
+        ],
+        selection_evaluation="validation",
+        final_evaluation="test",
+    )
+
+    assert plan.selection.evaluation_set == validation
+    assert plan.final.evaluation_set == test
+    assert {budget.principal for budget in plan.budgets} == {
+        EvaluationPrincipal.AGENT,
+        EvaluationPrincipal.SYSTEM,
+    }
+
+    with pytest.raises(ValidationError, match="final evaluation must be"):
+        EvaluationPlan(
+            evaluations=[EvaluationDefinition(evaluation_set=test)],
+            selection_evaluation="test",
+            final_evaluation="test",
         )

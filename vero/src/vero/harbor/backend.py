@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import math
@@ -36,7 +37,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.staging import SandboxStagingArea
-from vero.sandbox import Sandbox
+from vero.sandbox import CommandResult, Sandbox
 
 
 def _default_uv() -> str:
@@ -87,6 +88,23 @@ class HarborBackendConfig(EvaluationModel):
     python_version: str = "3.12"
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
+    infrastructure_max_attempts: int = Field(default=3, ge=1)
+    infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
+    infrastructure_exception_patterns: list[str] = Field(
+        default_factory=lambda: [
+            "rate.?limit",
+            "timeout",
+            "connection",
+            "service.?unavailable",
+            "internal.?server",
+            "overloaded",
+            "authentication",
+            "permission",
+            "quota",
+            "insufficient.?credits",
+            "billing",
+        ]
+    )
     reward_key: str | None = None
     aggregate_attempts: Literal["best", "mean"] = "best"
     failure_score: float = 0.0
@@ -201,6 +219,20 @@ class HarborBackendConfig(EvaluationModel):
             )
         return value
 
+    @field_validator("infrastructure_exception_patterns")
+    @classmethod
+    def validate_infrastructure_patterns(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("infrastructure exception patterns must not be empty")
+        for pattern in value:
+            try:
+                re.compile(pattern, re.IGNORECASE)
+            except re.error as error:
+                raise ValueError(
+                    f"invalid infrastructure exception pattern {pattern!r}: {error}"
+                ) from error
+        return value
+
     @model_validator(mode="after")
     def validate_filesystem_and_environment(self) -> HarborBackendConfig:
         if not Path(self.cases_path).is_file():
@@ -218,7 +250,7 @@ class HarborBackend:
     """Run Harbor as an external evaluator and collate its trial records."""
 
     name = "harbor"
-    version = "1"
+    version = "2"
 
     def __init__(self, config: HarborBackendConfig):
         self.config = config
@@ -643,6 +675,30 @@ class HarborBackend:
             self.config.failure_score,
         )
 
+    def _only_infrastructure_failures(
+        self,
+        case_results: list[CaseResult],
+    ) -> bool:
+        if not case_results or any(
+            case.status != CaseStatus.ERROR for case in case_results
+        ):
+            return False
+        patterns = [
+            re.compile(pattern, re.IGNORECASE)
+            for pattern in self.config.infrastructure_exception_patterns
+        ]
+        for case in case_results:
+            output = case.output if isinstance(case.output, dict) else {}
+            names = output.get("dead_exception_types")
+            if not isinstance(names, dict) or not names:
+                return False
+            if any(
+                not any(pattern.search(str(name)) for pattern in patterns)
+                for name in names
+            ):
+                return False
+        return True
+
     async def evaluate(
         self,
         *,
@@ -671,39 +727,58 @@ class HarborBackend:
 
         cases = self._selected_cases(request.evaluation_set)
         capture_dir = context.artifact_dir / "harbor"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        requested_tasks = {case.expected_result_task_name for case in cases}
+        attempts: list[tuple[CommandResult, str, str]] = []
+        groups: dict[str, list[dict[str, Any]]] = {}
         jobs_dir = capture_dir / "jobs"
-        jobs_dir.mkdir(parents=True, exist_ok=True)
-        async with SandboxStagingArea(
-            context.workspace.sandbox,
-            prefix=f"vero-harbor-{context.evaluation_id[:8]}-",
-        ) as staging:
-            remote_jobs_dir = await staging.mkdir("jobs")
-            task_source = (
-                (
-                    str(source.resolve())
-                    if context.workspace.sandbox.capabilities.host_paths
-                    else await staging.upload(source.resolve(), "tasks")
+        for attempt in range(1, self.config.infrastructure_max_attempts + 1):
+            attempt_jobs_dir = (
+                jobs_dir if attempt == 1 else capture_dir / f"retry-{attempt}" / "jobs"
+            )
+            attempt_jobs_dir.mkdir(parents=True, exist_ok=True)
+            async with SandboxStagingArea(
+                context.workspace.sandbox,
+                prefix=f"vero-harbor-{context.evaluation_id[:8]}-{attempt}-",
+            ) as staging:
+                remote_jobs_dir = await staging.mkdir("jobs")
+                task_source = (
+                    (
+                        str(source.resolve())
+                        if context.workspace.sandbox.capabilities.host_paths
+                        else await staging.upload(source.resolve(), "tasks")
+                    )
+                    if local_task_source
+                    else self.config.task_source
                 )
-                if local_task_source
-                else self.config.task_source
-            )
-            command = self._command(
-                workspace=context.workspace.project_path,
-                request=request,
-                cases=cases,
-                jobs_dir=remote_jobs_dir,
-                task_source=task_source,
-                local_task_source=local_task_source,
-            )
-            result = await context.workspace.sandbox.run(
-                command,
-                cwd=context.workspace.project_path,
-                timeout=request.limits.timeout_seconds,
-                env=self._environment(),
-            )
-            await staging.download("jobs", jobs_dir)
-        stdout = self.sanitize_error(result.stdout)
-        stderr = self.sanitize_error(result.stderr)
+                command = self._command(
+                    workspace=context.workspace.project_path,
+                    request=request,
+                    cases=cases,
+                    jobs_dir=remote_jobs_dir,
+                    task_source=task_source,
+                    local_task_source=local_task_source,
+                )
+                result = await context.workspace.sandbox.run(
+                    command,
+                    cwd=context.workspace.project_path,
+                    timeout=request.limits.timeout_seconds,
+                    env=self._environment(),
+                )
+                await staging.download("jobs", attempt_jobs_dir)
+            stdout = self.sanitize_error(result.stdout)
+            stderr = self.sanitize_error(result.stderr)
+            attempts.append((result, stdout, stderr))
+            groups = self._trial_groups(attempt_jobs_dir)
+            if requested_tasks & set(groups):
+                jobs_dir = attempt_jobs_dir
+                break
+            if attempt < self.config.infrastructure_max_attempts:
+                await asyncio.sleep(
+                    self.config.infrastructure_retry_delay_seconds * attempt
+                )
+
+        result, stdout, stderr = attempts[-1]
         (capture_dir / "stdout.log").write_text(stdout, encoding="utf-8")
         (capture_dir / "stderr.log").write_text(stderr, encoding="utf-8")
         artifacts = [
@@ -719,19 +794,17 @@ class HarborBackend:
             ),
         ]
 
-        groups = self._trial_groups(jobs_dir)
-        requested_tasks = {case.expected_result_task_name for case in cases}
         matching_tasks = requested_tasks & set(groups)
         if not matching_tasks:
-            code = "harbor_timeout" if result.returncode == -1 else "harbor_no_trials"
             message = stderr.strip() or (
-                f"Harbor produced no matching trials for {len(cases)} requested tasks"
+                "Harbor infrastructure produced no matching trials for "
+                f"{len(cases)} requested tasks after {len(attempts)} attempts"
             )
             report = EvaluationReport(
                 status=EvaluationStatus.FAILED,
                 diagnostics=[
                     EvaluationDiagnostic(
-                        code=code,
+                        code="infrastructure_failure",
                         message=message,
                         severity=DiagnosticSeverity.ERROR,
                         phase="harbor",
@@ -766,8 +839,25 @@ class HarborBackend:
                     phase="harbor",
                 )
             )
+        infrastructure_failure = self._only_infrastructure_failures(case_results)
+        if infrastructure_failure:
+            diagnostics.append(
+                EvaluationDiagnostic(
+                    code="infrastructure_failure",
+                    message=(
+                        "All Harbor cases failed with transient infrastructure "
+                        "exceptions after Harbor retries were exhausted"
+                    ),
+                    severity=DiagnosticSeverity.ERROR,
+                    phase="harbor",
+                )
+            )
         report = EvaluationReport(
-            status=EvaluationStatus.SUCCESS,
+            status=(
+                EvaluationStatus.FAILED
+                if infrastructure_failure
+                else EvaluationStatus.SUCCESS
+            ),
             metrics={
                 "score": sum(scores) / len(scores),
                 "error_rate": sum(

@@ -17,6 +17,8 @@ from vero.runtime.factory import (
 )
 from vero.runtime.session import (
     OptimizationSession,
+    OptimizationComponentSpec,
+    OptimizationRunSpec,
     SessionFailure,
     SessionManifest,
     SessionStatus,
@@ -33,6 +35,8 @@ __all__ = [
     "EventSink",
     "JsonlEventSink",
     "OptimizationSession",
+    "OptimizationComponentSpec",
+    "OptimizationRunSpec",
     "RuntimeEvent",
     "SandboxStagingArea",
     "SessionFailure",

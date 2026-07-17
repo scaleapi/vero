@@ -9,10 +9,12 @@ from vero.config import AgentOptimizerConfig, VeroConfig, load_config
 def _config(optimizer: dict) -> dict:
     return {
         "target": {"root": "."},
-        "evaluation": {
+        "backend": {
             "harness_root": ".",
             "command": ["evaluate", "{workspace}", "{report}"],
         },
+        "evaluations": [{"name": "default"}],
+        "protocol": {"selection_evaluation": "default"},
         "objective": {"metric": "score", "direction": "maximize"},
         "optimizer": optimizer,
     }
@@ -54,7 +56,7 @@ def test_agent_optimizer_rejects_command_only_fields(field, value):
 
 def test_config_rejects_case_ids_combined_with_range_start():
     value = _config({"kind": "vero"})
-    value["evaluation"].update({"case_ids": ["a"], "case_start": 1})
+    value["evaluations"][0].update({"case_ids": ["a"], "case_start": 1})
 
     with pytest.raises(ValidationError, match="case_ids and case range"):
         VeroConfig.model_validate(value)
@@ -62,15 +64,15 @@ def test_config_rejects_case_ids_combined_with_range_start():
 
 def test_config_wires_retry_policy_into_evaluation_limits():
     value = _config({"kind": "vero"})
-    value["evaluation"]["retry"] = {
+    value["protocol"]["retry"] = {
         "max_attempts": 5,
         "initial_delay_seconds": 0.5,
     }
 
     config = VeroConfig.model_validate(value)
 
-    assert config.evaluation.to_limits().retry.max_attempts == 5
-    assert config.evaluation.to_limits().retry.initial_delay_seconds == 0.5
+    assert config.protocol.to_limits().retry.max_attempts == 5
+    assert config.protocol.to_limits().retry.initial_delay_seconds == 0.5
 
 
 def test_config_resolves_agent_context_inputs_with_staged_inputs(tmp_path):
@@ -80,13 +82,21 @@ def test_config_resolves_agent_context_inputs_with_staged_inputs(tmp_path):
 [target]
 root = "target"
 
-[evaluation]
+[backend]
 harness_root = "harness"
 command = ["run", "{input:cases}"]
-agent_context_inputs = ["cases"]
 
-[evaluation.staged_inputs]
+[backend.staged_inputs]
 cases = "data/cases.json"
+
+[backend.agent_context_inputs]
+train = ["cases"]
+
+[[evaluations]]
+name = "train"
+
+[protocol]
+selection_evaluation = "train"
 
 [objective]
 metric = "score"
@@ -97,7 +107,7 @@ direction = "maximize"
 
     config = load_config(config_path)
 
-    assert config.evaluation.agent_context_inputs == ["cases"]
-    assert config.evaluation.staged_inputs == {
+    assert config.backend.agent_context_inputs == {"train": ["cases"]}
+    assert config.backend.staged_inputs == {
         "cases": str((tmp_path / "data/cases.json").resolve())
     }

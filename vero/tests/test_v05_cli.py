@@ -167,6 +167,40 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
     assert "cli-session\tcompleted" in list_result.output
     assert "nested/cli-run" in list_result.output
 
+    archive = tmp_path / "cli-export.tar.gz"
+    export_result = runner.invoke(
+        main,
+        ["session", "export", str(session_dir), "--output", str(archive)],
+    )
+    assert export_result.exit_code == 0, export_result.output
+    assert archive.is_file()
+
+    fork_dir = tmp_path / "sessions" / "forked"
+    fork_result = runner.invoke(
+        main,
+        [
+            "session",
+            "fork",
+            str(session_dir),
+            str(fork_dir),
+            "--max-proposals",
+            "2",
+            "--reset-budgets",
+        ],
+    )
+    assert fork_result.exit_code == 0, fork_result.output
+    forked = json.loads((fork_dir / "manifest.json").read_text())
+    assert forked["id"] == "forked"
+    assert forked["run"]["max_proposals"] == 2
+    assert json.loads((fork_dir / "database.json").read_text())["id"] == "forked"
+
+    clear_result = runner.invoke(
+        main,
+        ["session", "clear", str(fork_dir), "--yes"],
+    )
+    assert clear_result.exit_code == 0, clear_result.output
+    assert not fork_dir.exists()
+
     evaluate_only_dir = tmp_path / "sessions" / "evaluate-only"
     evaluate_only = runner.invoke(
         main,
@@ -188,7 +222,7 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
             "latency_ms",
             "--direction",
             "minimize",
-            "--max-candidates",
+            "--max-proposals",
             "0",
             "--session-dir",
             str(evaluate_only_dir),
@@ -196,6 +230,25 @@ Path(sys.argv[1], "program.txt").write_text("fast\\n")
     )
     assert evaluate_only.exit_code == 0, evaluate_only.output
     assert "(9.0)" in evaluate_only.output
+
+
+def test_cli_init_and_check_config(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(main, ["init", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    (tmp_path / "harness").mkdir()
+
+    checked = runner.invoke(
+        main,
+        ["check", "--config", str(tmp_path / "vero.toml")],
+    )
+    assert checked.exit_code == 0, checked.output
+    assert "selection='validation'" in checked.output
 
 
 def test_cli_requires_exactly_one_producer(tmp_path: Path):
@@ -241,7 +294,7 @@ def test_cli_rejects_options_that_do_not_apply(tmp_path: Path):
         "score",
         "--direction",
         "maximize",
-        "--max-candidates",
+        "--max-proposals",
         "0",
     ]
     runner = CliRunner()

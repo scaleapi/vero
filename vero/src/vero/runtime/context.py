@@ -17,12 +17,12 @@ from vero.evaluation import (
     CaseResourceExporter,
     DisclosureLevel,
     EvaluationAcknowledgement,
-    EvaluationAuthorization,
     EvaluationEngine,
     EvaluationModel,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationReceipt,
     EvaluationRecord,
-    EvaluationRequest,
     EvaluationSummary,
     project_evaluation,
 )
@@ -201,6 +201,9 @@ long trace in its own file; their artifact paths resolve below that evaluation's
 
 Use ordinary filesystem and Git commands to analyze this context. Do not copy
 it into the program: VeRO rejects candidate versions that track `.vero`.
+
+`evaluations.json` lists the named evaluations you may invoke, their base case
+selection, disclosure level, and remaining budget.
 """
         await self.sandbox.write_file(self.path("README.md"), readme)
         await self.write_json(
@@ -330,6 +333,8 @@ it into the program: VeRO rejects candidate versions that track `.vero`.
                     "evaluation_id": record.id,
                     "candidate_id": record.request.candidate.id,
                     "candidate_version": record.request.candidate.version,
+                    "evaluation": record.request.evaluation_set.name,
+                    "partition": record.request.evaluation_set.partition,
                     "disclosure": disclosure.value,
                     "path": relative_path,
                 }
@@ -355,7 +360,7 @@ class WorkspaceContextManager:
         candidate_repository: CandidateRepository,
         engine: EvaluationEngine,
         backend_id: str,
-        request: EvaluationRequest,
+        evaluation_plan: EvaluationPlan,
         candidates: Sequence[Candidate],
         evaluations: Sequence[EvaluationRecord],
         ledger: AgentDisclosureLedger,
@@ -369,7 +374,7 @@ class WorkspaceContextManager:
         self.candidate_repository = candidate_repository
         self.engine = engine
         self.backend_id = backend_id
-        self.request = request
+        self.evaluation_plan = evaluation_plan
         self.candidates = {candidate.id: candidate for candidate in candidates}
         self.evaluations = {record.id: record for record in evaluations}
         self.ledger = ledger
@@ -395,8 +400,12 @@ class WorkspaceContextManager:
     ]:
         projections = []
         for record in self.evaluations.values():
-            decision = await self.engine.authorize(record.backend_id, record.request)
-            if not decision.may_evaluate:
+            decision = await self.engine.authorize(
+                record.backend_id,
+                record.request,
+                EvaluationPrincipal.AGENT,
+            )
+            if not decision.viewable:
                 continue
             maximum = await self.ledger.remember(record.id, decision.disclosure)
             disclosure = narrower_disclosure(maximum, decision.disclosure)
@@ -412,16 +421,21 @@ class WorkspaceContextManager:
             destination=self.directory.path("candidates"),
         )
 
-    async def _write_case_resources(self, decision: EvaluationAuthorization) -> None:
+    async def _write_case_resources(self) -> None:
         cases_root = self.directory.path("cases")
         await self.workspace.sandbox.mkdir(cases_root)
         index: list[dict[str, object]] = []
         backend = self.engine.backends.resolve(self.backend_id)
-        if decision.expose_case_resources and isinstance(
-            backend,
-            CaseResourceExporter,
-        ):
-            key = self.request.evaluation_set.budget_key(self.backend_id)
+        for definition in self.evaluation_plan.evaluations:
+            access = definition.access
+            if not (
+                access.agent_visible
+                and access.expose_case_resources
+                and isinstance(backend, CaseResourceExporter)
+            ):
+                continue
+            evaluation_set = definition.evaluation_set
+            key = evaluation_set.budget_key(self.backend_id)
             digest = context_digest(key)
             resource_root = self.directory.path("cases", digest)
             await self.workspace.sandbox.mkdir(resource_root)
@@ -430,31 +444,64 @@ class WorkspaceContextManager:
                 {
                     "schema_version": 1,
                     "backend_id": self.backend_id,
-                    "evaluation_set": self.request.evaluation_set.model_dump(
-                        mode="json"
-                    ),
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
                     "resources_path": "resources",
                 },
             )
             resources = posixpath.join(resource_root, "resources")
             await self.workspace.sandbox.mkdir(resources)
             await backend.export_case_resources(
-                evaluation_set=self.request.evaluation_set,
+                evaluation_set=evaluation_set,
                 destination=resources,
                 sandbox=self.workspace.sandbox,
             )
             index.append(
                 {
                     "backend_id": self.backend_id,
-                    "evaluation_set": self.request.evaluation_set.model_dump(
-                        mode="json"
-                    ),
+                    "evaluation_set": evaluation_set.model_dump(mode="json"),
                     "path": digest,
                 }
             )
         await self.directory.write_json(
             posixpath.join(cases_root, "index.json"),
             {"schema_version": 1, "case_resources": index},
+        )
+
+    async def _write_evaluation_plan(self) -> None:
+        ledger = self.engine.budget_ledger
+        evaluations = []
+        for definition in self.evaluation_plan.evaluations:
+            access = definition.access
+            if not access.agent_visible and not access.agent_can_evaluate:
+                continue
+            budget = (
+                ledger.get(
+                    self.backend_id,
+                    definition.evaluation_set,
+                    EvaluationPrincipal.AGENT,
+                )
+                if ledger is not None
+                else None
+            )
+            evaluations.append(
+                {
+                    "name": definition.evaluation_set.name,
+                    "partition": definition.evaluation_set.partition,
+                    "base_selection": definition.evaluation_set.selection.model_dump(
+                        mode="json"
+                    ),
+                    "agent_can_evaluate": access.agent_can_evaluate,
+                    "agent_selection": access.agent_selection.value,
+                    "disclosure": access.disclosure.value,
+                    "expose_case_resources": access.expose_case_resources,
+                    "budget": (
+                        budget.model_dump(mode="json") if budget is not None else None
+                    ),
+                }
+            )
+        await self.directory.write_json(
+            self.directory.path("evaluations.json"),
+            {"schema_version": 1, "evaluations": evaluations},
         )
 
     def _configure_read_access(self) -> None:
@@ -493,18 +540,8 @@ class WorkspaceContextManager:
             )
             await self._write_candidate_history()
             await self.directory.write_evaluations(await self._projections())
-            decision = await self.engine.authorize(
-                self.backend_id,
-                self.request,
-            )
-            if decision.may_evaluate:
-                await self._write_case_resources(decision)
-            else:
-                await self.workspace.sandbox.mkdir(self.directory.path("cases"))
-                await self.directory.write_json(
-                    self.directory.path("cases", "index.json"),
-                    {"schema_version": 1, "case_resources": []},
-                )
+            await self._write_evaluation_plan()
+            await self._write_case_resources()
             await self.directory.seal()
 
     async def add_evaluation(
@@ -520,5 +557,6 @@ class WorkspaceContextManager:
             await self.directory.unseal()
             await self._write_candidate_history()
             await self.directory.write_evaluations(await self._projections())
+            await self._write_evaluation_plan()
             await self.directory.seal()
             return make_evaluation_receipt(record, effective)

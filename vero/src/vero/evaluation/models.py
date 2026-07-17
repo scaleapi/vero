@@ -118,6 +118,21 @@ class EvaluationSet(EvaluationModel):
         return f"{backend_id}:{self.name}:{self.partition or ''}"
 
 
+class EvaluationPrincipal(str, Enum):
+    """Trusted caller class used for authorization and independent metering."""
+
+    AGENT = "agent"
+    SYSTEM = "system"
+    ADMIN = "admin"
+
+
+class AgentSelectionMode(str, Enum):
+    """How an agent may vary an evaluation definition's base case selection."""
+
+    FIXED = "fixed"
+    ARBITRARY = "arbitrary"
+
+
 class RetryPolicy(EvaluationModel):
     max_attempts: int = Field(default=3, ge=1)
     initial_delay_seconds: float = Field(default=4.0, ge=0.0)
@@ -476,12 +491,13 @@ class ObjectiveResult(EvaluationModel):
 
 
 class EvaluationRecord(EvaluationModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     id: str
     request: EvaluationRequest
     report: EvaluationReport
     backend_id: str
     backend: BackendProvenance
+    principal: EvaluationPrincipal = EvaluationPrincipal.SYSTEM
     objective_spec: ObjectiveSpec | None = None
     objective: ObjectiveResult | None = None
     created_at: datetime
@@ -590,10 +606,15 @@ class EvaluationReceipt(EvaluationModel):
 
 class EvaluationAuthorization(EvaluationModel):
     may_evaluate: bool
+    may_view: bool | None = None
     meter_budget: bool = True
     disclosure: DisclosureLevel = DisclosureLevel.FULL
     expose_case_resources: bool = False
     reason: str | None = None
+
+    @property
+    def viewable(self) -> bool:
+        return self.may_evaluate if self.may_view is None else self.may_view
 
     @field_validator("reason")
     @classmethod
@@ -609,6 +630,7 @@ class EvaluationCost(EvaluationModel):
 class EvaluationBudget(EvaluationModel):
     backend_id: str
     evaluation_set_key: str
+    principal: EvaluationPrincipal = EvaluationPrincipal.AGENT
     total_runs: int | None = Field(default=None, ge=0)
     remaining_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
@@ -635,3 +657,140 @@ class EvaluationBudget(EvaluationModel):
         ):
             raise ValueError("remaining_cases cannot exceed total_cases")
         return self
+
+
+class EvaluationAccessPolicy(EvaluationModel):
+    """Agent visibility and invocation rights for one named evaluation set."""
+
+    agent_can_evaluate: bool = True
+    agent_visible: bool = True
+    agent_selection: AgentSelectionMode = AgentSelectionMode.ARBITRARY
+    disclosure: DisclosureLevel = DisclosureLevel.FULL
+    expose_case_resources: bool = False
+
+    @model_validator(mode="after")
+    def validate_visibility(self) -> EvaluationAccessPolicy:
+        if self.agent_can_evaluate and not self.agent_visible:
+            raise ValueError("agent-evaluable evaluations must be agent-visible")
+        if self.expose_case_resources and not self.agent_visible:
+            raise ValueError("agent-invisible evaluations cannot expose case resources")
+        return self
+
+
+class EvaluationDefinition(EvaluationModel):
+    """One named evaluation together with access and principal-scoped budgets."""
+
+    evaluation_set: EvaluationSet
+    access: EvaluationAccessPolicy = Field(default_factory=EvaluationAccessPolicy)
+    agent_budget: EvaluationBudget | None = None
+    system_budget: EvaluationBudget | None = None
+
+    @model_validator(mode="after")
+    def validate_budgets(self) -> EvaluationDefinition:
+        expected_suffix = (
+            f":{self.evaluation_set.name}:{self.evaluation_set.partition or ''}"
+        )
+        for principal, budget in (
+            (EvaluationPrincipal.AGENT, self.agent_budget),
+            (EvaluationPrincipal.SYSTEM, self.system_budget),
+        ):
+            if budget is None:
+                continue
+            if budget.principal != principal:
+                raise ValueError(
+                    f"{principal.value} budget must use principal {principal.value!r}"
+                )
+            if not budget.evaluation_set_key.endswith(expected_suffix):
+                raise ValueError(
+                    "evaluation budget key does not match its evaluation set"
+                )
+        return self
+
+
+class EvaluationPlan(EvaluationModel):
+    """All evaluations available to one optimization protocol."""
+
+    evaluations: list[EvaluationDefinition]
+    selection_evaluation: str
+    final_evaluation: str | None = None
+    evaluate_final_baseline: bool = True
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> EvaluationPlan:
+        names = [item.evaluation_set.name for item in self.evaluations]
+        if not names:
+            raise ValueError("evaluation plan must contain at least one evaluation")
+        if len(names) != len(set(names)):
+            raise ValueError("evaluation plan names must be unique")
+        if self.selection_evaluation not in names:
+            raise ValueError("selection evaluation is not present in the plan")
+        if self.final_evaluation is not None:
+            if self.final_evaluation not in names:
+                raise ValueError("final evaluation is not present in the plan")
+            final = self.get(self.final_evaluation)
+            if final.access.agent_can_evaluate or final.access.agent_visible:
+                raise ValueError(
+                    "final evaluation must be agent-invisible and not agent-evaluable"
+                )
+        return self
+
+    def get(self, name: str) -> EvaluationDefinition:
+        for definition in self.evaluations:
+            if definition.evaluation_set.name == name:
+                return definition
+        raise KeyError(name)
+
+    def for_evaluation_set(
+        self,
+        evaluation_set: EvaluationSet,
+    ) -> EvaluationDefinition | None:
+        for definition in self.evaluations:
+            owned = definition.evaluation_set
+            if (
+                owned.name == evaluation_set.name
+                and owned.partition == evaluation_set.partition
+            ):
+                return definition
+        return None
+
+    @property
+    def selection(self) -> EvaluationDefinition:
+        return self.get(self.selection_evaluation)
+
+    @property
+    def final(self) -> EvaluationDefinition | None:
+        if self.final_evaluation is None:
+            return None
+        return self.get(self.final_evaluation)
+
+    @property
+    def budgets(self) -> list[EvaluationBudget]:
+        values: list[EvaluationBudget] = []
+        for definition in self.evaluations:
+            if definition.agent_budget is not None:
+                values.append(definition.agent_budget)
+            if definition.system_budget is not None:
+                values.append(definition.system_budget)
+        return values
+
+    @classmethod
+    def single(
+        cls,
+        evaluation_set: EvaluationSet | None = None,
+        *,
+        access: EvaluationAccessPolicy | None = None,
+        agent_budget: EvaluationBudget | None = None,
+        system_budget: EvaluationBudget | None = None,
+    ) -> EvaluationPlan:
+        resolved = evaluation_set or EvaluationSet()
+        return cls(
+            evaluations=[
+                EvaluationDefinition(
+                    evaluation_set=resolved,
+                    access=access or EvaluationAccessPolicy(),
+                    agent_budget=agent_budget,
+                    system_budget=system_budget,
+                )
+            ],
+            selection_evaluation=resolved.name,
+        )

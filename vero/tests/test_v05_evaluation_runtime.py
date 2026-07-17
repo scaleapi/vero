@@ -11,21 +11,27 @@ import pytest
 
 from vero.candidate import Candidate
 from vero.evaluation import (
+    AgentSelectionMode,
     BackendProvenance,
     BackendRegistry,
     BudgetLedger,
     CaseResult,
     CaseStatus,
+    CaseRange,
     DisclosureLevel,
     EvaluationAuthorization,
+    EvaluationAccessPolicy,
     EvaluationBudget,
     EvaluationBudgetExceeded,
     EvaluationCost,
     EvaluationDatabase,
     EvaluationDeniedError,
     EvaluationEngine,
+    EvaluationDefinition,
     EvaluationExecutionError,
     EvaluationRecord,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
@@ -36,6 +42,7 @@ from vero.evaluation import (
     ObjectiveResult,
     ObjectiveSpec,
     allow_all_evaluations,
+    authorize_evaluation_plan,
 )
 from vero.evaluation import persistence
 import vero.evaluation.budget as budget_module
@@ -527,7 +534,7 @@ async def test_budget_reservation_stays_consistent_when_write_is_cancelled(
 
 
 @pytest.mark.asyncio
-async def test_cancelled_evaluation_is_terminal_indexed_and_charged(tmp_path: Path):
+async def test_cancelled_evaluation_is_terminal_indexed_and_refunded(tmp_path: Path):
     class BlockingBackend(StubBackend):
         async def evaluate(self, *, context, request):
             self.evaluate_calls += 1
@@ -581,7 +588,58 @@ async def test_cancelled_evaluation_is_terminal_indexed_and_charged(tmp_path: Pa
     )
     remaining = ledger.get("default", evaluation_set)
     assert remaining is not None
-    assert remaining.remaining_runs == 0
+    assert remaining.remaining_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_authorization_separates_agent_and_system_selection_rights(
+    tmp_path: Path,
+):
+    canonical = EvaluationSet(
+        name="validation",
+        selection=CaseRange(stop=10),
+    )
+    plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(
+                evaluation_set=canonical,
+                access=EvaluationAccessPolicy(
+                    agent_selection=AgentSelectionMode.FIXED,
+                    disclosure=DisclosureLevel.AGGREGATE,
+                ),
+            )
+        ],
+        selection_evaluation="validation",
+    )
+    workspace = StubWorkspace(tmp_path / "repo")
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": StubBackend()}),
+        database=EvaluationDatabase(id="session"),
+        authorization_resolver=authorize_evaluation_plan(plan),
+    )
+    subset_request = request().model_copy(
+        update={
+            "evaluation_set": canonical.model_copy(
+                update={"selection": CaseRange(stop=2)}
+            )
+        }
+    )
+
+    agent = await engine.authorize(
+        "default",
+        subset_request,
+        EvaluationPrincipal.AGENT,
+    )
+    system = await engine.authorize(
+        "default",
+        subset_request,
+        EvaluationPrincipal.SYSTEM,
+    )
+
+    assert agent.may_evaluate is False
+    assert agent.viewable is True
+    assert system.may_evaluate is True
 
 
 @pytest.mark.asyncio

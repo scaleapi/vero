@@ -16,14 +16,17 @@ from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
     DisclosureLevel,
-    EvaluationAuthorization,
+    EvaluationAccessPolicy,
     EvaluationDatabase,
+    EvaluationDefinition,
     EvaluationEngine,
+    EvaluationPlan,
     EvaluationReceipt,
     EvaluationSet,
     Evaluator,
     MetricSelector,
     ObjectiveSpec,
+    authorize_evaluation_plan,
 )
 from vero.optimization import CandidateProposal, Optimizer, SequentialStrategy
 from vero.runtime import ArtifactStore
@@ -113,7 +116,8 @@ class CheckpointingCodingAgent:
         )
         program = Path(context.workspace.project_path) / "program.txt"
         program.write_text("fast\n", encoding="utf-8")
-        feedback = await context.evaluation.evaluate_current(
+        feedback = await context.evaluation.evaluate(
+            evaluation="performance",
             description="Try the fast implementation"
         )
         assert isinstance(feedback, EvaluationReceipt)
@@ -168,7 +172,7 @@ async def test_failed_agent_run_persists_state_and_trace(tmp_path: Path):
     artifacts = ArtifactStore(tmp_path / "artifacts")
     producer = AgentCandidateProducer(FailingAgent(), artifacts=artifacts)
     proposal = CandidateProposal(id="proposal", producer_id="default")
-    baseline = SimpleNamespace(request=SimpleNamespace(candidate=object()))
+    baseline = object()
     context = SimpleNamespace(
         session_id="session",
         candidates={},
@@ -234,12 +238,27 @@ report_path.write_text(json.dumps({
     )
     database = EvaluationDatabase(id="agent")
 
-    async def authorize(backend_id, request):
-        return EvaluationAuthorization(
-            may_evaluate=True,
-            disclosure=DisclosureLevel.AGGREGATE,
-            expose_case_resources=True,
-        )
+    plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(
+                evaluation_set=EvaluationSet(name="performance"),
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.AGGREGATE,
+                    expose_case_resources=True,
+                ),
+            ),
+            EvaluationDefinition(
+                evaluation_set=EvaluationSet(name="test", partition="test"),
+                access=EvaluationAccessPolicy(
+                    agent_can_evaluate=False,
+                    agent_visible=False,
+                    disclosure=DisclosureLevel.NONE,
+                ),
+            ),
+        ],
+        selection_evaluation="performance",
+        final_evaluation="test",
+    )
 
     engine = EvaluationEngine(
         evaluator=Evaluator(
@@ -259,14 +278,14 @@ report_path.write_text(json.dumps({
                             "{report}",
                         ],
                         staged_inputs={"cases": str(cases)},
-                        agent_context_inputs=["cases"],
+                        agent_context_inputs={"performance": ["cases"]},
                     )
                 )
             }
         ),
         database=database,
         database_path=session_dir / "database.json",
-        authorization_resolver=authorize,
+        authorization_resolver=authorize_evaluation_plan(plan),
     )
     agent = CheckpointingCodingAgent()
     artifacts = ArtifactStore(session_dir / "artifacts")
@@ -275,7 +294,7 @@ report_path.write_text(json.dumps({
         candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
-        evaluation_set=EvaluationSet(name="performance"),
+        evaluation_plan=plan,
         objective=ObjectiveSpec(
             selector=MetricSelector(metric="latency_ms"),
             direction="minimize",
@@ -288,7 +307,7 @@ report_path.write_text(json.dumps({
                 artifacts=artifacts,
             )
         },
-        max_candidates=1,
+        max_proposals=1,
     )
 
     result = await optimizer.run()
@@ -299,10 +318,12 @@ report_path.write_text(json.dumps({
     assert agent.initial_candidate_ids == {baseline_version}
     assert agent.initial_evaluation_count == 1
     assert agent.case_resource == [{"id": "case-1", "size": 128}]
-    assert len(result.evaluations) == 3
+    assert len(result.evaluations) == 5
     assert len(result.candidates) == 3
     assert result.best.objective.value == 1.0
     assert result.best.request.candidate.id.endswith(":trial:1")
+    assert result.final is not None
+    assert result.final.request.evaluation_set.name == "test"
     assert result.best.request.candidate.parent_id == baseline_version
     final = next(
         candidate
@@ -311,7 +332,7 @@ report_path.write_text(json.dumps({
     )
     assert final.parent_id == result.best.request.candidate.id
     assert (target / "program.txt").read_text(encoding="utf-8") == "slow\n"
-    assert len(database.evaluations) == 3
+    assert len(database.evaluations) == 5
 
     agent_artifacts = list((session_dir / "artifacts" / "agents").iterdir())
     proposal_artifacts = [path for path in agent_artifacts if path.name != "producers"]

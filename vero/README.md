@@ -53,16 +53,55 @@ harness, optimizer, and config.
 root = "./my-program"
 ref = "HEAD"
 
-[evaluation]
+[backend]
+id = "command"
+kind = "command"
 harness_root = "../my-evaluator"
-command = ["python3", "evaluate.py", "{workspace}", "{report}"]
-evaluation_set = "performance"
-agent_context_inputs = ["cases"]
+command = ["python3", "evaluate.py", "{workspace}", "{request}", "{report}"]
 
-[evaluation.staged_inputs]
-cases = "../my-evaluator/cases.json"
+[backend.staged_inputs]
+train_cases = "../my-evaluator/train.jsonl"
+validation_cases = "../my-evaluator/validation.jsonl"
+test_cases = "../my-evaluator/test.jsonl"
 
-[evaluation.retry]
+[backend.agent_context_inputs]
+train = ["train_cases"]
+
+[[evaluations]]
+name = "train"
+partition = "train"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "arbitrary"
+disclosure = "full"
+expose_case_resources = true
+
+[[evaluations]]
+name = "validation"
+partition = "validation"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "arbitrary"
+disclosure = "aggregate"
+
+[evaluations.agent_budget]
+total_runs = 50
+max_cases_per_run = 100
+
+[[evaluations]]
+name = "test"
+partition = "test"
+agent_can_evaluate = false
+agent_visible = false
+agent_selection = "fixed"
+disclosure = "none"
+
+[protocol]
+selection_evaluation = "validation"
+final_evaluation = "test"
+max_proposals = 5
+
+[protocol.retry]
 max_attempts = 3
 initial_delay_seconds = 4
 maximum_delay_seconds = 120
@@ -79,7 +118,6 @@ value = 1.0
 [optimizer]
 kind = "claude"
 instruction = "Make the program faster without changing its output"
-max_candidates = 5
 
 [session]
 directory = "../runs/my-program"
@@ -95,6 +133,14 @@ retries provider rate limits, HTTP 429/503/529 responses, and timeouts up to
 three attempts with bounded exponential backoff. A successful retry remains a
 successful case, while its earlier failed attempts are retained in the case's
 structured error history. Set `max_attempts = 1` to disable retries.
+
+The protocol ranks every candidate on the fixed base selection of
+`validation`, regardless of which cheaper subsets the agent explored. The
+agent sees only aggregate validation feedback. `test` is evaluated by the
+trusted runtime after selection and never enters agent context. `train` cases
+are explicitly mounted read-only because that evaluation opts into case
+resources. Run `vero init` for this starter profile and `vero check` before an
+expensive run.
 
 The evaluator receives an isolated candidate workspace and paths for a
 versioned request and report:
@@ -130,7 +176,7 @@ vero optimize ./my-program \
   --instruction 'Make the program faster without changing its output' \
   --metric latency_ms \
   --direction minimize \
-  --max-candidates 5
+  --max-proposals 5
 ```
 
 Use `--agent vero` for VeRO's OpenAI Agents SDK implementation. Provider-specific
@@ -161,7 +207,9 @@ is not host-visible.
 `staged_inputs` are trusted evaluator inputs available to the evaluation
 command through `{input:NAME}` placeholders. They remain hidden from candidate
 producers unless their names are also explicitly listed in
-`agent_context_inputs`, as in the example above.
+`agent_context_inputs` for a specific named evaluation, as in the example
+above. This per-evaluation allowlist prevents exposing a test input merely
+because train and test share one command backend.
 
 The flag-based `vero optimize` command exposes the same objective constraints,
 case selection, target ref, timeouts, environments, and concurrency controls;
@@ -200,6 +248,8 @@ from pathlib import Path
 from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
+    EvaluationPlan,
+    EvaluationSet,
     MetricSelector,
     ObjectiveSpec,
 )
@@ -228,8 +278,9 @@ session = await create_local_optimization_session(
         selector=MetricSelector(metric="latency_ms"),
         direction="minimize",
     ),
+    evaluation_plan=EvaluationPlan.single(EvaluationSet(name="performance")),
     producers={"default": producer},
-    max_candidates=5,
+    max_proposals=5,
 )
 result = await session.run()
 print(result.best.request.candidate.version, result.best.objective.value)
@@ -349,13 +400,28 @@ external uv project; VeRO overlays each isolated candidate with
 measured without making evaluator code editable.
 
 ```python
-from vero.evaluation import PythonTaskBackend, PythonTaskBackendConfig
+from vero.evaluation import (
+    PythonTaskBackend,
+    PythonTaskBackendConfig,
+    PythonTaskEvaluationConfig,
+)
 
 backend = PythonTaskBackend(PythonTaskBackendConfig(
     harness_root=str(Path("../evaluation-state").resolve()),
-    cases_path=str(Path("../cases.jsonl").resolve()),
     module="benchmark",
     task="quality",
+    evaluations=[
+        PythonTaskEvaluationConfig(
+            name="train",
+            partition="train",
+            cases_path=str(Path("../train.jsonl").resolve()),
+        ),
+        PythonTaskEvaluationConfig(
+            name="validation",
+            partition="validation",
+            cases_path=str(Path("../validation.jsonl").resolve()),
+        ),
+    ],
 ))
 ```
 
@@ -395,7 +461,7 @@ target code loaded by the nested runner. When targets are adversarial, execute
 them in a separate sandbox that cannot read verifier data or credentials.
 
 For optimization-as-a-Harbor-task, `EvaluationSidecar` exposes the same engine
-across a process boundary. `EvaluationAccessPolicy` maps each backend and
+across a process boundary. `SidecarEvaluationPolicy` maps each backend and
 evaluation-set partition to canonical full, aggregate, or acknowledgement-only
 disclosure; the canonical budget ledger meters agent calls. The sidecar can
 host several backends at once. `GitCandidateTransport` imports agent commits
@@ -440,7 +506,7 @@ partitions:
 agent_access:
   - partition: validation
     disclosure: aggregate
-    expose_case_resources: true
+    expose_case_resources: false
     total_runs: 10
     total_cases: 50
     max_cases_per_run: 5
@@ -466,11 +532,13 @@ container receives the editable baseline, the agent-facing CLI, and approved
 result projections. Exact Harbor and registry task-source versions are required
 so the measurement substrate is reproducible.
 
-Evaluation budgets meter attempts, not only successful reports: a failed,
-timed-out, or cancelled backend run remains charged. Aggregate disclosure is a
-feedback-control mechanism, not a privacy guarantee; allowing arbitrary,
-overlapping subsets can reveal individual scores through differencing, so use
-canonical selections and finite budgets when validation data is sensitive.
+Agent-triggered and system-triggered evaluations use independent budgets.
+Reservations for cancelled runs or execution failures are durably refunded;
+completed failure reports remain measurements and stay charged. Harbor retries
+whole-run infrastructure failures and surfaces exhausted outages separately so
+they fail the session instead of becoming candidate regressions. Aggregate
+validation is optimization data, not a privacy guarantee: arbitrary subsets are
+allowed by default, while the separate final evaluation remains unreachable.
 The generated shared-container topology protects the admin credential with
 Unix ownership and permissions. It assumes candidate code cannot gain root in
 that container; higher-assurance deployments should keep finalization
@@ -487,6 +555,7 @@ that delegates proposals to several specialized producers.
 | --- | --- |
 | `Candidate` | A program identity plus an opaque workspace version and lineage |
 | `EvaluationSet` | A backend-owned collection or selection of evaluation cases |
+| `EvaluationPlan` | Named evaluations, agent access, independent budgets, canonical selection, and optional hidden final evaluation |
 | `EvaluationRecord` | The durable request, report, provenance, and objective result |
 | `EvaluationBackend` | Measures a candidate without assuming its language or framework |
 | `CandidateProducer` | Edits one isolated workspace to realize a proposed idea |
@@ -495,11 +564,13 @@ that delegates proposals to several specialized producers.
 | `OptimizationSession` | Owns lifecycle, events, artifacts, budgets, and durable state |
 
 Coding agents receive a scoped `AgentContext`. They can edit only their supplied
-workspace and request evaluation through `evaluate_current()`. That call returns
-a compact receipt with the evaluation ID, status, approved summary, and path to
-the filesystem result. Large case records, traces, and artifacts are kept out of
-the tool response. Intermediate checkpoints are real candidates and remain
-eligible for selection, even if the agent later makes the program worse.
+workspace and call `evaluate(evaluation=..., selection=..., candidate_id=...)`.
+The current workspace is saved as a candidate when `candidate_id` is omitted;
+supplying an existing candidate ID re-evaluates that durable version. The tool
+returns a compact receipt with the evaluation ID, status, approved summary, and
+path to the filesystem result. Large case records, traces, and artifacts stay
+out of the tool response. Intermediate checkpoints are real candidates and
+remain eligible for selection, even if the agent later makes the program worse.
 
 Each producer workspace contains a generated, read-only `.vero/` directory:
 
@@ -507,6 +578,7 @@ Each producer workspace contains a generated, read-only `.vero/` directory:
 .vero/
 ├── README.md
 ├── manifest.json
+├── evaluations.json # available evaluations, selections, disclosure, budgets
 ├── cases/          # only backend-approved case resources
 ├── candidates/     # metadata, parent patches, and repository-native refs
 └── evaluations/    # authorized summaries or full case/trace/artifact trees
@@ -554,13 +626,16 @@ sessions/<session-id>/
 The evaluation directories are the source of truth; the database can be rebuilt
 from them. Reusing a session directory resumes its compatible baseline,
 candidate lineage, evaluation history, completed rounds, and supported coding
-agent state. VeRO rejects a resume if its backend configuration, evaluation set,
-parameters, limits, seed, objective, or baseline is incompatible with the
-manifest.
+agent state. VeRO rejects a resume if its backend configuration, evaluation
+plan, run protocol, parameters, limits, seed, objective, or baseline is
+incompatible with the schema-v3 manifest.
 
 ```bash
 vero session list
 vero session inspect ~/.vero/sessions/<session-id>
+vero session fork OLD_SESSION NEW_SESSION --max-proposals 20 --reset-budgets
+vero session export ~/.vero/sessions/<session-id>
+vero session clear ~/.vero/sessions/<session-id> --yes
 ```
 
 ## Safety boundaries

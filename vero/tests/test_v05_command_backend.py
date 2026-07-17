@@ -274,7 +274,7 @@ async def test_command_backend_exports_only_allowlisted_agent_inputs(tmp_path: P
             harness_root=str(tmp_path),
             command=["run"],
             staged_inputs={"visible": str(visible), "hidden": str(hidden)},
-            agent_context_inputs=["visible"],
+            agent_context_inputs={"validation": ["visible"]},
         )
     )
 
@@ -311,7 +311,7 @@ def test_command_config_rejects_unsafe_shapes(tmp_path: Path):
         CommandBackendConfig(
             harness_root=str(tmp_path),
             command=["run"],
-            agent_context_inputs=["missing"],
+            agent_context_inputs={"validation": ["missing"]},
         )
 
 

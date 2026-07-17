@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from vero.evaluation import CaseSelection
 from vero.optimization import CandidateEvaluationGateway
 from vero.tools.utils import is_tool
 
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class EvaluationTools:
-    """Evaluate the current program and inspect the remaining evaluation budget."""
+    """Evaluate current or prior programs through the session's named evaluations."""
 
     exclude_tools: list[str] = field(default_factory=list)
     evaluation: CandidateEvaluationGateway | None = field(default=None, repr=False)
@@ -28,13 +30,20 @@ class EvaluationTools:
         return self.evaluation
 
     @is_tool
-    async def evaluate_current(
+    async def evaluate(
         self,
+        evaluation: str,
+        selection: CaseSelection | None = None,
+        candidate_id: str | None = None,
         description: str = "Evaluate agent checkpoint",
     ) -> str:
-        """Save and evaluate the current program, returning a feedback receipt.
+        """Evaluate a program, returning authorized feedback and a filesystem path.
 
         Args:
+            evaluation: Name from ``.vero/evaluations.json``.
+            selection: Optional case IDs or range. Omit to use the base selection.
+            candidate_id: Existing candidate to re-evaluate. Omit to save and
+                evaluate the current workspace.
             description: A short description of the program changes being evaluated.
 
         Returns:
@@ -42,14 +51,27 @@ class EvaluationTools:
             complete permitted feedback under ``.vero/evaluations``.
         """
 
-        result = await self._gateway().evaluate_current(description=description)
+        result = await self._gateway().evaluate(
+            evaluation=evaluation,
+            selection=selection,
+            candidate_id=candidate_id,
+            description=description,
+        )
         return result.model_dump_json(indent=2)
 
     @is_tool
-    def get_evaluation_budget(self) -> str:
-        """Return the remaining evaluation budget as JSON, or an unmetered notice."""
+    def get_evaluation_budgets(self) -> str:
+        """Return remaining agent budgets for every available evaluation."""
 
-        budget = self._gateway().budget()
-        if budget is None:
-            return "Evaluation budget is not metered for this run."
-        return budget.model_dump_json(indent=2)
+        budgets = self._gateway().budgets()
+        return json.dumps(
+            {
+                name: (
+                    budget.model_dump(mode="json")
+                    if budget is not None
+                    else None
+                )
+                for name, budget in sorted(budgets.items())
+            },
+            indent=2,
+        )

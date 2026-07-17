@@ -31,6 +31,10 @@ class EvaluationExecutionError(EvaluationError):
         super().__init__(f"Evaluation {evaluation_id} failed: {message}")
 
 
+class EvaluationInfrastructureError(EvaluationExecutionError):
+    """Raised after transient/external infrastructure exhausted its retries."""
+
+
 class EvaluationCancelledError(asyncio.CancelledError):
     """Cancellation propagated after its terminal evaluation record is stored."""
 

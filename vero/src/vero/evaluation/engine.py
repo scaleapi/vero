@@ -15,11 +15,15 @@ from vero.evaluation.exceptions import (
     EvaluationCancelledError,
     EvaluationDeniedError,
     EvaluationExecutionError,
+    EvaluationInfrastructureError,
     EvaluationRequestError,
 )
 from vero.evaluation.models import (
+    AgentSelectionMode,
     EvaluationAcknowledgement,
     EvaluationAuthorization,
+    EvaluationPrincipal,
+    EvaluationPlan,
     EvaluationRecord,
     EvaluationRequest,
     EvaluationSummary,
@@ -31,12 +35,13 @@ from vero.evaluation.persistence import EvaluationDatabase, EvaluationStore
 logger = logging.getLogger(__name__)
 
 AuthorizationResolver = Callable[
-    [str, EvaluationRequest],
+    [EvaluationPrincipal, str, EvaluationRequest],
     EvaluationAuthorization | Awaitable[EvaluationAuthorization],
 ]
 
 
 def allow_all_evaluations(
+    _principal: EvaluationPrincipal,
     _backend_id: str,
     _request: EvaluationRequest,
 ) -> EvaluationAuthorization:
@@ -44,8 +49,66 @@ def allow_all_evaluations(
 
     return EvaluationAuthorization(
         may_evaluate=True,
+        may_view=True,
         expose_case_resources=True,
     )
+
+
+def authorize_evaluation_plan(plan: EvaluationPlan) -> AuthorizationResolver:
+    """Build the canonical principal-aware resolver for an evaluation plan."""
+
+    def resolve(
+        principal: EvaluationPrincipal,
+        _backend_id: str,
+        request: EvaluationRequest,
+    ) -> EvaluationAuthorization:
+        definition = plan.for_evaluation_set(request.evaluation_set)
+        if definition is None:
+            return EvaluationAuthorization(
+                may_evaluate=False,
+                may_view=False,
+                reason="evaluation set is not present in the session plan",
+            )
+        access = definition.access
+        if principal == EvaluationPrincipal.ADMIN:
+            return EvaluationAuthorization(
+                may_evaluate=True,
+                may_view=False,
+                meter_budget=False,
+                disclosure=access.disclosure,
+            )
+        if principal == EvaluationPrincipal.SYSTEM:
+            return EvaluationAuthorization(
+                may_evaluate=True,
+                may_view=access.agent_visible,
+                meter_budget=definition.system_budget is not None,
+                disclosure=access.disclosure,
+                expose_case_resources=False,
+            )
+        if (
+            access.agent_selection == AgentSelectionMode.FIXED
+            and request.evaluation_set.selection
+            != definition.evaluation_set.selection
+        ):
+            return EvaluationAuthorization(
+                may_evaluate=False,
+                may_view=access.agent_visible,
+                reason="evaluation set requires its fixed case selection",
+            )
+        return EvaluationAuthorization(
+            may_evaluate=access.agent_can_evaluate,
+            may_view=access.agent_visible,
+            meter_budget=definition.agent_budget is not None,
+            disclosure=access.disclosure,
+            expose_case_resources=access.expose_case_resources,
+            reason=(
+                None
+                if access.agent_can_evaluate
+                else "evaluation set is not agent-evaluable"
+            ),
+        )
+
+    return resolve
 
 
 class EvaluationEngine:
@@ -74,6 +137,7 @@ class EvaluationEngine:
         self,
         backend_id: str,
         request: EvaluationRequest,
+        principal: EvaluationPrincipal = EvaluationPrincipal.AGENT,
         supplied: EvaluationAuthorization | None = None,
     ) -> EvaluationAuthorization:
         """Resolve the trusted access decision without executing an evaluation."""
@@ -85,7 +149,7 @@ class EvaluationEngine:
                 may_evaluate=False,
                 reason="evaluation authorization was not configured",
             )
-        resolved = self.authorization_resolver(backend_id, request)
+        resolved = self.authorization_resolver(principal, backend_id, request)
         if inspect.isawaitable(resolved):
             resolved = await resolved
         return resolved
@@ -97,9 +161,15 @@ class EvaluationEngine:
         request: EvaluationRequest,
         objective_spec: ObjectiveSpec | None,
         authorization: EvaluationAuthorization | None,
+        principal: EvaluationPrincipal,
     ) -> tuple[EvaluationRecord, EvaluationAuthorization]:
         backend = self.backends.resolve(backend_id)
-        decision = await self.authorize(backend_id, request, authorization)
+        decision = await self.authorize(
+            backend_id,
+            request,
+            principal,
+            authorization,
+        )
         if not decision.may_evaluate:
             raise EvaluationDeniedError(
                 decision.reason or "evaluation is not authorized"
@@ -115,11 +185,13 @@ class EvaluationEngine:
             cost = await backend.resolve_cost(request.evaluation_set)
         except ValueError as error:
             raise EvaluationRequestError(str(error)) from error
-        if decision.meter_budget and self.budget_ledger is not None:
+        charged = decision.meter_budget and self.budget_ledger is not None
+        if charged:
             await self.budget_ledger.reserve(
                 backend_id,
                 request.evaluation_set,
                 cost,
+                principal,
             )
 
         try:
@@ -128,20 +200,54 @@ class EvaluationEngine:
                 backend=backend,
                 request=request,
                 objective_spec=objective_spec,
+                principal=principal,
             )
         except EvaluationCancelledError as error:
             cancelled = EvaluationStore(
                 self.evaluator.evaluations_dir / error.evaluation_id
             ).load()
             await asyncio.shield(self._record(cancelled))
+            if charged:
+                await asyncio.shield(
+                    self.budget_ledger.refund(
+                        backend_id,
+                        request.evaluation_set,
+                        cost,
+                        principal,
+                    )
+                )
             raise
         except EvaluationExecutionError as error:
             failure = EvaluationStore(
                 self.evaluator.evaluations_dir / error.evaluation_id
             ).load()
             await self._record(failure)
+            if charged:
+                await self.budget_ledger.refund(
+                    backend_id,
+                    request.evaluation_set,
+                    cost,
+                    principal,
+                )
             raise
         await self._record(record)
+        infrastructure = next(
+            (
+                diagnostic
+                for diagnostic in record.report.diagnostics
+                if diagnostic.code == "infrastructure_failure"
+            ),
+            None,
+        )
+        if infrastructure is not None:
+            if charged:
+                await self.budget_ledger.refund(
+                    backend_id,
+                    request.evaluation_set,
+                    cost,
+                    principal,
+                )
+            raise EvaluationInfrastructureError(record.id, infrastructure.message)
         return record, decision
 
     async def _record(self, record: EvaluationRecord) -> None:
@@ -168,12 +274,14 @@ class EvaluationEngine:
         request: EvaluationRequest,
         objective_spec: ObjectiveSpec | None = None,
         authorization: EvaluationAuthorization | None = None,
+        principal: EvaluationPrincipal = EvaluationPrincipal.AGENT,
     ) -> EvaluationRecord:
         record, _ = await self._evaluate_record(
             backend_id=backend_id,
             request=request,
             objective_spec=objective_spec,
             authorization=authorization,
+            principal=principal,
         )
         return record
 
@@ -184,11 +292,13 @@ class EvaluationEngine:
         request: EvaluationRequest,
         objective_spec: ObjectiveSpec | None = None,
         authorization: EvaluationAuthorization | None = None,
+        principal: EvaluationPrincipal = EvaluationPrincipal.AGENT,
     ) -> EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement:
         record, decision = await self._evaluate_record(
             backend_id=backend_id,
             request=request,
             objective_spec=objective_spec,
             authorization=authorization,
+            principal=principal,
         )
         return project_evaluation(record, decision.disclosure)

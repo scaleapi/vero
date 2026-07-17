@@ -14,6 +14,7 @@ from vero.evaluation import (
     CommandBackendConfig,
     EvaluationDatabase,
     EvaluationEngine,
+    EvaluationPlan,
     EvaluationSet,
     Evaluator,
     MetricSelector,
@@ -154,7 +155,7 @@ assert len(evaluations["evaluations"]) == 1
         candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
-        evaluation_set=EvaluationSet(name="performance"),
+        evaluation_plan=EvaluationPlan.single(EvaluationSet(name="performance")),
         objective=ObjectiveSpec(
             selector=MetricSelector(metric="latency_ms"),
             direction="minimize",
@@ -174,7 +175,7 @@ assert len(evaluations["evaluations"]) == 1
                 )
             )
         },
-        max_candidates=1,
+        max_proposals=1,
     )
 
     result = await optimizer.run()
@@ -219,7 +220,7 @@ class ReusedIdStrategy:
     async def propose(self, context):
         return [
             CandidateProposal(
-                id=context.baseline.request.candidate.id,
+                id=context.baseline.id,
                 producer_id="default",
             )
         ]
@@ -311,7 +312,7 @@ Path(sys.argv[1]).write_text(json.dumps({
         candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
-        evaluation_set=EvaluationSet(),
+        evaluation_plan=EvaluationPlan.single(EvaluationSet()),
         objective=ObjectiveSpec(
             selector=MetricSelector(metric="score"),
             direction="maximize",
@@ -384,7 +385,7 @@ Path(sys.argv[1]).write_text(json.dumps({
         candidate_repository=candidate_repository,
         engine=engine,
         backend_id="command",
-        evaluation_set=EvaluationSet(),
+        evaluation_plan=EvaluationPlan.single(EvaluationSet()),
         objective=ObjectiveSpec(
             selector=MetricSelector(metric="score"),
             direction="maximize",
@@ -394,7 +395,7 @@ Path(sys.argv[1]).write_text(json.dumps({
             "failing": FailingBatchProducer(cancelled.started),
             "cancelled": cancelled,
         },
-        max_candidates=2,
+        max_proposals=2,
         max_concurrency=2,
     )
 

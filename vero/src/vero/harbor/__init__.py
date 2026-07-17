@@ -11,7 +11,7 @@ from vero.harbor.build import (
 from vero.harbor.deployment import HarborDeploymentConfig, build_harbor_components
 from vero.harbor.sidecar import (
     EvaluationAccessError,
-    EvaluationAccessPolicy,
+    SidecarEvaluationPolicy,
     EvaluationAccessStatus,
     EvaluationSidecar,
     SidecarEvaluationRequest,
@@ -44,7 +44,7 @@ __all__ = [
     "CandidateTransferError",
     "CandidateTransport",
     "EvaluationAccessError",
-    "EvaluationAccessPolicy",
+    "SidecarEvaluationPolicy",
     "EvaluationAccessStatus",
     "EvaluationSidecar",
     "GitCandidateTransport",

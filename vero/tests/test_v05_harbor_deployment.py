@@ -15,7 +15,7 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.harbor import (
-    EvaluationAccessPolicy,
+    SidecarEvaluationPolicy,
     HarborBackendConfig,
     VerificationTarget,
     build_harbor_components,
@@ -82,7 +82,7 @@ async def test_standard_deployment_factory_builds_one_canonical_runtime(tmp_path
         "session_id": "trial",
         "backends": {"validation": backend_config.model_dump(mode="json")},
         "access_policies": [
-            EvaluationAccessPolicy(
+            SidecarEvaluationPolicy(
                 backend_id="validation",
                 evaluation_set_name="benchmark",
                 partition="validation",

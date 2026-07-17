@@ -9,7 +9,12 @@ from uuid import uuid4
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from vero.candidate import Candidate
-from vero.evaluation import EvaluationModel, EvaluationRecord
+from vero.evaluation import (
+    EvaluationAcknowledgement,
+    EvaluationModel,
+    EvaluationRecord,
+    EvaluationSummary,
+)
 from vero.workspace import Workspace
 
 
@@ -59,13 +64,34 @@ class CandidateChange(EvaluationModel):
 
 @dataclass(frozen=True)
 class OptimizationContext:
+    """Authorization-projected history supplied to an optimization strategy."""
+
     session_id: str
     round: int
     workspace: Workspace
-    baseline: EvaluationRecord
-    evaluations: tuple[EvaluationRecord, ...]
+    baseline: Candidate
+    evaluations: tuple[
+        EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement,
+        ...,
+    ]
     candidates: Mapping[str, Candidate]
-    best: EvaluationRecord | None
+    best: Candidate | None
+
+
+@dataclass(frozen=True)
+class CandidateProductionContext:
+    """Non-sensitive control context supplied to a candidate producer.
+
+    Authorized evaluation details live in the read-only ``.vero`` tree and are
+    returned through the evaluation gateway; they are intentionally not
+    duplicated here as full records.
+    """
+
+    session_id: str
+    round: int
+    baseline: Candidate
+    candidates: Mapping[str, Candidate]
+    best: Candidate | None
 
 
 @dataclass(frozen=True)
@@ -74,3 +100,5 @@ class OptimizationResult:
     evaluations: tuple[EvaluationRecord, ...]
     candidates: tuple[Candidate, ...]
     best: EvaluationRecord | None
+    final_baseline: EvaluationRecord | None = None
+    final: EvaluationRecord | None = None

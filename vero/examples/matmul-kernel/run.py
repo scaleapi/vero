@@ -19,11 +19,15 @@ from pathlib import Path
 
 from vero.evaluation import (
     EvaluationBudget,
+    EvaluationDefinition,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationSet,
     MetricSelector,
     ObjectiveSpec,
     PythonTaskBackend,
     PythonTaskBackendConfig,
+    PythonTaskEvaluationConfig,
 )
 from vero.optimization import SequentialStrategy
 from vero.runtime import create_local_optimization_session
@@ -35,7 +39,8 @@ INSTRUCTION = """You are optimizing a matrix multiplication function for speed.
 
 The target is src/matmul_kernel/__init__.py. Preserve the public multiply(a, b)
 signature and numerical correctness. You may change the implementation and add
-target dependencies. Use evaluate_current when measurement would help; the
+target dependencies. Use the evaluate tool with evaluation="matmul" when
+measurement would help; the
 objective is mean score in milliseconds, so lower is better.
 """
 
@@ -123,8 +128,9 @@ def create_backend(cases: Path) -> PythonTaskBackend:
             harness_root=str(EVALUATOR_DIR),
             module="matmul_eval.matmul_task",
             task="matmul",
-            cases_path=str(cases),
-            evaluation_set_name="matmul",
+            evaluations=[
+                PythonTaskEvaluationConfig(name="matmul", cases_path=str(cases))
+            ],
             passthrough_environment=["UV_CACHE_DIR"],
         )
     )
@@ -134,12 +140,42 @@ async def run_example(
     *,
     work_dir: Path,
     agent_name: str | None,
-    max_candidates: int,
+    max_proposals: int,
     max_evaluations: int | None,
 ) -> None:
     target = create_target(work_dir)
     cases = create_cases(work_dir / "cases.json")
     evaluation_set = EvaluationSet(name="matmul")
+    agent_budget = (
+        EvaluationBudget(
+            backend_id="python-task",
+            evaluation_set_key=evaluation_set.budget_key("python-task"),
+            principal=EvaluationPrincipal.AGENT,
+            total_runs=max_evaluations,
+        )
+        if max_evaluations is not None
+        else None
+    )
+    system_budget = (
+        EvaluationBudget(
+            backend_id="python-task",
+            evaluation_set_key=evaluation_set.budget_key("python-task"),
+            principal=EvaluationPrincipal.SYSTEM,
+            total_runs=max_evaluations,
+        )
+        if max_evaluations is not None
+        else None
+    )
+    evaluation_plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(
+                evaluation_set=evaluation_set,
+                agent_budget=agent_budget,
+                system_budget=system_budget,
+            )
+        ],
+        selection_evaluation="matmul",
+    )
     producers = {}
     if agent_name is not None:
         from vero.agents import AgentCandidateProducer
@@ -167,22 +203,11 @@ async def run_example(
             selector=MetricSelector(metric="score"),
             direction="minimize",
         ),
-        evaluation_set=evaluation_set,
+        evaluation_plan=evaluation_plan,
         strategy=SequentialStrategy(instruction=INSTRUCTION),
         producers=producers,
         parameters={"n_repeats": 100},
-        budgets=(
-            [
-                EvaluationBudget(
-                    backend_id="python-task",
-                    evaluation_set_key=evaluation_set.budget_key("python-task"),
-                    total_runs=max_evaluations,
-                )
-            ]
-            if max_evaluations is not None
-            else None
-        ),
-        max_candidates=max_candidates,
+        max_proposals=max_proposals,
     )
     result = await session.run()
     print(f"Session: {session.session_dir}")
@@ -205,7 +230,7 @@ def main() -> None:
         default="vero",
         help="Coding-agent adapter used for optimization.",
     )
-    parser.add_argument("--max-candidates", type=int, default=5)
+    parser.add_argument("--max-proposals", type=int, default=5)
     parser.add_argument(
         "--max-evaluations",
         type=int,
@@ -217,8 +242,8 @@ def main() -> None:
     )
     parser.add_argument("--work-dir", type=Path)
     arguments = parser.parse_args()
-    if arguments.max_candidates < 0:
-        parser.error("--max-candidates must be non-negative")
+    if arguments.max_proposals < 0:
+        parser.error("--max-proposals must be non-negative")
     if arguments.max_evaluations is not None and arguments.max_evaluations < 1:
         parser.error("--max-evaluations must be positive")
 
@@ -230,7 +255,7 @@ def main() -> None:
         run_example(
             work_dir=work_dir,
             agent_name=None if arguments.eval_only else arguments.agent,
-            max_candidates=0 if arguments.eval_only else arguments.max_candidates,
+            max_proposals=0 if arguments.eval_only else arguments.max_proposals,
             max_evaluations=arguments.max_evaluations,
         )
     )

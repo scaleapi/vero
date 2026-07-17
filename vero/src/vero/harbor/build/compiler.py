@@ -225,6 +225,10 @@ def _deployment_config(
             "default_index": config.default_index,
             "n_attempts": config.n_attempts,
             "max_retries": config.max_retries,
+            "infrastructure_max_attempts": config.infrastructure_max_attempts,
+            "infrastructure_retry_delay_seconds": (
+                config.infrastructure_retry_delay_seconds
+            ),
             "reward_key": config.reward_key,
             "aggregate_attempts": config.aggregate_attempts,
             "feedback_transcripts": config.feedback_transcripts,

@@ -22,9 +22,9 @@ class SequentialStrategy:
 
     async def propose(self, context: OptimizationContext) -> Sequence[CandidateProposal]:
         parent_id = (
-            context.best.request.candidate.id
+            context.best.id
             if context.best is not None
-            else context.baseline.request.candidate.id
+            else context.baseline.id
         )
         return [
             CandidateProposal(

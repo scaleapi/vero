@@ -10,6 +10,7 @@ from vero.evaluation import (
     BackendProvenance,
     EvaluationDatabase,
     EvaluationLimits,
+    EvaluationPlan,
     EvaluationRecord,
     EvaluationReport,
     EvaluationRequest,
@@ -64,7 +65,9 @@ class StubOptimizer:
         self.workspace = StubWorkspace()
         self.candidate_repository = StubCandidateRepository()
         self.backend_id = "default"
-        self.evaluation_set = EvaluationSet(name="performance")
+        self.evaluation_plan = EvaluationPlan.single(
+            EvaluationSet(name="performance")
+        )
         self.objective = ObjectiveSpec(
             selector=MetricSelector(metric="score"),
             direction="maximize",
@@ -73,6 +76,11 @@ class StubOptimizer:
         self.limits = EvaluationLimits()
         self.seed = None
         self.session_id = None
+        self.max_proposals = 0
+        self.max_rounds = 1
+        self.max_concurrency = 1
+        self.strategy = SimpleNamespace()
+        self.producers = {}
         self.engine = SimpleNamespace(
             evaluator=SimpleNamespace(
                 session_dir=session_dir,
@@ -80,6 +88,7 @@ class StubOptimizer:
             ),
             database=EvaluationDatabase(id=session_dir.name),
             budget_ledger=None,
+            listeners=[],
             backends=SimpleNamespace(
                 resolve=lambda _: SimpleNamespace(
                     provenance=BackendProvenance(
@@ -93,11 +102,21 @@ class StubOptimizer:
         self.failure = failure
         self.calls: list[tuple[Candidate, bool]] = []
 
-    async def run(self, *, baseline, skip_baseline_evaluation=False):
+    async def run(
+        self,
+        *,
+        baseline,
+        skip_baseline_evaluation=False,
+        max_proposals=None,
+    ):
         self.calls.append((baseline, skip_baseline_evaluation))
         if self.failure is not None:
             raise self.failure
         baseline_record = evaluation(baseline)
+        for listener in self.engine.listeners:
+            result = listener(baseline_record)
+            if result is not None:
+                await result
         return OptimizationResult(
             baseline=baseline_record,
             evaluations=(baseline_record,),
@@ -120,7 +139,7 @@ async def test_session_persists_lifecycle_events_and_best_result(tmp_path: Path)
     result = await session.run()
 
     manifest = session.load_manifest()
-    assert manifest.schema_version == 2
+    assert manifest.schema_version == 3
     assert manifest.status == SessionStatus.COMPLETED
     assert manifest.baseline.version == "baseline-version"
     assert manifest.best_candidate_id == "baseline-version"

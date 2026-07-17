@@ -6,6 +6,9 @@ import asyncio
 import json
 import os
 import shlex
+import shutil
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +17,7 @@ import click
 from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     AllCases,
+    BudgetLedger,
     CaseIds,
     CaseRange,
     CommandBackend,
@@ -22,6 +26,7 @@ from vero.evaluation import (
     DisclosureLevel,
     EvaluationDatabase,
     EvaluationLimits,
+    EvaluationPlan,
     EvaluationSet,
     MetricAggregation,
     MetricConstraint,
@@ -37,13 +42,68 @@ from vero.optimization import (
 )
 from vero.runtime import (
     SessionManifest,
+    SessionStatus,
     WandbEventSink,
     create_local_optimization_session,
 )
+from vero.config import load_config
 
 
 def _default_home() -> Path:
     return Path(os.environ.get("VERO_HOME", "~/.vero")).expanduser().resolve()
+
+
+_CONFIG_TEMPLATE = '''[target]
+root = "./target"
+ref = "HEAD"
+
+[backend]
+id = "command"
+kind = "command"
+harness_root = "./harness"
+command = ["python3", "evaluate.py", "{workspace}", "{request}", "{report}"]
+
+[[evaluations]]
+name = "train"
+partition = "train"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "arbitrary"
+disclosure = "full"
+expose_case_resources = true
+
+[[evaluations]]
+name = "validation"
+partition = "validation"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "arbitrary"
+disclosure = "aggregate"
+
+[evaluations.agent_budget]
+total_runs = 50
+
+[[evaluations]]
+name = "test"
+partition = "test"
+agent_can_evaluate = false
+agent_visible = false
+agent_selection = "fixed"
+disclosure = "none"
+
+[protocol]
+selection_evaluation = "validation"
+final_evaluation = "test"
+max_proposals = 5
+
+[objective]
+metric = "score"
+direction = "maximize"
+
+[optimizer]
+kind = "claude"
+instruction = "Improve the program without changing its intended behavior"
+'''
 
 
 def _parse_parameters(values: tuple[str, ...]) -> dict[str, object]:
@@ -158,7 +218,8 @@ async def _run_configured(config_path: Path, *, optimize: bool):
         optimize=optimize,
     )
     result = await runtime.session.run(
-        skip_baseline_evaluation=runtime.session.manifest_path.exists()
+        skip_baseline_evaluation=runtime.session.manifest_path.exists(),
+        max_proposals=None if optimize else 0,
     )
     return runtime.session, result
 
@@ -166,6 +227,70 @@ async def _run_configured(config_path: Path, *, optimize: bool):
 @click.group()
 def main() -> None:
     """VeRO: a harness for agents to optimize programs."""
+
+
+@main.command(name="init")
+@click.argument(
+    "directory",
+    type=click.Path(path_type=Path, file_okay=False),
+    default=Path("."),
+)
+def initialize_config(directory: Path) -> None:
+    """Create a commented-safe train/validation/test vero.toml starter."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / "vero.toml"
+    if destination.exists():
+        raise click.ClickException(f"configuration already exists: {destination}")
+    destination.write_text(_CONFIG_TEMPLATE, encoding="utf-8")
+    click.echo(f"Created {destination}")
+
+
+@main.command(name="check")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    default=Path("vero.toml"),
+    show_default=True,
+)
+def check_config(config_path: Path) -> None:
+    """Validate configuration, paths, Git state, and evaluation references."""
+
+    try:
+        config = load_config(config_path)
+        target = Path(config.target.root)
+        harness = Path(config.backend.harness_root)
+        if not target.is_dir():
+            raise ValueError(f"target root does not exist: {target}")
+        if not harness.is_dir():
+            raise ValueError(f"evaluation harness root does not exist: {harness}")
+        for name, path in config.backend.staged_inputs.items():
+            if not Path(path).exists():
+                raise ValueError(f"staged input {name!r} does not exist: {path}")
+        subprocess.run(
+            ["git", "rev-parse", "--verify", config.target.ref],
+            cwd=target,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=target,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if dirty.strip():
+            raise ValueError("target repository has uncommitted changes")
+    except Exception as error:
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    click.echo(
+        f"Configuration is valid: {len(config.evaluations)} evaluations, "
+        f"selection={config.protocol.selection_evaluation!r}, "
+        f"final={config.protocol.final_evaluation!r}"
+    )
 
 
 @main.command(name="evaluate")
@@ -302,7 +427,7 @@ def run_config(config_path: Path) -> None:
 )
 @click.option("--session-id", help="Stable session identity.")
 @click.option(
-    "--max-candidates", default=1, type=click.IntRange(min=0), show_default=True
+    "--max-proposals", default=1, type=click.IntRange(min=0), show_default=True
 )
 @click.option(
     "--max-rounds", default=100, type=click.IntRange(min=1), show_default=True
@@ -405,7 +530,7 @@ def optimize(
     target_ref: str,
     session_dir: Path | None,
     session_id: str | None,
-    max_candidates: int,
+    max_proposals: int,
     max_rounds: int,
     max_concurrency: int,
     max_turns: int,
@@ -427,7 +552,7 @@ def optimize(
     """Optimize the versioned program at PROJECT_PATH."""
 
     producer_count = int(producer_command is not None) + int(agent is not None)
-    if producer_count > 1 or (max_candidates > 0 and producer_count != 1):
+    if producer_count > 1 or (max_proposals > 0 and producer_count != 1):
         raise click.UsageError(
             "provide exactly one of --produce or --agent when producing candidates"
         )
@@ -542,10 +667,12 @@ def optimize(
                 failure_value=failure_value,
                 constraints=_parse_constraints(constraint),
             ),
-            evaluation_set=EvaluationSet(
-                name=evaluation_set,
-                partition=partition,
-                selection=selection,
+            evaluation_plan=EvaluationPlan.single(
+                EvaluationSet(
+                    name=evaluation_set,
+                    partition=partition,
+                    selection=selection,
+                )
             ),
             strategy=SequentialStrategy(instruction=instruction),
             producers={"default": producer} if producer is not None else {},
@@ -563,7 +690,7 @@ def optimize(
                 ),
             ),
             seed=seed,
-            max_candidates=max_candidates,
+            max_proposals=max_proposals,
             max_rounds=max_rounds,
             max_concurrency=max_concurrency,
             base_ref=target_ref,
@@ -700,6 +827,155 @@ def session_inspect(session_dir: Path) -> None:
             indent=2,
         )
     )
+
+
+@session.command(name="export")
+@click.argument(
+    "session_dir",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+)
+@click.option(
+    "--output",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Archive path without, or with, a .tar.gz suffix.",
+)
+def session_export(session_dir: Path, output: Path | None) -> None:
+    """Export complete durable session state as a portable tar.gz archive."""
+
+    session_dir = session_dir.resolve()
+    if not (session_dir / "manifest.json").is_file():
+        raise click.ClickException("session manifest not found")
+    destination = (output or session_dir.with_name(f"{session_dir.name}-export"))
+    destination = destination.expanduser().resolve()
+    archive_base = str(destination)
+    if archive_base.endswith(".tar.gz"):
+        archive_base = archive_base[: -len(".tar.gz")]
+    try:
+        archive = shutil.make_archive(
+            archive_base,
+            "gztar",
+            root_dir=session_dir.parent,
+            base_dir=session_dir.name,
+        )
+    except Exception as error:
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    click.echo(archive)
+
+
+@session.command(name="fork")
+@click.argument(
+    "source",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+)
+@click.argument(
+    "destination",
+    type=click.Path(path_type=Path, file_okay=False),
+)
+@click.option("--session-id", help="New session ID; defaults to destination name.")
+@click.option(
+    "--max-proposals",
+    type=click.IntRange(min=0),
+    help="New protocol proposal limit; edit vero.toml to the same value.",
+)
+@click.option(
+    "--reset-budgets",
+    is_flag=True,
+    help="Restore configured agent/system budgets instead of carrying balances.",
+)
+def session_fork(
+    source: Path,
+    destination: Path,
+    session_id: str | None,
+    max_proposals: int | None,
+    reset_budgets: bool,
+) -> None:
+    """Fork durable candidates and evaluations into a new resumable session."""
+
+    source = source.resolve()
+    destination = destination.expanduser().resolve()
+    if destination.exists():
+        raise click.ClickException(f"destination already exists: {destination}")
+    if destination.is_relative_to(source):
+        raise click.ClickException("fork destination must not be inside the source")
+    try:
+        manifest = SessionManifest.model_validate_json(
+            (source / "manifest.json").read_text(encoding="utf-8")
+        )
+        new_id = session_id or destination.name
+        if not new_id.strip():
+            raise ValueError("session ID must not be empty")
+        shutil.copytree(source, destination)
+        run = manifest.run.model_copy(
+            update=(
+                {"max_proposals": max_proposals}
+                if max_proposals is not None
+                else {}
+            )
+        )
+        forked_at = datetime.now(UTC)
+        forked = manifest.model_copy(
+            update={
+                "id": new_id,
+                "status": SessionStatus.CREATED,
+                "run": run,
+                "created_at": forked_at,
+                "updated_at": forked_at,
+                "failure": None,
+                "metadata": {
+                    **manifest.metadata,
+                    "forked_from_session_id": manifest.id,
+                },
+            }
+        )
+        (destination / "manifest.json").write_text(
+            forked.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+        database_path = destination / "database.json"
+        if database_path.exists():
+            database = json.loads(database_path.read_text(encoding="utf-8"))
+            database["id"] = new_id
+            database_path.write_text(
+                json.dumps(database, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        for transient in ("events.jsonl", "agent-context.json"):
+            (destination / transient).unlink(missing_ok=True)
+        wandb_state = destination / "artifacts" / "wandb"
+        if wandb_state.exists():
+            shutil.rmtree(wandb_state)
+        if reset_budgets:
+            budget_path = destination / "budgets.json"
+            if forked.evaluation_plan.budgets:
+                BudgetLedger(
+                    forked.evaluation_plan.budgets,
+                    path=budget_path,
+                ).save()
+            else:
+                budget_path.unlink(missing_ok=True)
+    except Exception as error:
+        if destination.exists():
+            shutil.rmtree(destination)
+        raise click.ClickException(str(error) or type(error).__name__) from error
+    click.echo(f"Forked {manifest.id} to {new_id} at {destination}")
+
+
+@session.command(name="clear")
+@click.argument(
+    "session_dir",
+    type=click.Path(path_type=Path, exists=True, file_okay=False),
+)
+@click.option("--yes", is_flag=True, help="Confirm permanent deletion.")
+def session_clear(session_dir: Path, yes: bool) -> None:
+    """Permanently delete one session's control-plane state."""
+
+    if not yes:
+        raise click.UsageError("session clear requires --yes")
+    session_dir = session_dir.resolve()
+    if not (session_dir / "manifest.json").is_file():
+        raise click.ClickException("refusing to clear a directory without manifest.json")
+    shutil.rmtree(session_dir)
+    click.echo(f"Deleted {session_dir}")
 
 
 from vero.harbor.cli import harbor as harbor_command

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -17,8 +19,8 @@ from vero.evaluation import (
     BackendProvenance,
     CaseStatus,
     EvaluationLimits,
+    EvaluationPlan,
     EvaluationRecord,
-    EvaluationSet,
     ObjectiveSpec,
 )
 from vero.evaluation.persistence import _atomic_write_json
@@ -49,24 +51,64 @@ class SessionFailure(BaseModel):
         return value
 
 
+class OptimizationComponentSpec(BaseModel):
+    """Stable type and configuration identity for a protocol component."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    config_digest: str
+
+    @field_validator("type", "config_digest")
+    @classmethod
+    def validate_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("component identity must not be empty")
+        return value
+
+    @field_validator("config_digest")
+    @classmethod
+    def validate_digest(cls, value: str) -> str:
+        if len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise ValueError("component config_digest must be a SHA-256 hex digest")
+        return value
+
+
+class OptimizationRunSpec(BaseModel):
+    """Execution choices that must remain stable when a session resumes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_proposals: int = Field(ge=0)
+    max_rounds: int = Field(ge=1)
+    max_concurrency: int = Field(ge=1)
+    strategy: OptimizationComponentSpec
+    producers: dict[str, OptimizationComponentSpec]
+
+
 class SessionManifest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     id: str
     status: SessionStatus
     backend_id: str
     backend: BackendProvenance
     candidate_repository_family: str
     candidate_repository_format_version: int
-    evaluation_set: EvaluationSet
+    evaluation_plan: EvaluationPlan
     objective: ObjectiveSpec
+    run: OptimizationRunSpec
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
     seed: int | None = None
     baseline: Candidate | None = None
     best_candidate_id: str | None = None
     best_evaluation_id: str | None = None
+    final_baseline_evaluation_id: str | None = None
+    final_evaluation_id: str | None = None
     created_at: datetime
     updated_at: datetime
     failure: SessionFailure | None = None
@@ -97,6 +139,7 @@ class OptimizationSession:
     baseline: Candidate | None = None
     metadata: dict[str, JsonValue] = field(default_factory=dict)
     events: EventBus | None = None
+    run_spec: OptimizationRunSpec | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -128,6 +171,8 @@ class OptimizationSession:
         if self.events is None:
             self.events = EventBus([JsonlEventSink(self.events_path)])
         self.artifacts = ArtifactStore(self.session_dir / "artifacts")
+        self._event_step = len(self.optimizer.engine.database.evaluations)
+        self.optimizer.engine.listeners.append(self._on_evaluation_completed)
 
     @property
     def manifest_path(self) -> Path:
@@ -168,8 +213,9 @@ class OptimizationSession:
             candidate_repository_format_version=(
                 self.candidate_repository.format_version
             ),
-            evaluation_set=self.optimizer.evaluation_set,
+            evaluation_plan=self.optimizer.evaluation_plan,
             objective=self.optimizer.objective,
+            run=self._run_spec(),
             parameters=self.optimizer.parameters,
             limits=self.optimizer.limits,
             seed=self.optimizer.seed,
@@ -177,6 +223,61 @@ class OptimizationSession:
             created_at=now,
             updated_at=now,
             metadata=self.metadata,
+        )
+
+    @staticmethod
+    def _component_spec(value: object) -> OptimizationComponentSpec:
+        kind = type(value)
+        type_name = f"{kind.__module__}.{kind.__qualname__}"
+        payload: dict[str, object] = {}
+        config = getattr(value, "config", None)
+        if isinstance(config, BaseModel):
+            payload["config"] = config.model_dump(mode="json")
+        elif isinstance(config, dict):
+            payload["config"] = config
+        for name in ("producer_id", "instruction", "prompt", "max_turns"):
+            if hasattr(value, name):
+                payload[name] = getattr(value, name)
+        agent = getattr(value, "agent", None)
+        serialize_agent = getattr(agent, "dict", None)
+        if callable(serialize_agent):
+            payload["agent"] = serialize_agent()
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ).encode()
+        return OptimizationComponentSpec(
+            type=type_name,
+            config_digest=hashlib.sha256(encoded).hexdigest(),
+        )
+
+    def _run_spec(self) -> OptimizationRunSpec:
+        if self.run_spec is not None:
+            return self.run_spec
+        return OptimizationRunSpec(
+            max_proposals=self.optimizer.max_proposals,
+            max_rounds=self.optimizer.max_rounds,
+            max_concurrency=self.optimizer.max_concurrency,
+            strategy=self._component_spec(self.optimizer.strategy),
+            producers={
+                producer_id: self._component_spec(producer)
+                for producer_id, producer in sorted(self.optimizer.producers.items())
+            },
+        )
+
+    async def _on_evaluation_completed(self, record: EvaluationRecord) -> None:
+        """Publish evaluations as they finish, rather than replaying them at exit."""
+
+        assert self.events is not None
+        step = self._event_step
+        self._event_step += 1
+        await self.events.emit(
+            session_id=self.id,
+            kind="evaluation_completed",
+            payload=self._evaluation_event_payload(record, step=step),
         )
 
     async def _save_manifest(self, manifest: SessionManifest) -> None:
@@ -200,6 +301,9 @@ class OptimizationSession:
             "evaluation_id": record.id,
             "candidate_id": record.request.candidate.id,
             "candidate_version": record.request.candidate.version,
+            "evaluation": record.request.evaluation_set.name,
+            "partition": record.request.evaluation_set.partition,
+            "principal": record.principal.value,
             "status": record.report.status.value,
             "cases/total": len(record.report.cases),
             "cases/success": counts[CaseStatus.SUCCESS],
@@ -224,6 +328,7 @@ class OptimizationSession:
         *,
         baseline: Candidate | None = None,
         skip_baseline_evaluation: bool = False,
+        max_proposals: int | None = None,
     ) -> OptimizationResult:
         manifest = self.load_manifest() if self.manifest_path.exists() else None
         if baseline is None:
@@ -258,12 +363,14 @@ class OptimizationSession:
             raise ValueError(
                 "session backend configuration does not match the persisted manifest"
             )
-        if manifest.evaluation_set != self.optimizer.evaluation_set:
+        if manifest.evaluation_plan != self.optimizer.evaluation_plan:
             raise ValueError(
-                "session evaluation set does not match the persisted manifest"
+                "session evaluation plan does not match the persisted manifest"
             )
         if manifest.objective != self.optimizer.objective:
             raise ValueError("session objective does not match the persisted manifest")
+        if manifest.run != self._run_spec():
+            raise ValueError("session run protocol does not match the persisted manifest")
         if manifest.parameters != self.optimizer.parameters:
             raise ValueError(
                 "session evaluation parameters do not match the persisted manifest"
@@ -301,6 +408,7 @@ class OptimizationSession:
             result = await self.optimizer.run(
                 baseline=baseline,
                 skip_baseline_evaluation=skip_baseline_evaluation,
+                max_proposals=max_proposals,
             )
         except BaseException as error:
             failure = SessionFailure(
@@ -332,15 +440,17 @@ class OptimizationSession:
                     best.request.candidate.id if best is not None else None
                 ),
                 "best_evaluation_id": best.id if best is not None else None,
+                "final_baseline_evaluation_id": (
+                    result.final_baseline.id
+                    if result.final_baseline is not None
+                    else None
+                ),
+                "final_evaluation_id": (
+                    result.final.id if result.final is not None else None
+                ),
             }
         )
         await self._save_manifest(completed)
-        for step, evaluation in enumerate(result.evaluations):
-            await self.events.emit(
-                session_id=self.id,
-                kind="evaluation_completed",
-                payload=self._evaluation_event_payload(evaluation, step=step),
-            )
         await self.events.emit(
             session_id=self.id,
             kind="session_completed",
@@ -358,6 +468,12 @@ class OptimizationSession:
                 "best_objective": (
                     best.objective.value
                     if best is not None and best.objective is not None
+                    else None
+                ),
+                "final_objective": (
+                    result.final.objective.value
+                    if result.final is not None
+                    and result.final.objective is not None
                     else None
                 ),
             },

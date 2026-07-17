@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import tomllib
 from dataclasses import dataclass
@@ -13,13 +15,20 @@ from pydantic import Field, JsonValue, model_validator
 
 from vero.evaluation import (
     AllCases,
+    AgentSelectionMode,
     CaseIds,
     CaseRange,
     CommandBackend,
     CommandBackendConfig,
     ConstraintOperator,
+    DisclosureLevel,
+    EvaluationAccessPolicy,
+    EvaluationBudget,
+    EvaluationDefinition,
     EvaluationLimits,
     EvaluationModel,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationSet,
     MetricAggregation,
     MetricConstraint,
@@ -33,6 +42,8 @@ from vero.optimization import (
     SequentialStrategy,
 )
 from vero.runtime import (
+    OptimizationComponentSpec,
+    OptimizationRunSpec,
     OptimizationSession,
     SessionManifest,
     WandbEventSink,
@@ -45,26 +56,53 @@ class TargetConfig(EvaluationModel):
     ref: str = "HEAD"
 
 
-class EvaluationConfig(EvaluationModel):
-    backend: Literal["command"] = "command"
+class BackendConfig(EvaluationModel):
+    id: str = "command"
+    kind: Literal["command"] = "command"
     harness_root: str
     command: list[str]
     working_directory: str = "."
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
     staged_inputs: dict[str, str] = Field(default_factory=dict)
-    agent_context_inputs: list[str] = Field(default_factory=list)
-    evaluation_set: str = "default"
+    agent_context_inputs: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class BudgetConfig(EvaluationModel):
+    total_runs: int | None = Field(default=None, ge=0)
+    total_cases: int | None = Field(default=None, ge=0)
+    max_cases_per_run: int | None = Field(default=None, ge=1)
+
+    def to_model(
+        self,
+        *,
+        backend_id: str,
+        evaluation_set: EvaluationSet,
+        principal: EvaluationPrincipal,
+    ) -> EvaluationBudget:
+        return EvaluationBudget(
+            backend_id=backend_id,
+            evaluation_set_key=evaluation_set.budget_key(backend_id),
+            principal=principal,
+            total_runs=self.total_runs,
+            total_cases=self.total_cases,
+            max_cases_per_run=self.max_cases_per_run,
+        )
+
+
+class EvaluationConfig(EvaluationModel):
+    name: str
     partition: str | None = None
     case_ids: list[str] | None = None
     case_start: int = Field(default=0, ge=0)
     case_stop: int | None = Field(default=None, ge=1)
-    timeout_seconds: float = Field(default=600.0, gt=0)
-    case_timeout_seconds: float = Field(default=180.0, gt=0)
-    max_concurrency: int = Field(default=100, ge=1)
-    retry: RetryPolicy = Field(default_factory=RetryPolicy)
-    parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    seed: int | None = None
+    agent_can_evaluate: bool = True
+    agent_visible: bool = True
+    agent_selection: AgentSelectionMode = AgentSelectionMode.ARBITRARY
+    disclosure: DisclosureLevel = DisclosureLevel.FULL
+    expose_case_resources: bool = False
+    agent_budget: BudgetConfig | None = None
+    system_budget: BudgetConfig | None = None
 
     @model_validator(mode="after")
     def validate_selection(self) -> EvaluationConfig:
@@ -86,16 +124,62 @@ class EvaluationConfig(EvaluationModel):
         else:
             selection = AllCases()
         return EvaluationSet(
-            name=self.evaluation_set,
+            name=self.name,
             partition=self.partition,
             selection=selection,
         )
+
+    def to_definition(self, backend_id: str) -> EvaluationDefinition:
+        evaluation_set = self.to_evaluation_set()
+        return EvaluationDefinition(
+            evaluation_set=evaluation_set,
+            access=EvaluationAccessPolicy(
+                agent_can_evaluate=self.agent_can_evaluate,
+                agent_visible=self.agent_visible,
+                agent_selection=self.agent_selection,
+                disclosure=self.disclosure,
+                expose_case_resources=self.expose_case_resources,
+            ),
+            agent_budget=(
+                self.agent_budget.to_model(
+                    backend_id=backend_id,
+                    evaluation_set=evaluation_set,
+                    principal=EvaluationPrincipal.AGENT,
+                )
+                if self.agent_budget is not None
+                else None
+            ),
+            system_budget=(
+                self.system_budget.to_model(
+                    backend_id=backend_id,
+                    evaluation_set=evaluation_set,
+                    principal=EvaluationPrincipal.SYSTEM,
+                )
+                if self.system_budget is not None
+                else None
+            ),
+        )
+
+
+class ProtocolConfig(EvaluationModel):
+    selection_evaluation: str
+    final_evaluation: str | None = None
+    evaluate_final_baseline: bool = True
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    seed: int | None = None
+    timeout_seconds: float = Field(default=600.0, gt=0)
+    case_timeout_seconds: float = Field(default=180.0, gt=0)
+    evaluation_concurrency: int = Field(default=100, ge=1)
+    retry: RetryPolicy = Field(default_factory=RetryPolicy)
+    max_proposals: int = Field(default=1, ge=0)
+    max_rounds: int = Field(default=100, ge=1)
+    max_concurrency: int = Field(default=1, ge=1)
 
     def to_limits(self) -> EvaluationLimits:
         return EvaluationLimits(
             timeout_seconds=self.timeout_seconds,
             case_timeout_seconds=self.case_timeout_seconds,
-            max_concurrency=self.max_concurrency,
+            max_concurrency=self.evaluation_concurrency,
             retry=self.retry,
         )
 
@@ -138,9 +222,6 @@ class ObjectiveConfig(EvaluationModel):
 
 class BaseOptimizerConfig(EvaluationModel):
     instruction: str | None = None
-    max_candidates: int = Field(default=1, ge=0)
-    max_rounds: int = Field(default=100, ge=1)
-    max_concurrency: int = Field(default=1, ge=1)
 
 
 class CommandOptimizerConfig(BaseOptimizerConfig):
@@ -190,11 +271,87 @@ class WandbConfig(EvaluationModel):
 
 class VeroConfig(EvaluationModel):
     target: TargetConfig
-    evaluation: EvaluationConfig
+    backend: BackendConfig
+    evaluations: list[EvaluationConfig]
+    protocol: ProtocolConfig
     objective: ObjectiveConfig
     optimizer: OptimizerConfig | None = None
     session: SessionConfig = Field(default_factory=SessionConfig)
     wandb: WandbConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> VeroConfig:
+        self.to_evaluation_plan()
+        names = {evaluation.name for evaluation in self.evaluations}
+        unknown_context = sorted(set(self.backend.agent_context_inputs) - names)
+        if unknown_context:
+            raise ValueError(
+                "backend.agent_context_inputs references unknown evaluations: "
+                f"{unknown_context}"
+            )
+        return self
+
+    def to_evaluation_plan(self) -> EvaluationPlan:
+        return EvaluationPlan(
+            evaluations=[
+                evaluation.to_definition(self.backend.id)
+                for evaluation in self.evaluations
+            ],
+            selection_evaluation=self.protocol.selection_evaluation,
+            final_evaluation=self.protocol.final_evaluation,
+            evaluate_final_baseline=self.protocol.evaluate_final_baseline,
+        )
+
+    @staticmethod
+    def _component_spec(
+        type_name: str,
+        payload: dict[str, object],
+    ) -> OptimizationComponentSpec:
+        encoded = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        ).encode()
+        return OptimizationComponentSpec(
+            type=type_name,
+            config_digest=hashlib.sha256(encoded).hexdigest(),
+        )
+
+    def to_run_spec(self) -> OptimizationRunSpec:
+        producers = {}
+        if self.optimizer is not None:
+            producer_type = (
+                "vero.optimization.command.CommandCandidateProducer"
+                if isinstance(self.optimizer, CommandOptimizerConfig)
+                else "vero.agents.producer.AgentCandidateProducer"
+            )
+            producers["default"] = self._component_spec(
+                producer_type,
+                self.optimizer.model_dump(mode="json"),
+            )
+        return OptimizationRunSpec(
+            max_proposals=(
+                self.protocol.max_proposals if self.optimizer is not None else 0
+            ),
+            max_rounds=(self.protocol.max_rounds if self.optimizer is not None else 1),
+            max_concurrency=(
+                self.protocol.max_concurrency if self.optimizer is not None else 1
+            ),
+            strategy=self._component_spec(
+                "vero.optimization.strategy.SequentialStrategy",
+                {
+                    "producer_id": "default",
+                    "instruction": (
+                        self.optimizer.instruction
+                        if self.optimizer is not None
+                        else None
+                    ),
+                },
+            ),
+            producers=producers,
+        )
 
 
 def load_config(path: Path | str = Path("vero.toml")) -> VeroConfig:
@@ -208,12 +365,12 @@ def load_config(path: Path | str = Path("vero.toml")) -> VeroConfig:
         "target": config.target.model_copy(
             update={"root": str((base / config.target.root).resolve())}
         ),
-        "evaluation": config.evaluation.model_copy(
+        "backend": config.backend.model_copy(
             update={
-                "harness_root": str((base / config.evaluation.harness_root).resolve()),
+                "harness_root": str((base / config.backend.harness_root).resolve()),
                 "staged_inputs": {
                     name: str((base / source).resolve())
-                    for name, source in config.evaluation.staged_inputs.items()
+                    for name, source in config.backend.staged_inputs.items()
                 },
             }
         ),
@@ -291,7 +448,7 @@ async def build_configured_runtime(
     """Compose a local session from a trusted declarative configuration."""
 
     target_root = Path(config.target.root)
-    harness_root = Path(config.evaluation.harness_root)
+    harness_root = Path(config.backend.harness_root)
     if not target_root.is_dir():
         raise ValueError(f"target root does not exist: {target_root}")
     if not harness_root.is_dir():
@@ -305,38 +462,39 @@ async def build_configured_runtime(
     session_id, session_dir = _session_identity(config)
     backend = CommandBackend(
         CommandBackendConfig(
-            harness_root=config.evaluation.harness_root,
-            command=config.evaluation.command,
-            working_directory=config.evaluation.working_directory,
-            environment=config.evaluation.environment,
-            passthrough_environment=config.evaluation.passthrough_environment,
-            staged_inputs=config.evaluation.staged_inputs,
-            agent_context_inputs=config.evaluation.agent_context_inputs,
+            harness_root=config.backend.harness_root,
+            command=config.backend.command,
+            working_directory=config.backend.working_directory,
+            environment=config.backend.environment,
+            passthrough_environment=config.backend.passthrough_environment,
+            staged_inputs=config.backend.staged_inputs,
+            agent_context_inputs=config.backend.agent_context_inputs,
         )
     )
     session = await create_local_optimization_session(
         project_path=target_root,
         session_dir=session_dir,
         session_id=session_id,
-        backend_id=config.evaluation.backend,
+        backend_id=config.backend.id,
         backend=backend,
         objective=config.objective.to_model(),
-        evaluation_set=config.evaluation.to_evaluation_set(),
+        evaluation_plan=config.to_evaluation_plan(),
         strategy=SequentialStrategy(
             instruction=(optimizer_config.instruction if optimizer_config else None)
         ),
         producers=producers,
-        parameters=config.evaluation.parameters,
-        limits=config.evaluation.to_limits(),
-        seed=config.evaluation.seed,
-        max_candidates=(optimizer_config.max_candidates if optimizer_config else 0),
-        max_rounds=(optimizer_config.max_rounds if optimizer_config else 1),
-        max_concurrency=(optimizer_config.max_concurrency if optimizer_config else 1),
+        parameters=config.protocol.parameters,
+        limits=config.protocol.to_limits(),
+        seed=config.protocol.seed,
+        max_proposals=(config.protocol.max_proposals if optimizer_config else 0),
+        max_rounds=(config.protocol.max_rounds if optimizer_config else 1),
+        max_concurrency=(config.protocol.max_concurrency if optimizer_config else 1),
         base_ref=config.target.ref,
         metadata={
             "config": "vero.toml",
             "project_path": str(target_root),
         },
+        run_spec=config.to_run_spec(),
     )
     if config.wandb is not None:
         assert session.events is not None
@@ -355,7 +513,7 @@ async def build_configured_runtime(
                 config={
                     **config.wandb.config,
                     "vero/target": str(target_root),
-                    "vero/evaluation_set": config.evaluation.to_evaluation_set().model_dump(
+                    "vero/evaluation_plan": config.to_evaluation_plan().model_dump(
                         mode="json"
                     ),
                     "vero/objective": config.objective.to_model().model_dump(

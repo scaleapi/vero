@@ -48,6 +48,8 @@ def _config(tmp_path: Path, **updates) -> HarborBackendConfig:
         "evaluation_set_name": "harbor-bench",
         "partition": "test",
         "uv_executable": sys.executable,
+        "infrastructure_max_attempts": 1,
+        "infrastructure_retry_delay_seconds": 0,
     }
     values.update(updates)
     return HarborBackendConfig(**values)
@@ -361,7 +363,7 @@ async def test_harbor_backend_fails_when_no_requested_trials_match(tmp_path):
     )
 
     assert report.status == EvaluationStatus.FAILED
-    assert report.diagnostics[0].code == "harbor_no_trials"
+    assert report.diagnostics[0].code == "infrastructure_failure"
     assert secret not in report.diagnostics[0].message
     assert secret not in (tmp_path / "result/artifacts/harbor/stderr.log").read_text()
 

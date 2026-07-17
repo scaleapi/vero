@@ -32,8 +32,13 @@ budget, and final candidate selection.
 
 Use `--start 0 --stop N` or repeated `--case-id ID` flags to evaluate a stable
 subset while screening ideas. Confirm survivors on the full selection set.
+{% if minimum_subset_cases > 1 %}
 Aggregate-only subsets must include at least {{ minimum_subset_cases }} cases;
 this prevents singleton aggregates from exposing individual hidden results.
+{% else %}
+You may use arbitrary subsets, including a single case; validation feedback is
+optimization data, while the final evaluation remains hidden.
+{% endif %}
 
 {% endif %}
 ## Rules

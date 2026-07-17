@@ -23,11 +23,11 @@ class StubWorkspace:
 
 
 class StubEvaluationGateway:
-    async def evaluate_current(self, *, description="Evaluate agent checkpoint"):
+    async def evaluate(self, **kwargs):
         raise AssertionError("the fake run does not invoke tools")
 
-    def budget(self):
-        return None
+    def budgets(self):
+        return {}
 
 
 class FakeRunResult:

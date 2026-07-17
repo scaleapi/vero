@@ -101,17 +101,32 @@ class GitWorkspace(Workspace):
         project_path = await sandbox.canonicalize(str(project_path))
 
         result = await sandbox.run(
-            ["git", "rev-parse", "--show-toplevel"], cwd=project_path
+            [
+                "git",
+                "-c",
+                "safe.directory=*",
+                "rev-parse",
+                "--show-toplevel",
+            ],
+            cwd=project_path,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"Not a git repository: {project_path}")
+            detail = f": {result.stderr}" if result.stderr else ""
+            raise RuntimeError(f"Not a git repository: {project_path}{detail}")
         repo_root = await sandbox.canonicalize(result.stdout.strip())
 
         # Find the main repo name (handles worktrees whose common dir differs)
         repo_name = _basename(repo_root)
         try:
             result = await sandbox.run(
-                ["git", "rev-parse", "--git-common-dir"], cwd=project_path
+                [
+                    "git",
+                    "-c",
+                    f"safe.directory={repo_root}",
+                    "rev-parse",
+                    "--git-common-dir",
+                ],
+                cwd=project_path,
             )
             if result.returncode == 0:
                 git_common_dir = result.stdout.strip()

@@ -32,29 +32,56 @@ def _default_uv() -> str:
     return str(Path(executable).resolve())
 
 
+class PythonTaskEvaluationConfig(EvaluationModel):
+    """One named/partitioned dataset owned by a Python task backend."""
+
+    name: str
+    cases_path: str
+    partition: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Python task evaluation name must not be empty")
+        return value
+
+    @field_validator("cases_path")
+    @classmethod
+    def validate_cases_path(cls, value: str) -> str:
+        if not value.strip() or not Path(value).is_absolute():
+            raise ValueError("Python task cases_path must be absolute")
+        return value
+
+    @field_validator("partition")
+    @classmethod
+    def validate_partition(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("Python task partition must not be empty")
+        return value
+
+
 class PythonTaskBackendConfig(EvaluationModel):
     """Configuration for an external task harness and editable target package."""
 
     harness_root: str
     module: str
     task: str
-    cases_path: str
+    evaluations: list[PythonTaskEvaluationConfig]
     target_project_directory: str = "."
-    evaluation_set_name: str = "default"
-    partition: str | None = None
     uv_executable: str = Field(default_factory=_default_uv)
     python_executable: str = "python"
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
 
-    @field_validator("harness_root", "cases_path")
+    @field_validator("harness_root")
     @classmethod
     def validate_absolute_path(cls, value: str) -> str:
         if not value.strip() or not Path(value).is_absolute():
             raise ValueError("Python task backend paths must be absolute")
         return value
 
-    @field_validator("module", "task", "python_executable", "evaluation_set_name")
+    @field_validator("module", "task", "python_executable")
     @classmethod
     def validate_identity(cls, value: str) -> str:
         if not value.strip():
@@ -66,13 +93,6 @@ class PythonTaskBackendConfig(EvaluationModel):
     def validate_uv_executable(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("uv_executable must not be empty")
-        return value
-
-    @field_validator("partition")
-    @classmethod
-    def validate_partition(cls, value: str | None) -> str | None:
-        if value is not None and not value.strip():
-            raise ValueError("Python task partition must not be empty")
         return value
 
     @field_validator("target_project_directory")
@@ -90,8 +110,17 @@ class PythonTaskBackendConfig(EvaluationModel):
     def validate_filesystem(self) -> PythonTaskBackendConfig:
         if not Path(self.harness_root).is_dir():
             raise ValueError("Python task harness_root must be an existing directory")
-        if not Path(self.cases_path).is_file():
-            raise ValueError("Python task cases_path must be an existing file")
+        if not self.evaluations:
+            raise ValueError("Python task backend requires at least one evaluation")
+        keys = [(item.name, item.partition) for item in self.evaluations]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Python task evaluation name/partition pairs must be unique")
+        for evaluation in self.evaluations:
+            if not Path(evaluation.cases_path).is_file():
+                raise ValueError(
+                    "Python task cases_path must be an existing file: "
+                    f"{evaluation.cases_path}"
+                )
         return self
 
 
@@ -99,30 +128,51 @@ class PythonTaskBackend:
     """Run an external Python task harness against an editable candidate."""
 
     name = "python-task"
-    version = "1"
+    version = "2"
 
     def __init__(self, config: PythonTaskBackendConfig):
         self.config = config
         target = "{workspace}"
         if config.target_project_directory != ".":
             target += f"/{config.target_project_directory}"
-        self._command = CommandBackend(
+        self._target = target
+        self._commands: dict[tuple[str, str | None], CommandBackend] = {}
+
+    def _source(self, evaluation_set: EvaluationSet) -> PythonTaskEvaluationConfig:
+        for source in self.config.evaluations:
+            if (source.name, source.partition) == (
+                evaluation_set.name,
+                evaluation_set.partition,
+            ):
+                return source
+        raise ValueError(
+            "Python task backend does not own evaluation "
+            f"{evaluation_set.name!r} partition {evaluation_set.partition!r}"
+        )
+
+    def _command(self, evaluation_set: EvaluationSet) -> CommandBackend:
+        source = self._source(evaluation_set)
+        key = (source.name, source.partition)
+        command = self._commands.get(key)
+        if command is not None:
+            return command
+        command = CommandBackend(
             CommandBackendConfig(
-                harness_root=config.harness_root,
+                harness_root=self.config.harness_root,
                 command=[
-                    config.uv_executable,
+                    self.config.uv_executable,
                     "run",
                     "--project",
                     "{harness}",
                     "--with-editable",
-                    target,
-                    config.python_executable,
+                    self._target,
+                    self.config.python_executable,
                     "-m",
                     "vero_tasks.runner",
                     "--module",
-                    config.module,
+                    self.config.module,
                     "--task",
-                    config.task,
+                    self.config.task,
                     "--cases",
                     "{input:cases}",
                     "--request",
@@ -130,11 +180,13 @@ class PythonTaskBackend:
                     "--report",
                     "{report}",
                 ],
-                environment=config.environment,
-                passthrough_environment=config.passthrough_environment,
-                staged_inputs={"cases": config.cases_path},
+                environment=self.config.environment,
+                passthrough_environment=self.config.passthrough_environment,
+                staged_inputs={"cases": source.cases_path},
             )
         )
+        self._commands[key] = command
+        return command
 
     @property
     def provenance(self) -> BackendProvenance:
@@ -144,8 +196,8 @@ class PythonTaskBackend:
             config=self.config,
         )
 
-    def _cases(self) -> list[object]:
-        path = Path(self.config.cases_path)
+    def _cases(self, evaluation_set: EvaluationSet) -> list[object]:
+        path = Path(self._source(evaluation_set).cases_path)
         if path.suffix == ".jsonl":
             return [
                 json.loads(line)
@@ -159,12 +211,12 @@ class PythonTaskBackend:
             raise ValueError("Python task case file must contain a case list")
         return value
 
-    def _case_ids(self) -> list[str]:
+    def _case_ids(self, evaluation_set: EvaluationSet) -> list[str]:
         case_ids = [
             str(case["id"])
             if isinstance(case, dict) and case.get("id") is not None
             else str(index)
-            for index, case in enumerate(self._cases())
+            for index, case in enumerate(self._cases(evaluation_set))
         ]
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("Python task case IDs must be unique")
@@ -174,8 +226,8 @@ class PythonTaskBackend:
         self, evaluation_set: EvaluationSet
     ) -> list[tuple[str, object]]:
         self._validate_evaluation_set(evaluation_set)
-        cases = self._cases()
-        case_ids = self._case_ids()
+        cases = self._cases(evaluation_set)
+        case_ids = self._case_ids(evaluation_set)
         selection = evaluation_set.selection
         if isinstance(selection, AllCases):
             indexes = list(range(len(cases)))
@@ -219,18 +271,9 @@ class PythonTaskBackend:
         )
 
     def _validate_evaluation_set(self, evaluation_set: EvaluationSet) -> None:
-        if evaluation_set.name != self.config.evaluation_set_name:
-            raise ValueError(
-                f"Python task backend owns evaluation set "
-                f"{self.config.evaluation_set_name!r}, not {evaluation_set.name!r}"
-            )
-        if evaluation_set.partition != self.config.partition:
-            raise ValueError(
-                f"Python task backend owns partition {self.config.partition!r}, "
-                f"not {evaluation_set.partition!r}"
-            )
+        self._source(evaluation_set)
 
-        case_ids = self._case_ids()
+        case_ids = self._case_ids(evaluation_set)
         selection = evaluation_set.selection
         if isinstance(selection, CaseRange) and selection.stop > len(case_ids):
             raise ValueError(
@@ -250,15 +293,18 @@ class PythonTaskBackend:
         if isinstance(selection, CaseRange):
             return EvaluationCost(cases=selection.stop - selection.start)
         if isinstance(selection, AllCases):
-            return EvaluationCost(cases=len(self._case_ids()))
+            return EvaluationCost(cases=len(self._case_ids(evaluation_set)))
         raise AssertionError(f"unsupported case selection: {selection}")
 
     def validate_request(self, request: EvaluationRequest) -> None:
-        self._command.validate_request(request)
+        self._command(request.evaluation_set).validate_request(request)
         self._validate_evaluation_set(request.evaluation_set)
 
     def sanitize_error(self, message: str) -> str:
-        return self._command.sanitize_error(message)
+        source = self.config.evaluations[0]
+        return self._command(
+            EvaluationSet(name=source.name, partition=source.partition)
+        ).sanitize_error(message)
 
     async def evaluate(
         self,
@@ -271,9 +317,12 @@ class PythonTaskBackend:
         )
         if target_root is not None:
             target_root = target_root.resolve()
-            cases_path = Path(self.config.cases_path).resolve()
+            cases_path = Path(self._source(request.evaluation_set).cases_path).resolve()
             if cases_path == target_root or cases_path.is_relative_to(target_root):
                 raise ValueError(
                     "Python task cases must live outside the editable target"
                 )
-        return await self._command.evaluate(context=context, request=request)
+        return await self._command(request.evaluation_set).evaluate(
+            context=context,
+            request=request,
+        )

@@ -18,10 +18,10 @@ from vero.evaluation import (
     EvaluationDatabase,
     EvaluationEngine,
     EvaluationLimits,
-    EvaluationSet,
+    EvaluationPlan,
     Evaluator,
     ObjectiveSpec,
-    allow_all_evaluations,
+    authorize_evaluation_plan,
 )
 from vero.optimization import (
     CandidateProducer,
@@ -31,7 +31,11 @@ from vero.optimization import (
     SelectionPolicy,
     SequentialStrategy,
 )
-from vero.runtime.session import OptimizationSession, SessionManifest
+from vero.runtime.session import (
+    OptimizationRunSpec,
+    OptimizationSession,
+    SessionManifest,
+)
 from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace, Workspace
 
@@ -47,12 +51,12 @@ def _load_database(session_dir: Path, session_id: str) -> EvaluationDatabase:
 
 def _load_budget_ledger(
     session_dir: Path,
-    budgets: list[EvaluationBudget] | None,
+    budgets: list[EvaluationBudget],
 ) -> BudgetLedger | None:
     budget_path = session_dir / "budgets.json"
     if budget_path.exists():
         return BudgetLedger.load(budget_path)
-    if budgets is None:
+    if not budgets:
         return None
     ledger = BudgetLedger(budgets, path=budget_path)
     ledger.save()
@@ -68,17 +72,17 @@ async def create_optimization_session(
     backend: EvaluationBackend,
     objective: ObjectiveSpec,
     producers: Mapping[str, CandidateProducer],
+    evaluation_plan: EvaluationPlan,
     session_id: str | None = None,
-    evaluation_set: EvaluationSet | None = None,
     strategy: OptimizationStrategy | None = None,
     selection: SelectionPolicy | None = None,
     parameters: dict[str, JsonValue] | None = None,
     limits: EvaluationLimits | None = None,
-    budgets: list[EvaluationBudget] | None = None,
     authorization_resolver: AuthorizationResolver | None = None,
     metadata: dict[str, JsonValue] | None = None,
+    run_spec: OptimizationRunSpec | None = None,
     seed: int | None = None,
-    max_candidates: int = 1,
+    max_proposals: int = 1,
     max_rounds: int = 100,
     max_concurrency: int = 1,
     base_ref: str | None = None,
@@ -88,8 +92,8 @@ async def create_optimization_session(
     ``session_dir`` and ``candidate_repository`` are durable control-plane state
     on the host. The original workspace supplies the baseline, context, and
     default execution sandbox; all candidate checkouts come from the compatible
-    repository. Generic runtimes fail closed unless
-    ``authorization_resolver`` is supplied.
+    repository. The evaluation plan is the default fail-closed authorization
+    boundary; advanced deployments may supply an equivalent trusted resolver.
     """
 
     session_dir = Path(session_dir).expanduser().resolve()
@@ -105,7 +109,17 @@ async def create_optimization_session(
         raise ValueError(
             "candidate repository and workspace belong to different families"
         )
-    if not producers and max_candidates:
+    mismatched_budgets = [
+        budget.backend_id
+        for budget in evaluation_plan.budgets
+        if budget.backend_id != backend_id
+    ]
+    if mismatched_budgets:
+        raise ValueError(
+            "evaluation plan budgets must use the session backend "
+            f"{backend_id!r}"
+        )
+    if not producers and max_proposals:
         raise ValueError("at least one candidate producer is required")
     for producer in producers.values():
         validate_workspace = getattr(producer, "validate_workspace", None)
@@ -157,7 +171,7 @@ async def create_optimization_session(
     session_dir.mkdir(parents=True, exist_ok=True)
     database_path = session_dir / "database.json"
     database = _load_database(session_dir, session_id)
-    budget_ledger = _load_budget_ledger(session_dir, budgets)
+    budget_ledger = _load_budget_ledger(session_dir, evaluation_plan.budgets)
     evaluator = Evaluator(
         candidate_repository=candidate_repository,
         sandbox=workspace.sandbox,
@@ -170,14 +184,16 @@ async def create_optimization_session(
         database=database,
         database_path=database_path,
         budget_ledger=budget_ledger,
-        authorization_resolver=authorization_resolver,
+        authorization_resolver=(
+            authorization_resolver or authorize_evaluation_plan(evaluation_plan)
+        ),
     )
     optimizer = Optimizer(
         workspace=workspace,
         candidate_repository=candidate_repository,
         engine=engine,
         backend_id=backend_id,
-        evaluation_set=evaluation_set or EvaluationSet(),
+        evaluation_plan=evaluation_plan,
         objective=objective,
         strategy=strategy or SequentialStrategy(),
         producers=dict(producers),
@@ -185,7 +201,7 @@ async def create_optimization_session(
         parameters=parameters or {},
         limits=limits or EvaluationLimits(),
         seed=seed,
-        max_candidates=max_candidates,
+        max_proposals=max_proposals,
         max_rounds=max_rounds,
         max_concurrency=max_concurrency,
         session_id=session_id,
@@ -196,6 +212,7 @@ async def create_optimization_session(
         optimizer=optimizer,
         baseline=baseline,
         metadata=metadata or {},
+        run_spec=run_spec,
     )
     for producer_id, producer in producers.items():
         bind_artifacts = getattr(producer, "bind_artifacts", None)
@@ -212,17 +229,17 @@ async def create_local_optimization_session(
     backend: EvaluationBackend,
     objective: ObjectiveSpec,
     producers: Mapping[str, CandidateProducer],
+    evaluation_plan: EvaluationPlan,
     session_id: str | None = None,
-    evaluation_set: EvaluationSet | None = None,
     strategy: OptimizationStrategy | None = None,
     selection: SelectionPolicy | None = None,
     parameters: dict[str, JsonValue] | None = None,
     limits: EvaluationLimits | None = None,
-    budgets: list[EvaluationBudget] | None = None,
     authorization_resolver: AuthorizationResolver | None = None,
     metadata: dict[str, JsonValue] | None = None,
+    run_spec: OptimizationRunSpec | None = None,
     seed: int | None = None,
-    max_candidates: int = 1,
+    max_proposals: int = 1,
     max_rounds: int = 100,
     max_concurrency: int = 1,
     base_ref: str | None = None,
@@ -248,17 +265,17 @@ async def create_local_optimization_session(
         backend=backend,
         objective=objective,
         producers=producers,
+        evaluation_plan=evaluation_plan,
         session_id=session_id,
-        evaluation_set=evaluation_set,
         strategy=strategy,
         selection=selection,
         parameters=parameters,
         limits=limits,
-        budgets=budgets,
-        authorization_resolver=authorization_resolver or allow_all_evaluations,
+        authorization_resolver=authorization_resolver,
         metadata=metadata,
+        run_spec=run_spec,
         seed=seed,
-        max_candidates=max_candidates,
+        max_proposals=max_proposals,
         max_rounds=max_rounds,
         max_concurrency=max_concurrency,
         base_ref=base_ref,

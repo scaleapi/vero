@@ -10,8 +10,8 @@ from vero.agents.protocol import AgentContext, AgentRequirements, CodingAgent
 from vero.optimization import (
     CandidateChange,
     CandidateEvaluationGateway,
+    CandidateProductionContext,
     CandidateProposal,
-    OptimizationContext,
 )
 from vero.runtime import ArtifactStore
 from vero.utils.general import recursively_serialize
@@ -124,7 +124,7 @@ class AgentCandidateProducer:
         self,
         *,
         proposal: CandidateProposal,
-        context: OptimizationContext,
+        context: CandidateProductionContext,
         workspace: Workspace,
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
@@ -135,7 +135,7 @@ class AgentCandidateProducer:
             else None
         )
         if parent is None:
-            parent = context.baseline.request.candidate
+            parent = context.baseline
         try:
             result = await self.agent.run(
                 context=AgentContext(

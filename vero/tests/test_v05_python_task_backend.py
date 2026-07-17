@@ -11,9 +11,11 @@ from vero.evaluation import (
     AllCases,
     CaseIds,
     CaseRange,
+    EvaluationPlan,
     EvaluationSet,
     PythonTaskBackend,
     PythonTaskBackendConfig,
+    PythonTaskEvaluationConfig,
     MetricSelector,
     ObjectiveSpec,
 )
@@ -67,13 +69,15 @@ async def test_python_task_backend_builds_uv_command_and_resolves_cost(tmp_path:
             harness_root=str(tmp_path),
             module="target.tasks",
             task="quality",
-            cases_path=str(cases),
+            evaluations=[
+                PythonTaskEvaluationConfig(name="default", cases_path=str(cases))
+            ],
             target_project_directory="packages/target",
             uv_executable=sys.executable,
         )
     )
 
-    command = backend._command.config.command
+    command = backend._command(EvaluationSet()).config.command
     assert command[:6] == [
         sys.executable,
         "run",
@@ -107,7 +111,9 @@ def test_python_task_backend_requires_external_case_file(tmp_path: Path):
             harness_root=str(tmp_path),
             module="target.tasks",
             task="quality",
-            cases_path=str(missing),
+            evaluations=[
+                PythonTaskEvaluationConfig(name="default", cases_path=str(missing))
+            ],
             uv_executable=sys.executable,
         )
 
@@ -132,7 +138,9 @@ async def test_python_task_backend_exports_only_selected_cases(tmp_path: Path):
             harness_root=str(tmp_path),
             module="target.tasks",
             task="quality",
-            cases_path=str(cases),
+            evaluations=[
+                PythonTaskEvaluationConfig(name="default", cases_path=str(cases))
+            ],
             uv_executable=sys.executable,
         )
     )
@@ -152,6 +160,50 @@ async def test_python_task_backend_exports_only_selected_cases(tmp_path: Path):
         {"id": "c", "prompt": "gamma"},
         {"id": "a", "prompt": "alpha"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_python_task_backend_routes_named_partitions_to_distinct_datasets(
+    tmp_path: Path,
+):
+    train = tmp_path / "train.json"
+    train.write_text(json.dumps([{"id": "train-a"}]), encoding="utf-8")
+    validation = tmp_path / "validation.json"
+    validation.write_text(
+        json.dumps([{"id": "val-a"}, {"id": "val-b"}]),
+        encoding="utf-8",
+    )
+    backend = PythonTaskBackend(
+        PythonTaskBackendConfig(
+            harness_root=str(tmp_path),
+            module="target.tasks",
+            task="quality",
+            evaluations=[
+                PythonTaskEvaluationConfig(
+                    name="train",
+                    partition="train",
+                    cases_path=str(train),
+                ),
+                PythonTaskEvaluationConfig(
+                    name="validation",
+                    partition="validation",
+                    cases_path=str(validation),
+                ),
+            ],
+            uv_executable=sys.executable,
+        )
+    )
+
+    assert (
+        await backend.resolve_cost(EvaluationSet(name="train", partition="train"))
+    ).cases == 1
+    assert (
+        await backend.resolve_cost(
+            EvaluationSet(name="validation", partition="validation")
+        )
+    ).cases == 2
+    with pytest.raises(ValueError, match="does not own evaluation"):
+        await backend.resolve_cost(EvaluationSet(name="test", partition="test"))
 
 
 @pytest.mark.asyncio
@@ -237,7 +289,9 @@ Path(sys.argv[1], "factor.txt").write_text("2\\n")
             harness_root=str(tmp_path),
             module="evaluation_tasks",
             task="multiply",
-            cases_path=str(cases),
+            evaluations=[
+                PythonTaskEvaluationConfig(name="default", cases_path=str(cases))
+            ],
             uv_executable=str(fake_uv),
         )
     )
@@ -256,8 +310,9 @@ Path(sys.argv[1], "factor.txt").write_text("2\\n")
             selector=MetricSelector(metric="score"),
             direction="maximize",
         ),
+        evaluation_plan=EvaluationPlan.single(),
         producers={"default": producer},
-        max_candidates=1,
+        max_proposals=1,
     )
 
     result = await session.run()

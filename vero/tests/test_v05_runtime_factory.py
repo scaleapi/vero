@@ -12,6 +12,10 @@ from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
+    DisclosureLevel,
+    EvaluationAccessPolicy,
+    EvaluationDefinition,
+    EvaluationPlan,
     EvaluationSet,
     MetricSelector,
     ObjectiveSpec,
@@ -149,8 +153,9 @@ async def test_generic_factory_accepts_a_provisioned_workspace(tmp_path: Path):
             selector=MetricSelector(metric="score"),
             direction="maximize",
         ),
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
         authorization_resolver=allow_all_evaluations,
     )
     result = await session.run()
@@ -178,9 +183,9 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
         backend_id="command",
         backend=backend,
         objective=objective,
-        evaluation_set=EvaluationSet(name="quality"),
+        evaluation_plan=EvaluationPlan.single(EvaluationSet(name="quality")),
         producers={"default": producer},
-        max_candidates=1,
+        max_proposals=1,
     )
     result = await session.run()
 
@@ -206,9 +211,9 @@ async def test_local_factory_builds_and_resumes_generic_session(tmp_path: Path):
         backend_id="command",
         backend=backend,
         objective=objective,
-        evaluation_set=EvaluationSet(name="quality"),
-        producers={},
-        max_candidates=0,
+        evaluation_plan=EvaluationPlan.single(EvaluationSet(name="quality")),
+        producers={"default": producer},
+        max_proposals=1,
     )
     resumed_result = await resumed.run(skip_baseline_evaluation=True)
 
@@ -240,8 +245,9 @@ async def test_resume_evaluates_a_durable_candidate_captured_before_crash(
         backend_id="command",
         backend=backend,
         objective=objective,
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
     )
     initial = await session.run()
     baseline = initial.baseline.request.candidate
@@ -273,8 +279,9 @@ async def test_resume_evaluates_a_durable_candidate_captured_before_crash(
         backend_id="command",
         backend=backend,
         objective=objective,
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
     )
     result = await resumed.run(skip_baseline_evaluation=True)
 
@@ -301,8 +308,9 @@ async def test_factory_reuses_baseline_captured_before_manifest_write(tmp_path: 
         backend_id="command",
         backend=backend,
         objective=objective,
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
     )
     assert not first.manifest_path.exists()
     captured = first.baseline
@@ -313,8 +321,9 @@ async def test_factory_reuses_baseline_captured_before_manifest_write(tmp_path: 
         backend_id="command",
         backend=backend,
         objective=objective,
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
     )
 
     assert recreated.baseline == captured
@@ -322,7 +331,7 @@ async def test_factory_reuses_baseline_captured_before_manifest_write(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_local_factory_continues_candidate_rounds_after_resume(tmp_path: Path):
+async def test_local_factory_rejects_changed_run_protocol_after_resume(tmp_path: Path):
     target = tmp_path / "target"
     target.mkdir()
     (target / "program.txt").write_text("baseline\n", encoding="utf-8")
@@ -340,20 +349,17 @@ async def test_local_factory_continues_candidate_rounds_after_resume(tmp_path: P
         "backend_id": "command",
         "backend": backend,
         "objective": objective,
-        "evaluation_set": EvaluationSet(name="quality"),
+        "evaluation_plan": EvaluationPlan.single(EvaluationSet(name="quality")),
         "producers": {"default": producer},
     }
 
-    first = await create_local_optimization_session(max_candidates=1, **kwargs)
+    first = await create_local_optimization_session(max_proposals=1, **kwargs)
     first_result = await first.run()
-    resumed = await create_local_optimization_session(max_candidates=2, **kwargs)
-    resumed_result = await resumed.run(skip_baseline_evaluation=True)
+    resumed = await create_local_optimization_session(max_proposals=2, **kwargs)
 
     assert len(first_result.evaluations) == 2
-    assert len(resumed_result.evaluations) == 3
-    assert len(resumed_result.candidates) == 3
-    assert resumed_result.best.objective.value == 2.0
-    assert resumed_result.best.request.candidate.metadata["round"] == 1
+    with pytest.raises(ValueError, match="run protocol"):
+        await resumed.run(skip_baseline_evaluation=True)
 
 
 @pytest.mark.asyncio
@@ -398,8 +404,9 @@ async def test_local_factory_can_evaluate_an_older_target_ref(tmp_path: Path):
             selector=MetricSelector(metric="score"),
             direction="maximize",
         ),
+        evaluation_plan=EvaluationPlan.single(),
         producers={},
-        max_candidates=0,
+        max_proposals=0,
         base_ref=baseline_version,
     )
     result = await session.run()
@@ -436,6 +443,7 @@ async def test_local_factory_rejects_state_inside_or_outside_version_control(
             selector=MetricSelector(metric="score"),
             direction="maximize",
         ),
+        "evaluation_plan": EvaluationPlan.single(),
         "producers": {"default": producer},
     }
 
@@ -451,3 +459,52 @@ async def test_local_factory_rejects_state_inside_or_outside_version_control(
             session_dir=tmp_path / "sessions" / "dirty",
             **kwargs,
         )
+
+
+@pytest.mark.asyncio
+async def test_session_uses_canonical_selection_and_hidden_final_evaluations(
+    tmp_path: Path,
+):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "program.txt").write_text("baseline\n", encoding="utf-8")
+    initialize_repository(target)
+    backend, _ = command_components(tmp_path)
+    validation = EvaluationSet(name="validation", partition="validation")
+    final = EvaluationSet(name="test", partition="test")
+    plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(evaluation_set=validation),
+            EvaluationDefinition(
+                evaluation_set=final,
+                access=EvaluationAccessPolicy(
+                    agent_can_evaluate=False,
+                    agent_visible=False,
+                    disclosure=DisclosureLevel.NONE,
+                ),
+            ),
+        ],
+        selection_evaluation="validation",
+        final_evaluation="test",
+    )
+
+    session = await create_local_optimization_session(
+        project_path=target,
+        session_dir=tmp_path / "sessions" / "final",
+        backend_id="command",
+        backend=backend,
+        objective=ObjectiveSpec(
+            selector=MetricSelector(metric="score"),
+            direction="maximize",
+        ),
+        evaluation_plan=plan,
+        producers={},
+        max_proposals=0,
+    )
+    result = await session.run()
+
+    assert result.baseline.request.evaluation_set == validation
+    assert result.final_baseline is not None
+    assert result.final_baseline.request.evaluation_set == final
+    assert result.final == result.final_baseline
+    assert session.load_manifest().final_evaluation_id == result.final.id

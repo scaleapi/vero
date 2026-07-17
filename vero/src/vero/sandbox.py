@@ -641,7 +641,9 @@ class DockerSandbox(Sandbox):
             "trap 'rm -f \"$pid_file\"' EXIT; "
             '"$@"'
         )
-        arguments.extend(["setsid", "sh", "-c", wrapper, "sh", pid_file, *payload])
+        arguments.extend(
+            ["setsid", "--wait", "sh", "-c", wrapper, "sh", pid_file, *payload]
+        )
 
         async def terminate_container_group() -> None:
             script = """

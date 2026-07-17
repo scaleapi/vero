@@ -13,20 +13,25 @@ from pydantic import JsonValue
 from vero.candidate import Candidate
 from vero.candidate_repository import CandidateRepository
 from vero.evaluation import (
+    CaseSelection,
     DisclosureLevel,
     EvaluationBudget,
     EvaluationCancelledError,
     EvaluationEngine,
     EvaluationExecutionError,
     EvaluationLimits,
+    EvaluationPlan,
+    EvaluationPrincipal,
     EvaluationReceipt,
     EvaluationRecord,
     EvaluationRequest,
     EvaluationSet,
     EvaluationSummary,
     ObjectiveSpec,
+    project_evaluation,
 )
 from vero.optimization.models import (
+    CandidateProductionContext,
     CandidateProposal,
     OptimizationContext,
     OptimizationResult,
@@ -99,40 +104,57 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
     def trial_evaluations(self) -> tuple[EvaluationRecord, ...]:
         return tuple(self._trial_evaluations)
 
-    async def evaluate_current(
+    async def evaluate(
         self,
         *,
+        evaluation: str,
+        selection: CaseSelection | None = None,
+        candidate_id: str | None = None,
         description: str = "Evaluate agent checkpoint",
     ) -> EvaluationReceipt:
         if not description.strip():
             raise ValueError("checkpoint description must not be empty")
-        version = (
-            await self.workspace.save(description)
-            if await self.workspace.is_dirty()
-            else await self.workspace.current_version()
+        try:
+            definition = self.optimizer.evaluation_plan.get(evaluation)
+        except KeyError as error:
+            raise ValueError(f"unknown evaluation: {evaluation!r}") from error
+        requested_set = definition.evaluation_set.model_copy(
+            update={"selection": selection or definition.evaluation_set.selection}
         )
-        self._count += 1
-        candidate = Candidate(
-            id=f"{self.proposal.id}:trial:{self._count}",
-            version=version,
-            parent_id=self._last_candidate_id,
-            created_at=datetime.now(UTC),
-            description=description,
-            metadata={
-                **self.proposal.metadata,
-                "producer_id": self.proposal.producer_id,
-                "proposal_id": self.proposal.id,
-                "round": self.round_number,
-                "trial": self._count,
-            },
-        )
-        await self.optimizer._capture_candidate(candidate, self.workspace)
-        request = self.optimizer._request(candidate)
+        captured = candidate_id is None
+        if candidate_id is not None:
+            candidate = self.optimizer.candidate_repository.get(candidate_id)
+            if candidate is None:
+                raise ValueError(f"unknown candidate: {candidate_id!r}")
+        else:
+            version = (
+                await self.workspace.save(description)
+                if await self.workspace.is_dirty()
+                else await self.workspace.current_version()
+            )
+            self._count += 1
+            candidate = Candidate(
+                id=f"{self.proposal.id}:trial:{self._count}",
+                version=version,
+                parent_id=self._last_candidate_id,
+                created_at=datetime.now(UTC),
+                description=description,
+                metadata={
+                    **self.proposal.metadata,
+                    "producer_id": self.proposal.producer_id,
+                    "proposal_id": self.proposal.id,
+                    "round": self.round_number,
+                    "trial": self._count,
+                },
+            )
+            await self.optimizer._capture_candidate(candidate, self.workspace)
+        request = self.optimizer._request(candidate, requested_set)
         try:
             result = await self.optimizer.engine.evaluate(
                 backend_id=self.optimizer.backend_id,
                 request=request,
                 objective_spec=self.optimizer.objective,
+                principal=EvaluationPrincipal.AGENT,
             )
         except (EvaluationExecutionError, EvaluationCancelledError) as error:
             record = self.optimizer.engine.database.get_evaluation(error.evaluation_id)
@@ -140,8 +162,9 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
                 decision = await self.optimizer.engine.authorize(
                     self.optimizer.backend_id,
                     request,
+                    EvaluationPrincipal.AGENT,
                 )
-                if decision.may_evaluate:
+                if decision.viewable:
                     await asyncio.shield(
                         self.workspace_context.add_evaluation(
                             record,
@@ -158,8 +181,9 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
                 "evaluation engine did not index completed evaluation "
                 f"{evaluation_id!r}"
             )
-        self._last_candidate_id = candidate.id
-        self._trial_candidates.append(candidate)
+        if captured:
+            self._last_candidate_id = candidate.id
+            self._trial_candidates.append(candidate)
         self._trial_evaluations.append(record)
         disclosure = (
             DisclosureLevel.FULL
@@ -172,14 +196,21 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
         )
         return await self.workspace_context.add_evaluation(record, disclosure)
 
-    def budget(self) -> EvaluationBudget | None:
+    def budgets(self) -> dict[str, EvaluationBudget | None]:
         ledger = self.optimizer.engine.budget_ledger
-        if ledger is None:
-            return None
-        return ledger.get(
-            self.optimizer.backend_id,
-            self.optimizer.evaluation_set,
-        )
+        return {
+            definition.evaluation_set.name: (
+                ledger.get(
+                    self.optimizer.backend_id,
+                    definition.evaluation_set,
+                    EvaluationPrincipal.AGENT,
+                )
+                if ledger is not None
+                else None
+            )
+            for definition in self.optimizer.evaluation_plan.evaluations
+            if definition.access.agent_can_evaluate
+        }
 
 
 @dataclass
@@ -190,7 +221,7 @@ class Optimizer:
     candidate_repository: CandidateRepository
     engine: EvaluationEngine
     backend_id: str
-    evaluation_set: EvaluationSet
+    evaluation_plan: EvaluationPlan
     objective: ObjectiveSpec
     strategy: OptimizationStrategy
     producers: dict[str, CandidateProducer]
@@ -198,7 +229,7 @@ class Optimizer:
     parameters: dict[str, JsonValue] = field(default_factory=dict)
     limits: EvaluationLimits = field(default_factory=EvaluationLimits)
     seed: int | None = None
-    max_candidates: int = 1
+    max_proposals: int = 1
     max_rounds: int = 100
     max_concurrency: int = 1
     session_id: str | None = None
@@ -207,14 +238,29 @@ class Optimizer:
         init=False,
         repr=False,
     )
+    _producer_locks: dict[str, asyncio.Lock] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
 
     def _best(self, records: list[EvaluationRecord]) -> EvaluationRecord | None:
-        return self.selection.select(records, self.objective)
+        selection_set = self.evaluation_plan.selection.evaluation_set
+        compatible = [
+            record
+            for record in records
+            if record.request.evaluation_set == selection_set
+        ]
+        return self.selection.select(compatible, self.objective)
 
-    def _request(self, candidate: Candidate) -> EvaluationRequest:
+    def _request(
+        self,
+        candidate: Candidate,
+        evaluation_set: EvaluationSet | None = None,
+    ) -> EvaluationRequest:
         return EvaluationRequest(
             candidate=candidate,
-            evaluation_set=self.evaluation_set,
+            evaluation_set=evaluation_set or self.evaluation_plan.selection.evaluation_set,
             parameters=self.parameters,
             limits=self.limits,
             seed=self.seed,
@@ -227,11 +273,18 @@ class Optimizer:
     ) -> Candidate:
         return await self.candidate_repository.capture(candidate, workspace)
 
-    async def evaluate_candidate(self, candidate: Candidate) -> EvaluationRecord:
+    async def evaluate_candidate(
+        self,
+        candidate: Candidate,
+        evaluation_set: EvaluationSet | None = None,
+        *,
+        principal: EvaluationPrincipal = EvaluationPrincipal.SYSTEM,
+    ) -> EvaluationRecord:
         return await self.engine.evaluate_record(
             backend_id=self.backend_id,
-            request=self._request(candidate),
+            request=self._request(candidate, evaluation_set),
             objective_spec=self.objective,
+            principal=principal,
         )
 
     @staticmethod
@@ -245,6 +298,7 @@ class Optimizer:
         proposal: CandidateProposal,
         context: OptimizationContext,
         parent: Candidate,
+        evaluation_records: tuple[EvaluationRecord, ...],
     ) -> _ProductionOutcome:
         try:
             producer = self.producers[proposal.producer_id]
@@ -284,9 +338,9 @@ class Optimizer:
                 candidate_repository=self.candidate_repository,
                 engine=self.engine,
                 backend_id=self.backend_id,
-                request=self._request(parent),
+                evaluation_plan=self.evaluation_plan,
                 candidates=tuple(context.candidates.values()),
-                evaluations=context.evaluations,
+                evaluations=evaluation_records,
                 ledger=self._context_ledger,
             )
             await workspace_context.initialize()
@@ -298,12 +352,29 @@ class Optimizer:
                 workspace_context=workspace_context,
                 round_number=context.round,
             )
-            change = await producer.produce(
-                proposal=proposal,
-                context=context,
-                workspace=candidate_workspace,
-                evaluation=evaluation,
+            # A producer often owns mutable conversation state. Different producer
+            # IDs may run concurrently, but one producer is deliberately
+            # non-reentrant so parallel proposals cannot corrupt that state.
+            producer_lock = self._producer_locks.setdefault(
+                proposal.producer_id,
+                asyncio.Lock(),
             )
+            production_context = CandidateProductionContext(
+                session_id=context.session_id,
+                round=context.round,
+                baseline=context.baseline,
+                candidates=context.candidates,
+                best=(
+                    context.best if context.best is not None else None
+                ),
+            )
+            async with producer_lock:
+                change = await producer.produce(
+                    proposal=proposal,
+                    context=production_context,
+                    workspace=candidate_workspace,
+                    evaluation=evaluation,
+                )
             if change is None:
                 return _ProductionOutcome(
                     candidate=None,
@@ -352,14 +423,20 @@ class Optimizer:
         *,
         baseline: Candidate | None = None,
         skip_baseline_evaluation: bool = False,
+        max_proposals: int | None = None,
     ) -> OptimizationResult:
-        if self.max_candidates < 0:
-            raise ValueError("max_candidates must be non-negative")
+        proposal_limit = self.max_proposals if max_proposals is None else max_proposals
+        if proposal_limit < 0 or proposal_limit > self.max_proposals:
+            raise ValueError(
+                "run max_proposals must be between zero and the session protocol limit"
+            )
+        if self.max_proposals < 0:
+            raise ValueError("max_proposals must be non-negative")
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be positive")
         if self.max_concurrency < 1:
             raise ValueError("max_concurrency must be positive")
-        if not self.producers and self.max_candidates:
+        if not self.producers and proposal_limit:
             raise ValueError("at least one candidate producer is required")
 
         if baseline is None:
@@ -372,13 +449,14 @@ class Optimizer:
             raise ValueError("baseline does not match its durable candidate record")
 
         backend_provenance = self.engine.backends.resolve(self.backend_id).provenance
+        selection_set = self.evaluation_plan.selection.evaluation_set
         existing_baselines = [
             record
             for record in self.engine.database.evaluations.values()
             if record.request.candidate.id == baseline.id
             and record.request.candidate.version == baseline.version
             and record.backend_id == self.backend_id
-            and record.request.evaluation_set == self.evaluation_set
+            and record.request.evaluation_set == selection_set
             and record.request.parameters == self.parameters
             and record.request.limits == self.limits
             and record.request.seed == self.seed
@@ -392,13 +470,46 @@ class Optimizer:
                 )
             baseline_record = existing_baselines[-1]
         else:
-            baseline_record = await self.evaluate_candidate(baseline)
+            baseline_record = await self.evaluate_candidate(
+                baseline,
+                selection_set,
+                principal=EvaluationPrincipal.SYSTEM,
+            )
+
+        final_baseline: EvaluationRecord | None = None
+        final_definition = self.evaluation_plan.final
+        if final_definition is not None and self.evaluation_plan.evaluate_final_baseline:
+            final_set = final_definition.evaluation_set
+            existing_final_baselines = [
+                record
+                for record in self.engine.database.evaluations.values()
+                if record.request.candidate.id == baseline.id
+                and record.request.candidate.version == baseline.version
+                and record.backend_id == self.backend_id
+                and record.request.evaluation_set == final_set
+                and record.request.parameters == self.parameters
+                and record.request.limits == self.limits
+                and record.request.seed == self.seed
+                and record.backend == backend_provenance
+                and record.objective_spec == self.objective
+            ]
+            if skip_baseline_evaluation and existing_final_baselines:
+                final_baseline = existing_final_baselines[-1]
+            else:
+                final_baseline = await self.evaluate_candidate(
+                    baseline,
+                    final_set,
+                    principal=EvaluationPrincipal.SYSTEM,
+                )
 
         compatible = [
             record
             for record in self.engine.database.evaluations.values()
             if record.backend_id == self.backend_id
-            and record.request.evaluation_set == self.evaluation_set
+            and self.evaluation_plan.for_evaluation_set(
+                record.request.evaluation_set
+            )
+            is not None
             and record.request.parameters == self.parameters
             and record.request.limits == self.limits
             and record.request.seed == self.seed
@@ -446,6 +557,7 @@ class Optimizer:
 
         evaluated_candidate_ids = {
             record.request.candidate.id for record in evaluations
+            if record.request.evaluation_set == selection_set
         }
         pending = [
             candidate
@@ -453,6 +565,7 @@ class Optimizer:
             if candidate.id != baseline.id
             and candidate.id not in evaluated_candidate_ids
             and "producer_id" in candidate.metadata
+            and "trial" not in candidate.metadata
         ]
         pending.sort(
             key=lambda candidate: (
@@ -465,7 +578,11 @@ class Optimizer:
 
         async def evaluate(candidate: Candidate) -> EvaluationRecord:
             async with semaphore:
-                return await self.evaluate_candidate(candidate)
+                return await self.evaluate_candidate(
+                    candidate,
+                    selection_set,
+                    principal=EvaluationPrincipal.SYSTEM,
+                )
 
         if pending:
             async with asyncio.TaskGroup() as group:
@@ -475,22 +592,42 @@ class Optimizer:
             evaluations.extend(task.result() for task in pending_tasks)
 
         for round_number in range(start_round, self.max_rounds):
-            if generated >= self.max_candidates:
+            if generated >= proposal_limit:
                 break
             best = self._best(evaluations)
+            visible_evaluations = tuple(
+                record
+                for record in evaluations
+                if (
+                    definition := self.evaluation_plan.for_evaluation_set(
+                        record.request.evaluation_set
+                    )
+                )
+                is not None
+                and definition.access.agent_visible
+            )
+            evaluation_views = tuple(
+                project_evaluation(
+                    record,
+                    self.evaluation_plan.for_evaluation_set(
+                        record.request.evaluation_set
+                    ).access.disclosure,
+                )
+                for record in visible_evaluations
+            )
             context = OptimizationContext(
                 session_id=self.session_id or self.engine.evaluator.session_dir.name,
                 round=round_number,
                 workspace=self.workspace,
-                baseline=baseline_record,
-                evaluations=tuple(evaluations),
+                baseline=baseline,
+                evaluations=evaluation_views,
                 candidates=dict(candidates),
-                best=best,
+                best=(best.request.candidate if best is not None else None),
             )
             proposals = list(await self.strategy.propose(context))
             if not proposals:
                 break
-            remaining = self.max_candidates - generated
+            remaining = proposal_limit - generated
             proposals = proposals[:remaining]
             proposal_ids = [proposal.id for proposal in proposals]
             if len(proposal_ids) != len(set(proposal_ids)):
@@ -513,6 +650,7 @@ class Optimizer:
                         proposal=proposal,
                         context=context,
                         parent=parent,
+                        evaluation_records=visible_evaluations,
                     )
 
             async with asyncio.TaskGroup() as group:
@@ -547,9 +685,28 @@ class Optimizer:
                 ]
             evaluations.extend(task.result() for task in evaluation_tasks)
 
+        best = self._best(evaluations)
+        final_record: EvaluationRecord | None = None
+        if final_definition is not None and best is not None:
+            if (
+                final_baseline is not None
+                and best.request.candidate.id == baseline.id
+                and best.request.candidate.version == baseline.version
+            ):
+                final_record = final_baseline
+            else:
+                final_record = await self.evaluate_candidate(
+                    best.request.candidate,
+                    final_definition.evaluation_set,
+                    principal=EvaluationPrincipal.SYSTEM,
+                )
+                evaluations.append(final_record)
+
         return OptimizationResult(
             baseline=baseline_record,
             evaluations=tuple(evaluations),
             candidates=tuple(candidates.values()),
-            best=self._best(evaluations),
+            best=best,
+            final_baseline=final_baseline,
+            final=final_record,
         )

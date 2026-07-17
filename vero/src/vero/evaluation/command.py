@@ -43,7 +43,7 @@ class CommandBackendConfig(EvaluationModel):
     environment: dict[str, str] = Field(default_factory=dict)
     passthrough_environment: list[str] = Field(default_factory=list)
     staged_inputs: dict[str, str] = Field(default_factory=dict)
-    agent_context_inputs: list[str] = Field(default_factory=list)
+    agent_context_inputs: dict[str, list[str]] = Field(default_factory=dict)
 
     @field_validator("harness_root")
     @classmethod
@@ -121,10 +121,20 @@ class CommandBackendConfig(EvaluationModel):
         unknown = sorted(referenced - set(self.staged_inputs))
         if unknown:
             raise ValueError(f"unknown staged command inputs: {', '.join(unknown)}")
-        if len(self.agent_context_inputs) != len(set(self.agent_context_inputs)):
-            raise ValueError("agent_context_inputs names must be unique")
+        for evaluation, names in self.agent_context_inputs.items():
+            if not evaluation.strip():
+                raise ValueError("agent_context_inputs evaluation names must not be empty")
+            if len(names) != len(set(names)):
+                raise ValueError(
+                    f"agent_context_inputs for {evaluation!r} must be unique"
+                )
         unknown_context = sorted(
-            set(self.agent_context_inputs) - set(self.staged_inputs)
+            {
+                name
+                for names in self.agent_context_inputs.values()
+                for name in names
+            }
+            - set(self.staged_inputs)
         )
         if unknown_context:
             raise ValueError(
@@ -171,7 +181,7 @@ class CommandBackend:
         """Copy only explicitly allowlisted staged inputs into agent context."""
 
         resources = []
-        for name in self.config.agent_context_inputs:
+        for name in self.config.agent_context_inputs.get(evaluation_set.name, []):
             source = Path(self.config.staged_inputs[name]).resolve()
             if not source.exists():
                 raise ValueError(

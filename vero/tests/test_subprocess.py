@@ -1,6 +1,7 @@
 """Tests for subprocess termination on cancellation."""
 
 import asyncio
+import sys
 
 import pytest
 from vero.tools.bash import run_bash_command
@@ -81,7 +82,7 @@ finally:
     marker.unlink(missing_ok=True)
 """
             task = asyncio.create_task(
-                run_subprocess_with_tee(["python", "-c", script], timeout=None)
+                run_subprocess_with_tee([sys.executable, "-c", script], timeout=None)
             )
 
             # Wait for subprocess to start and create marker

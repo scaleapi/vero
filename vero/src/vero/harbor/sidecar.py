@@ -49,7 +49,7 @@ class SubmissionDisabledError(RuntimeError):
     """Raised when submission is disabled for this optimization task."""
 
 
-class EvaluationAccessPolicy(EvaluationModel):
+class SidecarEvaluationPolicy(EvaluationModel):
     """Agent access to one backend-owned evaluation-set partition."""
 
     backend_id: str
@@ -59,7 +59,7 @@ class EvaluationAccessPolicy(EvaluationModel):
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     expose_case_resources: bool = False
     agent_evaluable: bool = True
-    min_aggregate_cases: int = Field(default=5, ge=1)
+    min_aggregate_cases: int = Field(default=1, ge=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     allowed_parameters: list[str] = Field(default_factory=list)
     limits: EvaluationLimits | None = None
@@ -83,7 +83,7 @@ class EvaluationAccessPolicy(EvaluationModel):
         return (self.backend_id, self.evaluation_set_name, self.partition)
 
     @model_validator(mode="after")
-    def validate_parameters(self) -> EvaluationAccessPolicy:
+    def validate_parameters(self) -> SidecarEvaluationPolicy:
         if any(not name.strip() for name in self.parameters):
             raise ValueError("fixed evaluation parameter names must not be empty")
         if len(self.allowed_parameters) != len(set(self.allowed_parameters)):
@@ -172,7 +172,7 @@ class EvaluationSidecar:
         *,
         engine: EvaluationEngine,
         candidate_transport: CandidateTransport,
-        access_policies: list[EvaluationAccessPolicy],
+        access_policies: list[SidecarEvaluationPolicy],
         agent_volume: Path | None = None,
         admin_volume: Path | None = None,
         submit_enabled: bool = False,
@@ -196,7 +196,9 @@ class EvaluationSidecar:
             if self.agent_volume is not None
             else None
         )
-        self._policies: dict[tuple[str, str, str | None], EvaluationAccessPolicy] = {}
+        self._policies: dict[
+            tuple[str, str, str | None], SidecarEvaluationPolicy
+        ] = {}
         for policy in access_policies:
             if policy.key in self._policies:
                 raise ValueError(
@@ -212,7 +214,7 @@ class EvaluationSidecar:
         self,
         backend_id: str,
         evaluation_set: EvaluationSet,
-    ) -> EvaluationAccessPolicy:
+    ) -> SidecarEvaluationPolicy:
         key = (backend_id, evaluation_set.name, evaluation_set.partition)
         policy = self._policies.get(key)
         if policy is None or not policy.agent_evaluable:
@@ -223,7 +225,7 @@ class EvaluationSidecar:
 
     async def _enforce_aggregate_floor(
         self,
-        policy: EvaluationAccessPolicy,
+        policy: SidecarEvaluationPolicy,
         evaluation_set: EvaluationSet,
     ) -> None:
         if policy.disclosure != DisclosureLevel.AGGREGATE:

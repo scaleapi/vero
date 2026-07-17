@@ -21,7 +21,7 @@ class AgentAccessSpec(EvaluationModel):
     partition: str
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     expose_case_resources: bool = False
-    min_aggregate_cases: int = Field(default=5, ge=1)
+    min_aggregate_cases: int = Field(default=1, ge=1)
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
     max_cases_per_run: int | None = Field(default=None, ge=1)
@@ -92,6 +92,8 @@ class HarborBuildConfig(EvaluationModel):
     default_index: str = "https://pypi.org/simple"
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
+    infrastructure_max_attempts: int = Field(default=3, ge=1)
+    infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
     reward_key: str | None = None
     aggregate_attempts: Literal["best", "mean"] = "best"
     feedback_transcripts: bool = False

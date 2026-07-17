@@ -12,9 +12,9 @@ from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     CommandBackend,
     CommandBackendConfig,
+    EvaluationPlan,
     MetricSelector,
     ObjectiveSpec,
-    allow_all_evaluations,
 )
 from vero.optimization import CommandCandidateProducer, CommandCandidateProducerConfig
 from vero.runtime import create_optimization_session
@@ -193,9 +193,9 @@ printf '{"schema_version":1,"status":"success","metrics":{"score":%s}}' "$score"
                 selector=MetricSelector(metric="score"),
                 direction="maximize",
             ),
+            evaluation_plan=EvaluationPlan.single(),
             producers={"default": producer},
-            max_candidates=1,
-            authorization_resolver=allow_all_evaluations,
+            max_proposals=1,
         )
 
         result = await asyncio.wait_for(session.run(), timeout=180)

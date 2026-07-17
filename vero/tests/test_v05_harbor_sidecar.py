@@ -36,7 +36,7 @@ from vero.evaluation import (
 from vero.filesystem import AccessType, Filesystem
 from vero.harbor import (
     EvaluationAccessError,
-    EvaluationAccessPolicy,
+    SidecarEvaluationPolicy,
     EvaluationSidecar,
     GitCandidateTransport,
     SidecarEvaluationRequest,
@@ -200,18 +200,19 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False):
         engine=engine,
         candidate_transport=transport,
         access_policies=[
-            EvaluationAccessPolicy(
+            SidecarEvaluationPolicy(
                 backend_id="primary",
                 evaluation_set_name="benchmark",
                 partition="validation",
                 disclosure=DisclosureLevel.AGGREGATE,
+                min_aggregate_cases=5,
                 objective=ObjectiveSpec(
                     selector=MetricSelector(metric="score"),
                     direction="maximize",
                 ),
                 limits=EvaluationLimits() if fixed_limits else None,
             ),
-            EvaluationAccessPolicy(
+            SidecarEvaluationPolicy(
                 backend_id="secondary",
                 evaluation_set_name="public",
                 disclosure=DisclosureLevel.FULL,

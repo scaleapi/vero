@@ -12,8 +12,8 @@ from pydantic import Field, field_validator, model_validator
 from vero.evaluation import EvaluationModel
 from vero.optimization.models import (
     CandidateChange,
+    CandidateProductionContext,
     CandidateProposal,
-    OptimizationContext,
 )
 from vero.optimization.protocols import CandidateEvaluationGateway
 from vero.staging import SandboxStagingArea
@@ -119,7 +119,7 @@ class CommandCandidateProducer:
         self,
         *,
         proposal: CandidateProposal,
-        context: OptimizationContext,
+        context: CandidateProductionContext,
         workspace: Workspace,
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None:
@@ -151,15 +151,10 @@ class CommandCandidateProducer:
                 "producer": producer_root,
                 "round": str(context.round),
                 "instruction": proposal.instruction or "",
-                "best_candidate_id": best.request.candidate.id if best else "",
-                "best_version": best.request.candidate.version if best else "",
-                "best_value": (
-                    str(best.objective.value)
-                    if best is not None
-                    and best.objective is not None
-                    and best.objective.value is not None
-                    else ""
-                ),
+                "best_candidate_id": best.id if best else "",
+                "best_version": best.version if best else "",
+                # Evaluation values live in the authorized filesystem context.
+                "best_value": "",
             }
             command: list[str] = []
             for argument in self.config.command:
