@@ -55,6 +55,7 @@ class EvaluationSidecar:
         agent_volume: Path,
         admin_volume: Path,
         submit_enabled: bool = False,
+        base_commit: str | None = None,
     ):
         self.engine = engine
         self.split_accesses = split_accesses
@@ -62,6 +63,8 @@ class EvaluationSidecar:
         self.agent_volume = Path(agent_volume)
         self.admin_volume = Path(admin_volume)
         self.submit_enabled = submit_enabled
+        self.base_commit = base_commit
+        self._free_baseline_used = False
 
     # ------------------------------------------------------------------
     # Handlers (the HTTP layer resolves `admin` from auth and calls these)
@@ -69,7 +72,31 @@ class EvaluationSidecar:
 
     async def evaluate(self, req: EvalRequest, *, admin: bool = False) -> EvalSummary:
         sha = await self._transfer_commit(req.commit)
-        exp = await self.engine.evaluate(replace(req, commit=sha), admin=admin)
+        # The agent's FIRST eval of the seeded baseline is budget-free. The
+        # baseline is the reference every candidate is implicitly compared to,
+        # yet it can never win selection (auto_best excludes base_commit), so
+        # metering it forces a choice between optimizing blind and paying a
+        # budgeted eval for a commit that cannot be selected (observed live:
+        # an optimizer that skipped the reference could not tell a no-op edit
+        # from an improvement and quit with budget unspent). Capped at one:
+        # later baseline evals debit normally, so free compute is bounded.
+        free_baseline = (
+            not admin
+            and self.base_commit is not None
+            and sha == self.base_commit
+            and not self._free_baseline_used
+        )
+        exp = await self.engine.evaluate(
+            replace(req, commit=sha), admin=admin or free_baseline
+        )
+        # Consume the free slot only after the eval actually succeeds. Setting it
+        # before the await would burn the one free baseline on a transient engine
+        # failure (timeout, infra), forcing the agent to pay for the retry, which is
+        # the exact failure mode this feature prevents. Safe in the single-threaded
+        # asyncio loop: no await runs between the check above and this write.
+        if free_baseline:
+            self._free_baseline_used = True
+        # Route with the agent's real tier even when the eval was unmetered.
         result_path = self._route_results(exp, admin=admin)
         budget_remaining = None
         if not admin:
@@ -99,6 +126,10 @@ class EvaluationSidecar:
             submit_enabled=self.submit_enabled,
             budget=self.engine.budget.status(),
             split_accesses=self.split_accesses,
+            base_commit=self.base_commit,
+            free_baseline_available=(
+                self.base_commit is not None and not self._free_baseline_used
+            ),
         )
 
     # ------------------------------------------------------------------
