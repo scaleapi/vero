@@ -7,7 +7,13 @@ from pathlib import Path
 
 
 def test_advertised_python_matmul_evaluation_runs_end_to_end(tmp_path: Path):
-    script = Path(__file__).parents[1] / "examples" / "matmul-kernel" / "run.py"
+    script = (
+        Path(__file__).parents[2]
+        / "vero-tasks"
+        / "examples"
+        / "matmul-kernel"
+        / "run.py"
+    )
     environment = dict(os.environ)
     environment["UV_CACHE_DIR"] = str(
         Path(os.environ.get("UV_CACHE_DIR", tmp_path / "uv-cache")).resolve()

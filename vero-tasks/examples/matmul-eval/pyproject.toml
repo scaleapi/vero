@@ -13,4 +13,4 @@ build-backend = "hatchling.build"
 packages = ["src/matmul_eval"]
 
 [tool.uv.sources]
-scale-vero-tasks = { path = "../../../vero-tasks", editable = true }
+scale-vero-tasks = { path = "../..", editable = true }
