@@ -9,20 +9,17 @@ from typing import Any, Callable
 
 from agents import (
     Agent,
-    AgentsException,
     FunctionTool,
     ModelRetrySettings,
     ModelSettings,
     OpenAIChatCompletionsModel,
     RunConfig,
-    RunContextWrapper,
     RunResultStreaming,
     TResponseInputItem,
     retry_policies,
     set_tracing_disabled,
 )
 from agents.extensions.models.litellm_model import LitellmModel
-from agents.lifecycle import AgentHooks
 from pydantic import BaseModel
 
 from vero.agents.events import AgentEvent
@@ -47,17 +44,10 @@ from vero.utils.openai_agents import (
     run_agent_with_json_sanitization,
     strict_mode_from_model,
 )
-from vero.utils.tokens import get_token_count
 
 logger = logging.getLogger(__name__)
 
 set_tracing_disabled(True)
-
-
-class MaxTokenCountExceededError(AgentsException):
-    """Raised when the total token count exceeds the max token count."""
-
-    pass
 
 
 def default_tool_sets() -> list[ToolSet | object | Callable]:
@@ -76,49 +66,6 @@ def default_tool_sets() -> list[ToolSet | object | Callable]:
         think,
         WebFetch(),
     ]
-
-
-class VeroAgentHook(AgentHooks):
-    """Hook for the VeroAgent that manages token limits."""
-
-    def __init__(self, agent: VeroAgent):
-        self.vero_agent = agent
-
-    async def on_llm_start(
-        self,
-        context: RunContextWrapper,
-        agent: Agent,
-        system_prompt: str | None,
-        input_items: list[TResponseInputItem],
-    ) -> None:
-        """Triggered when the LLM starts a new turn."""
-
-        if isinstance(agent.model, (LitellmModel, OpenAIChatCompletionsModel)):
-            model = agent.model.model
-        elif agent.model is None:
-            model = ""
-        elif isinstance(agent.model, str):
-            model = agent.model
-        else:
-            raise ValueError(f"Unexpected type for model: {type(agent.model)}")
-
-        try:
-            token_count = get_token_count(result=input_items, model=model)
-            logger.info(f"Input token count: {token_count}")
-        except Exception as e:
-            logger.error(f"Error getting token count: {e}")
-            if self.vero_agent.max_tokens is not None:
-                raise e
-            else:
-                return
-
-        if (
-            self.vero_agent.max_tokens is not None
-            and token_count > self.vero_agent.max_tokens
-        ):
-            raise MaxTokenCountExceededError(
-                f"Total token count {token_count} exceeds max token count {self.vero_agent.max_tokens} for model {agent.model}"
-            )
 
 
 def _default_oai_agent(
@@ -169,7 +116,6 @@ class VeroAgent:
     tool_sets: list[ToolSet | object | Callable] = field(
         default_factory=default_tool_sets
     )
-    max_tokens: int | None = None
     max_retries: int = 3
     event_timeout: int | None = 60 * 12
     state: list[TResponseInputItem] | None = field(default=None, repr=False)
@@ -178,7 +124,6 @@ class VeroAgent:
     _tools: dict[type | Callable, list[FunctionTool]] = field(
         default_factory=dict, repr=False
     )
-    _agent_hook: VeroAgentHook | None = field(default=None, repr=False)
     _run_result: RunResultStreaming | None = field(default=None, repr=False)
 
     @classmethod
@@ -392,13 +337,7 @@ class VeroAgent:
             output_type=self.oai_agent.output_type,
             tools=tools,
             instructions=instructions or self.oai_agent.instructions,
-            hooks=self._get_agent_hook(),
         )
-
-    def _get_agent_hook(self) -> VeroAgentHook:
-        if self._agent_hook is None:
-            self._agent_hook = VeroAgentHook(agent=self)
-        return self._agent_hook
 
     def _get_tools(self) -> list[FunctionTool]:
         tools = []
