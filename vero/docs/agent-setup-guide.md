@@ -1,386 +1,133 @@
-# Vero Task Setup Guide (for Coding Agents)
+# VeRO setup guide (for coding agents)
 
-This guide is for coding agents (Claude, Cursor, Copilot, etc.) helping users set up vero evaluation tasks. Follow these steps in order.
+This guide helps a coding agent (Claude, Cursor, Copilot, …) set up and run a
+VeRO optimization for a user. VeRO optimizes a **versioned program** against an
+**evaluation**: a producer (usually a coding agent) proposes candidate edits, a
+trusted evaluator scores them, and the best candidate is selected.
+
+You do two things: (1) author an **evaluation harness**, and (2) run the
+**optimizer**. There is no `.veroaccess`, `Policy`, or resource/namespace setup —
+those were removed. Containment now comes from the sandbox the producer runs in,
+and disclosure is controlled per evaluation set.
 
 ## Before you start
 
-### Read and understand
+Understand the user's program (what it does, how it's invoked, what "better"
+means) and read a matching example:
 
-1. **The user's agent code** — understand what it does, its inputs/outputs, and how it's invoked.
-2. **`src/vero/core/scaffolds/vero_tasks.py`** — the scaffold template. Read it to understand the `TaskOutput`/`TaskResult` contract.
-3. **The user's dataset** — what fields are in each row? What split names exist (train, test, validation)?
-4. **`examples/matmul-kernel/`** — a complete working example with inference, evaluation, and a dataset.
+- `examples/c-matmul/` — a language-neutral **command harness** + `vero.toml`.
+- `examples/circle-packing/` — a Python program scored by a command harness.
+- `../vero-tasks/examples/matmul-{kernel,eval}/` — a **Python task** using the
+  `scale-vero-tasks` protocol.
+- `examples/harbor-circle-packing/` — a **Harbor** outer loop (contained agent)
+  with a simple command inner loop.
 
-### Ask the user
+## 1. Author the evaluation
 
-Before writing any code, clarify:
+Pick whichever fits the user's program.
 
-1. **What does a single evaluation sample look like?** What fields are in the dataset? (e.g., `input`, `expected_output`, `question`, `answer`)
-2. **How should the agent be invoked?** Is it a function call, an API call, a subprocess? Does it need specific imports?
-3. **How should outputs be scored?** Exact match? Fuzzy match? LLM-as-judge? Numeric comparison? Timing?
-4. **What environment variables does inference need?** API keys, base URLs, model names?
-5. **Is evaluation separate from the agent project?** Should task code live in the agent package or a separate `task_project`?
+### Option A — command harness (any language)
 
-## Step-by-step setup
-
-### 1. Verify project structure
-
-The agent project must be a uv-managed Python package with git:
-
-```
-my-agent/
-├── pyproject.toml          # Must have [project] section
-├── src/my_agent/
-│   ├── __init__.py
-│   └── ...                 # Agent code
-└── .git/
-```
-
-Run `vero check` to validate:
+Write a script that reads a request JSON and writes a report JSON. VeRO's
+`CommandBackend` invokes it with placeholders it substitutes at run time:
 
 ```bash
-vero check --project-path .
+python evaluate.py --workspace {workspace} --request {request} \
+                   --report {report} --artifacts {artifacts}
 ```
 
-### 2. Initialize the task scaffold
+- `{workspace}` — the candidate checkout to score.
+- `{request}` — JSON: `{"schema_version": 1, "request": {"seed": <int|null>, ...}}`.
+- `{report}` — write JSON: `{"schema_version": 1, "status": "success",
+  "metrics": {"<name>": <float>, ...}}` (a **dict of metrics** — one becomes the
+  objective; others can be constraints or diagnostics).
 
-```bash
-cd my-agent
-vero init tasks --task main
-```
+See `examples/circle-packing/harness/` for a complete scorer.
 
-This creates:
+### Option B — Python task (`scale-vero-tasks`)
 
-```
-src/my_agent/vero_tasks/
-├── __init__.py     # Imports the task module
-└── main.py         # Inference + evaluation functions
-```
-
-It also adds `scale-vero` as a dependency in `pyproject.toml`.
-
-### 3. Implement run_inference
-
-Edit `src/my_agent/vero_tasks/main.py`. The inference function receives one dataset row and returns a `TaskOutput`:
+For Python benchmarks, use the task protocol (`../vero-tasks`):
 
 ```python
+from vero_tasks import TaskContext, TaskOutput, TaskResult, create_task
+
+task = create_task("main", required_env_vars=["OPENAI_API_KEY"])
+
 @task.inference()
-async def run_inference(
-    task: dict, evaluation_parameters: EvaluationParameters
-) -> TaskOutput:
-    # task is a dict with the dataset row fields
-    # Return TaskOutput wrapping your agent's output
-    ...
-    return TaskOutput(output=result)
-```
+async def infer(case: dict, context: TaskContext) -> TaskOutput:
+    from my_agent import run_agent
+    return TaskOutput(output=await run_agent(case["question"]))
 
-**Key rules:**
-
-- `task` is a raw dict from the dataset row. Access fields like `task["question"]`.
-- `evaluation_parameters.task_params` contains extra params passed via `Policy(evaluation_parameters=BaseEvaluationParameters(task_params={...}))`. Use for model name, temperature, etc.
-- Return value is `TaskOutput(output=<any serializable value>)`. The `output` can be a string, dict, list, number — whatever your evaluation function needs.
-- Function must be `async`. Use `await` for async agent calls.
-- Do NOT catch exceptions — let them propagate so vero records them as errors.
-
-**Common patterns:**
-
-```python
-# Simple function call
-from my_agent import run_agent
-result = await run_agent(task["input"])
-return TaskOutput(output=result)
-
-# LLM call via litellm
-from litellm import acompletion
-response = await acompletion(model="gpt-4", messages=[{"role": "user", "content": task["question"]}])
-return TaskOutput(output=response.choices[0].message.content)
-
-# OpenAI Agents SDK
-from agents import Agent, Runner
-agent = Agent(name="my-agent", model=model, instructions=task["instructions"])
-result = await Runner.run(agent, input=task["input"])
-return TaskOutput(output=result.final_output)
-```
-
-### 4. Implement run_evaluation
-
-The evaluation function scores a single inference output:
-
-```python
 @task.evaluation()
-async def run_evaluation(
-    task: dict,
-    output: TaskOutput,
-    evaluation_parameters: EvaluationParameters,
-) -> TaskResult:
-    # task: the original dataset row
-    # output: the TaskOutput from run_inference
-    # Return TaskResult with score and optional feedback
-    ...
-    return TaskResult(output=prediction, score=score, feedback=feedback)
+async def evaluate(case: dict, output: TaskOutput, context: TaskContext) -> TaskResult:
+    return TaskResult.from_task_output(
+        output, score=float(output.output == case["answer"])
+    )
 ```
 
-**Key rules:**
+The `scale-vero-tasks` runner adapts this to the same command-harness contract.
+See `../vero-tasks/README.md` and `../vero-tasks/examples/matmul-eval/`.
 
-- `output.output` is whatever you returned from `TaskOutput(output=...)` in inference.
-- `score` should be a float. Convention: higher is better (0.0 = worst, 1.0 = best) for accuracy-style tasks. For timing tasks, lower is better.
-- `feedback` is an optional string shown to the optimizer agent — make it informative.
-- `metrics` is an optional dict for additional tracked values.
-- Return `TaskResult(output=..., score=..., feedback=..., metrics={...})`.
+**Rules:** functions are `async`; let exceptions propagate (VeRO records them as
+errored cases); keep heavy imports inside functions; declare API keys via
+`required_env_vars`; the score is a float (define whether higher or lower is
+better via the objective's `direction`).
 
-**Common evaluation patterns:**
+## 2. Run the optimizer
 
-```python
-# Exact match
-expected = task["expected"]
-score = 1.0 if output.output == expected else 0.0
+The target must be a git repo whose working tree is clean.
 
-# Contains / regex
-import re
-match = re.search(r"Answer: (\w+)", output.output)
-score = 1.0 if match and match.group(1) == task["answer"] else 0.0
-
-# Numeric tolerance
-score = 1.0 if abs(float(output.output) - task["expected"]) < 0.01 else 0.0
-
-# LLM-as-judge
-from litellm import acompletion
-response = await acompletion(
-    model="gpt-4",
-    messages=[{"role": "user", "content": f"Rate this answer 0-1:\nQuestion: {task['question']}\nAnswer: {output.output}"}],
-)
-score = float(response.choices[0].message.content)
-
-# Timing (lower is better)
-score = output.output["time_ms"]  # Optimizer minimizes this
-```
-
-### 5. Add required_env_vars
-
-If inference or evaluation needs API keys, declare them:
-
-```python
-task = create_task("main", required_env_vars=["LITELLM_BASE_URL", "LITELLM_API_KEY"])
-```
-
-This enables early validation — `vero check` and the evaluator will catch missing vars before launching inference.
-
-### 6. Create a dataset
-
-Vero uses HuggingFace `DatasetDict`. Create one and save to disk:
-
-```python
-from datasets import Dataset, DatasetDict
-
-ds = DatasetDict({
-    "test": Dataset.from_dict({
-        "input": ["What is 2+2?", "Capital of France?"],
-        "expected": ["4", "Paris"],
-    }),
-    "train": Dataset.from_dict({
-        "input": ["What is 3+3?", "Capital of Germany?"],
-        "expected": ["6", "Berlin"],
-    }),
-})
-ds.save_to_disk("./data/my-dataset")
-```
-
-Or pass a `DatasetDict` directly to `Policy(dataset=ds)` in Python — no need to save to disk.
-
-### 7. Configure filesystem access (optional)
-
-`.veroaccess` controls what the optimizer agent can read, write, or must avoid. It protects evaluation code, test data, and secrets from modification.
-
-**Ask the user:**
-
-- Are there files the optimizer should never touch? (test data, credentials, config)
-- Are there files it should read but not modify? (test suites, task definitions)
-- Should the default be "write everything" or more restrictive?
-
-**When to set up `.veroaccess`:**
-
-- **Always recommended** if the project has test data, evaluation code, or secrets.
-- **Skip** for simple projects where everything is fair game.
-
-**How to set up:**
+### Config-driven
 
 ```bash
-# Auto-generate from project structure (scans directories, applies sensible defaults)
-vero init accesses --auto
-
-# Or use the bundled defaults
-vero init accesses --default
-
-# Or interactive mode (walk through each directory)
-vero init accesses --interactive
+vero init ./run                 # scaffolds run/vero.toml (+ target/, harness/)
+# edit run/vero.toml
+vero check    --config run/vero.toml    # validate paths, git, eval refs
+vero evaluate --config run/vero.toml    # score the baseline only
+vero run      --config run/vero.toml    # optimize
 ```
 
-This creates a `.veroaccess` file in the project root:
+`vero.toml` sections: `[target]` (root, ref), `[backend]` (kind = `command`,
+`harness_root`, `command`), one or more `[[evaluations]]` (name, partition,
+`agent_can_evaluate`, `disclosure`, optional `agent_budget`), `[protocol]`
+(`selection_evaluation`, `final_evaluation`, `max_proposals`), `[objective]`
+(metric, direction), and `[optimizer]` (`kind = "vero"`, optional `model`,
+`instruction`).
 
-```
-[exclude]
-# Agent cannot access these at all
-tests/data/**
-**/__pycache__/**
-.env
-
-[read]
-# Agent can read but not modify
-tests/**
-vero_tasks/**
-.veroaccess
-
-[write]
-# Agent has full access (everything not listed above)
-src/**
-```
-
-**Rules:**
-
-- Last matching rule wins (like `.gitignore`)
-- Three access levels: `exclude` (no access), `read` (read-only), `write` (read + write)
-- Default for unlisted paths is `write` (configurable via `Policy(filesystem_default_access=...)`)
-- `.veroaccess` itself is always read-only (enforced programmatically)
-
-### 8. Set up VeroResources (optional)
-
-Resources let you mark specific functions or classes for targeted optimization. Instead of the optimizer editing files by path, it edits resources by name — constraining changes to specific, declared targets.
-
-**Ask the user:**
-
-- Are there specific functions the optimizer should focus on? (prompts, scoring logic, model config)
-- Would they prefer the optimizer to only modify marked functions, not arbitrary files?
-- What namespace grouping makes sense? (e.g., "prompts", "models", "evaluators")
-
-**When to use resources:**
-
-- When you want to **constrain** what the optimizer can change (e.g., only the prompt function)
-- When the project has many files but only a few are optimization targets
-- When using `ResourceControl` tool instead of `FileWrite`
-
-**Skip if:** the optimizer should have free rein to edit any file.
-
-**How to set up:**
-
-1. Decorate target functions with `@resource(namespace)`:
-
-```python
-from vero.core.resource import resource
-
-@resource("prompts")
-def system_prompt() -> str:
-    """The system prompt for the agent."""
-    return "You are a helpful assistant..."
-
-@resource("prompts")
-def format_output(raw: str) -> str:
-    """Post-process model output."""
-    return raw.strip()
-```
-
-2. Use `ResourceControl` in the tool set:
-
-```python
-from vero.tools import ResourceControl
-
-# Only allow editing resources in the "prompts" namespace
-agent = VeroAgent(tool_sets=[
-    ResourceControl(allowed_namespaces={"prompts"}),
-    # ... other tools
-])
-```
-
-3. Pass `--resources` flag in the matmul example to see it in action.
-
-**Key rules:**
-
-- `@resource` is a marker — it doesn't change the function's behavior at runtime
-- Resources are discovered via AST parsing (no code execution needed)
-- The optimizer sees resources by `namespace.name` (e.g., `prompts.system_prompt`)
-- Resource integrity is validated — the decorator can't be removed or added by the optimizer
-- Multiple namespaces can coexist in the same file
-
-### 9. Verify with vero check
-
-> Steps 7 and 8 are optional. Continue here after implementing inference + evaluation.
+### One-shot (flags)
 
 ```bash
-vero check --project-path . --task main --dataset ./data/my-dataset
+vero optimize ./target \
+  --harness-root ./harness \
+  --evaluate "python3 {harness}/evaluate.py --workspace {workspace} --request {request} --report {report} --artifacts {artifacts}" \
+  --agent vero \
+  --instruction "Improve the program without changing its intended behavior." \
+  --metric score --direction maximize \
+  --evaluation-set default --max-proposals 4 --max-turns 60
 ```
 
-Expected output:
+## 3. The optimizer agent (`--agent vero`)
 
-```
-  [OK]   uv project found
-  [OK]   Git repo: /path/to/my-agent
-  [OK]   Task discovery: my_agent.vero_tasks (1 task(s))
-         - main: OK
-  [OK]   Env vars for 'main': all set
-  [OK]   Dataset: ['test', 'train'] {'test': 2, 'train': 2}
+`VeroAgent` runs on the OpenAI Agents SDK. Its harness runs on the host; its
+shell/file effects run inside a sandbox (bound to the candidate checkout) via
+function tools (`shell`, `read_file`, `write_file`), plus an `evaluate` tool for
+mid-run self-scoring. There are no custom bash/grep/git tools to configure and no
+in-process ACLs — the sandbox is the boundary.
 
-RESULT: All checks passed
-```
+- **Model:** any provider via LiteLLM. Set `VERO_OPTIMIZER_MODEL`
+  (e.g. `openai/gpt-5.4`, `anthropic/claude-sonnet-4-5-...`) or `[optimizer] model`.
+- **Containment:** the sandbox client is the seam — local for fast/trusted runs;
+  for a contained/untrusted agent, run it through **Harbor** (see
+  `examples/harbor-circle-packing/`).
+- **Strategy:** the default proposes one candidate per round; for
+  population/evolutionary search use `EvolutionaryStrategy`
+  (`vero.optimization.EvolutionaryStrategy`).
 
-### 10. Run a test evaluation
+## Don't
 
-```bash
-vero evaluate \
-  --project-path . \
-  --task main \
-  --dataset ./data/my-dataset \
-  --split test \
-  --num-samples 2
-```
-
-This runs inference + evaluation on 2 samples. Check:
-
-- No errors in output
-- Scores make sense
-- Feedback messages are informative
-
-### 11. Run optimization
-
-```bash
-vero run \
-  --project-path . \
-  --task main \
-  --dataset ./data/my-dataset \
-  --train-budget 5 \
-  --max-turns 100
-```
-
-Or in Python:
-
-```python
-from vero.policy import Policy
-from vero.agents.vero import VeroAgent
-
-policy = Policy(
-    project_path="./my-agent",
-    dataset="./data/my-dataset",
-    agent=VeroAgent(),
-    task="main",
-    train_budget=5,
-    max_turns=100,
-)
-best = await policy.run()
-```
-
-## What NOT to do
-
-- **Don't modify `vero_tasks/` during optimization.** The optimizer agent edits the agent code, not the evaluation code. Keep scoring logic immutable. Use `task_project` for external eval code if needed.
-- **Don't hardcode absolute paths** in task code. Use relative imports and `evaluation_parameters.task_params` for configuration.
-- **Don't suppress exceptions** in inference. Let errors propagate — vero tracks them as error samples.
-- **Don't import heavy dependencies at module level** in task files. Use in-function imports for LLM clients, large libraries, etc. The task module is imported during discovery which should be fast.
-- **Don't put secrets in code.** Use `required_env_vars` and environment variables.
-
-## Reference
-
-| Type | Description |
-|------|-------------|
-| `TaskOutput(output=...)` | Wraps inference output. `output` can be any serializable value. |
-| `TaskResult(output=..., score=..., feedback=..., metrics={...})` | Evaluation result. `score` is float, `feedback` is str, `metrics` is dict. |
-| `EvaluationParameters` | Has `.task_params` (dict), `.timeout`, `.max_concurrency`, `.run` (candidate info). |
-| `create_task(name, required_env_vars=[...])` | Register a task. Name must match `Policy(task=...)`. |
-| `@task.inference()` | Decorator for inference function. Signature: `(task: dict, evaluation_parameters) -> TaskOutput`. |
-| `@task.evaluation()` | Decorator for evaluation function. Signature: `(task: dict, output: TaskOutput, evaluation_parameters) -> TaskResult`. |
+- Don't let the harness/task code be edited during optimization — it scores the
+  candidate and must stay fixed (keep it in `--harness-root`, outside the target).
+- Don't hardcode absolute paths in harness/task code; use the `{...}` placeholders
+  and request parameters.
+- Don't suppress exceptions in inference/evaluation — VeRO records them.
+- Don't put secrets in code; declare them as env vars.
