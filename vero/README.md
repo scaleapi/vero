@@ -1,9 +1,18 @@
-# VeRO: a harness for agents to optimize programs
+# VeRO: a harness for agents to optimize programs, text, and agents
 
-VeRO gives an optimizer a program to edit, a controlled way to evaluate it, and
-durable memory of everything it tried. The target can be an agent, a prompt, a
-compiler pass, a CUDA kernel, a matrix multiplication function, or any other
-Git-versioned program.
+VeRO gives an optimizer something to edit, a controlled way to evaluate it, and
+durable memory of everything it tried. The target is anything you can put under
+Git and score:
+
+- a **program** — from a single function to a whole multi-file codebase (a
+  compiler pass, a CUDA kernel, a matmul, a service);
+- **text** — a prompt, specification, config, or document;
+- an **agent** — its scaffold, tools, and prompts.
+
+Agents are programs, but not everyone reads "program" that way, so VeRO calls
+them out as a first-class target: it was introduced to optimize agents and
+generalizes the same version / evaluate / select loop to any Git-versioned
+artifact — a single file or an entire repository.
 
 The target and evaluator do not need to be Python. VeRO's built-in command
 backend communicates with an external evaluation harness through versioned JSON,
@@ -645,7 +654,7 @@ that delegates proposals to several specialized producers.
 
 | Concept | Meaning |
 | --- | --- |
-| `Candidate` | A program identity plus an opaque workspace version and lineage |
+| `Candidate` | A target identity (a program, text, or agent) plus an opaque workspace version and lineage |
 | `EvaluationSet` | A backend-owned collection or selection of evaluation cases |
 | `EvaluationPlan` | Named evaluations, agent access, independent budgets, canonical selection, and optional hidden final evaluation |
 | `EvaluationRecord` | The durable request, report, provenance, and objective result |

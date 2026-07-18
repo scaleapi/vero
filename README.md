@@ -1,12 +1,15 @@
-# VeRO: a harness for agents to optimize programs
+# VeRO: a harness for agents to optimize programs, text, and agents
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-VeRO gives a coding agent a program to edit, an evaluation boundary, and durable
-memory of every candidate it tried. The target can be an agent, a prompt, a
-compiler pass, a CUDA kernel, a matrix multiplication function, or any other
-Git-versioned program.
+VeRO gives a coding agent something to edit, an evaluation boundary, and durable
+memory of every candidate it tried. The target is anything you can put under Git
+and score — a **program** (a single function up to a whole codebase), **text**
+(a prompt, spec, or config), or an **agent** (its scaffold, tools, and prompts).
+Agents are programs, but not everyone reads "program" that way, so VeRO names
+them explicitly: it was introduced to optimize agents and generalizes the same
+version / evaluate / select loop to any Git-versioned artifact.
 
 ```text
 strategy -> candidate producers -> evaluation backends -> selection
