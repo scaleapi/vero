@@ -27,7 +27,6 @@ from vero.evaluation import (
     project_evaluation,
 )
 from vero.evaluation.persistence import _atomic_write_json
-from vero.filesystem import AccessRule, AccessType
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
@@ -504,33 +503,8 @@ class WorkspaceContextManager:
             {"schema_version": 1, "evaluations": evaluations},
         )
 
-    def _configure_read_access(self) -> None:
-        patterns = {
-            AGENT_CONTEXT_DIRECTORY,
-            f"{AGENT_CONTEXT_DIRECTORY}/**",
-        }
-        accesses = [
-            access
-            for access in self.workspace.accesses
-            if access.pattern not in patterns
-        ]
-        self.workspace.set_access(
-            [
-                *accesses,
-                *(
-                    AccessRule(
-                        access_type=AccessType.READ,
-                        pattern=pattern,
-                    )
-                    for pattern in sorted(patterns)
-                ),
-            ],
-            default_access=self.workspace.default_access,
-        )
-
     async def initialize(self) -> None:
         async with self._lock:
-            self._configure_read_access()
             await self.directory.reset()
             await self.directory.write_header(
                 session_id=self.session_id,

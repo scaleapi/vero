@@ -48,7 +48,6 @@ from vero.evaluation import (
 )
 from vero.evaluation import persistence
 import vero.evaluation.budget as budget_module
-from vero.filesystem import AccessType, Filesystem
 from vero.workspace import Workspace
 
 
@@ -60,7 +59,6 @@ class StubWorkspace(Workspace):
         self._dirty = dirty
         self.at_calls: list[str] = []
         self.copy_calls: list[str] = []
-        self._fs = Filesystem(root=root, default_access=AccessType.WRITE)
 
     @property
     def sandbox(self):

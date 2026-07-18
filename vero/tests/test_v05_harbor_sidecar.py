@@ -35,7 +35,6 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveSpec,
 )
-from vero.filesystem import AccessType, Filesystem
 from vero.harbor import (
     EvaluationAccessError,
     EvaluationJobStatus,
@@ -55,7 +54,6 @@ class StubWorkspace(Workspace):
         root.mkdir(parents=True, exist_ok=True)
         self._root = root
         self._version = version
-        self._fs = Filesystem(root=root, default_access=AccessType.WRITE)
 
     @property
     def sandbox(self):

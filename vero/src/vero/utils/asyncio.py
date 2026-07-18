@@ -42,6 +42,48 @@ async def anext_with_timeout(it: AsyncIterator[T], timeout: int = 5) -> T:
         return await anext(it)
 
 
+async def run_bash_command(cmd: list[str], timeout: int | None = None) -> str:
+    """Run a Bash command and return its output.
+
+    Deprecated: tools should use sandbox.run() instead.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    async def terminate_process():
+        """Terminate process, shielded from cancellation."""
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        stdout_str = stdout.decode().strip()
+        stderr_str = stderr.decode().strip()
+        if proc.returncode == 0:
+            return stdout_str
+        else:
+            raise CalledProcessError(
+                returncode=proc.returncode,
+                cmd=cmd,
+                output=stdout_str,
+                stderr=stderr_str,
+            )
+    except asyncio.TimeoutError:
+        await asyncio.shield(terminate_process())
+        cmd_str = " ".join(cmd)
+        raise TimeoutError(f"Command '{cmd_str}' timed out after {timeout} seconds")
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        await asyncio.shield(terminate_process())
+        raise
+
+
 async def run_subprocess_with_tee(
     cmd: list[str],
     timeout: float | None = None,

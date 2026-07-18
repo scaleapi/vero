@@ -4,10 +4,10 @@ import asyncio
 import sys
 
 import pytest
-from vero.tools.bash import run_bash_command
 from vero.utils.asyncio import (
     SubprocessCancelledError,
     SubprocessTimeoutError,
+    run_bash_command,
     run_subprocess_with_tee,
 )
 

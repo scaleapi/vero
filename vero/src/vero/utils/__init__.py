@@ -3,6 +3,7 @@ from .asyncio import (
     SubprocessResult,
     SubprocessTimeoutError,
     anext_with_timeout,
+    run_bash_command,
     run_subprocess_with_tee,
 )
 from .general import (
@@ -17,6 +18,7 @@ __all__ = [
     "camel_to_snake",
     "paginate",
     "recursively_serialize",
+    "run_bash_command",
     "run_subprocess_with_tee",
     "strip_ansi",
     "SubprocessCancelledError",

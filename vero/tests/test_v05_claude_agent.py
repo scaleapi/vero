@@ -79,7 +79,7 @@ async def test_claude_agent_implements_canonical_coding_agent_contract(
 ):
     gateway = StubEvaluationGateway()
     evaluation_tools = EvaluationTools()
-    agent = ClaudeCodeAgent(tool_sets=[evaluation_tools], enable_hooks=False)
+    agent = ClaudeCodeAgent(tool_sets=[evaluation_tools])
     result_message = ResultMessage(
         subtype="success",
         duration_ms=10,

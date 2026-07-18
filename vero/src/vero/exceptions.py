@@ -31,12 +31,6 @@ class StringNotFoundError(FileEditException):
     pass
 
 
-class AccessDeniedError(PermissionError):
-    """Error raised when access is denied."""
-
-    pass
-
-
 class CommitNotInBranchHistory(PermissionError):
     """Error raised when a commit is not in the allowed branch history."""
 

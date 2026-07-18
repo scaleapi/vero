@@ -199,41 +199,6 @@ class TestSubdirProject:
 
 class TestDirtyState:
     @pytest.mark.asyncio
-    async def test_canonical_validation_accepts_equivalent_workspace_root(
-        self, tmp_path
-    ):
-        actual = tmp_path / "actual"
-        actual.mkdir()
-        (actual / "main.py").write_text("x = 1\n", encoding="utf-8")
-        alias = tmp_path / "alias"
-        alias.symlink_to(actual, target_is_directory=True)
-
-        sandbox = LocalSandbox(root=tmp_path)
-        workspace = GitWorkspace(
-            sandbox=sandbox,
-            root=str(alias),
-            project_path=str(alias),
-        )
-
-        assert await workspace.validate_read_path("main.py") == str(actual / "main.py")
-        assert await workspace.validate_write_path("new.py") == str(actual / "new.py")
-
-    @pytest.mark.asyncio
-    async def test_canonical_validation_rejects_symlink_escape(
-        self, workspace, tmp_path
-    ):
-        outside = tmp_path.parent / f"{tmp_path.name}-outside"
-        outside.mkdir()
-        (outside / "secret.txt").write_text("secret", encoding="utf-8")
-        link = Path(workspace.project_path) / "escape"
-        link.symlink_to(outside, target_is_directory=True)
-
-        with pytest.raises(PermissionError, match="Read access denied"):
-            await workspace.validate_read_path("escape/secret.txt")
-        with pytest.raises(PermissionError, match="Write access denied"):
-            await workspace.validate_write_path("escape/new.txt")
-
-    @pytest.mark.asyncio
     async def test_clean_initially(self, workspace):
         assert not await workspace.is_dirty()
 

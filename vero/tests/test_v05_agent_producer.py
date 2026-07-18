@@ -83,9 +83,6 @@ class CheckpointingCodingAgent:
         assert max_turns == 5
         context_root = Path(context.workspace.project_path) / ".vero"
         assert not await context.workspace.is_dirty()
-        assert context.workspace.can_read(".vero/manifest.json")
-        assert not context.workspace.can_write(".vero")
-        assert not context.workspace.can_write(".vero/manifest.json")
         manifest = json.loads((context_root / "manifest.json").read_text())
         assert manifest["parent_candidate_id"] == context.parent.id
         candidate_index = json.loads(

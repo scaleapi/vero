@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
 from typing import AsyncGenerator
 
-from vero.filesystem import AccessType, WorkspaceAccessPolicy
 from vero.sandbox import Sandbox
 from vero.workspace.base import Workspace
 
@@ -51,11 +50,6 @@ class GitWorkspace(Workspace):
         self._name = name or _basename(root)
         self._worktree_owner_root = worktree_owner_root
         self._lock = asyncio.Lock()
-        # Default: fully open access. Policy.init() narrows via set_access().
-        self._fs = WorkspaceAccessPolicy(
-            root=self._project_path,
-            default_access=AccessType.WRITE,
-        )
 
     @property
     def sandbox(self) -> Sandbox:

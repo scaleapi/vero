@@ -17,21 +17,13 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
 )
 from claude_agent_sdk.types import (
-    HookContext,
-    HookEvent,
-    HookMatcher,
     Message,
-    PostToolUseHookInput,
-    PostToolUseHookSpecificOutput,
-    PreToolUseHookInput,
-    PreToolUseHookSpecificOutput,
     SystemPromptPreset,
 )
 from pydantic import BaseModel, create_model
 
 from vero.agents.events import AgentEvent
 from vero.agents.protocol import AgentContext, AgentRequirements, AgentRunResult
-from vero.filesystem import AccessType
 from vero.tools.base import ToolSet
 from vero.tools.evaluation import EvaluationTools
 from vero.tools.utils import get_tools_from_class
@@ -43,81 +35,6 @@ logger = logging.getLogger(__name__)
 def default_tool_sets() -> list:
     """Default tool sets for ClaudeCodeAgent."""
     return [EvaluationTools()]
-
-
-class ClaudeCodeHookBuilder:
-    """Builds hooks for the ClaudeCodeAgent."""
-
-    def __init__(self, agent: ClaudeCodeAgent):
-        self.agent = agent
-
-    def get_hooks(self) -> dict[HookEvent, list[HookMatcher]]:
-        return {
-            "PostToolUse": [
-                HookMatcher(matcher="Write|Edit", hooks=[self.on_write_edit]),
-            ],
-            "PreToolUse": [
-                HookMatcher(matcher="Bash", hooks=[self.check_bash_command])
-            ],
-        }
-
-    async def on_write_edit(
-        self, input_data: PostToolUseHookInput, tool_use_id: str, context: HookContext
-    ) -> PostToolUseHookSpecificOutput | dict:
-        tool_name = input_data["tool_name"]
-        tool_input = input_data["tool_input"]
-
-        if tool_name not in ["Write", "Edit"]:
-            return {}
-
-        commit_message = f"Committing changes from command: {tool_name} to file: {tool_input.get('file_path', '')}"
-        logger.info(commit_message)
-
-        if self.agent._context is None:
-            return {}
-
-        try:
-            await self.agent._context.workspace.save(commit_message)
-        except Exception as e:
-            return PostToolUseHookSpecificOutput(
-                hookEventName="PostToolUse",
-                additionalContext=f"Error committing changes: {e}",
-            )
-        return PostToolUseHookSpecificOutput(
-            hookEventName="PostToolUse",
-            additionalContext=f"Committed changes: {commit_message}",
-        )
-
-    async def check_bash_command(
-        self, input_data: PreToolUseHookInput, tool_use_id: str, context: HookContext
-    ) -> PreToolUseHookSpecificOutput | dict:
-        tool_name = input_data["tool_name"]
-        tool_input = input_data["tool_input"]
-        if tool_name != "Bash":
-            return {}
-        command = tool_input.get("command", "")
-
-        def cannot_checkout_other_branches(cmd: str) -> bool:
-            return "git" in cmd and "checkout" in cmd
-
-        def cannot_do_recursive_deletes(cmd: str) -> bool:
-            return "rm" in cmd and ("-rf" in cmd or "-r" in cmd)
-
-        def cannot_echo_env_vars(cmd: str) -> bool:
-            return "echo" in cmd and "$" in cmd
-
-        for test in [
-            cannot_checkout_other_branches,
-            cannot_do_recursive_deletes,
-            cannot_echo_env_vars,
-        ]:
-            if test(command):
-                return PreToolUseHookSpecificOutput(
-                    hookEventName="PreToolUse",
-                    permissionDecision="deny",
-                    permissionDecisionReason=f"Command failed forbidden pattern test: {test.__name__}",
-                )
-        return {}
 
 
 def _default_claude_options() -> ClaudeAgentOptions:
@@ -136,7 +53,6 @@ class ClaudeCodeAgent:
 
     options: ClaudeAgentOptions = field(default_factory=_default_claude_options)
     tool_sets: list[ToolSet] = field(default_factory=default_tool_sets)
-    enable_hooks: bool = True
     output_format: type[BaseModel] | None = None
     trace: list[Message] = field(default_factory=list, repr=False)
     state: dict[str, str] | None = field(default=None, repr=False)
@@ -340,20 +256,11 @@ class ClaudeCodeAgent:
         options.mcp_servers = self._tools
         options.allowed_tools = list(set(self._allowed_tools + options.allowed_tools))
 
-        # Disallowed tools from filesystem accesses
-        options.disallowed_tools = self._build_disallowed_tools()
-
         # Resume from saved state
         if self.state and isinstance(self.state, dict) and "session_id" in self.state:
             options.resume = self.state["session_id"]
             options.continue_conversation = True
             logger.info(f"Resuming Claude Code session: {self.state['session_id']}")
-
-        # Hooks
-        if self.enable_hooks:
-            hooks_builder = ClaudeCodeHookBuilder(self)
-            options.hooks = options.hooks or {}
-            options.hooks.update(hooks_builder.get_hooks())
 
         # Max turns
         if max_turns is not None:
@@ -403,21 +310,6 @@ class ClaudeCodeAgent:
                 else configured
             )
         return instructions or ""
-
-    def _build_disallowed_tools(self) -> list[str]:
-        """Builds the list of disallowed tools from filesystem accesses."""
-        disallowed_tools = []
-        if self._context is None:
-            return disallowed_tools
-        for access in self._context.workspace.accesses:
-            if access.access_type == AccessType.EXCLUDE:
-                disallowed_tools.append(f"Read(./{access.pattern})")
-                disallowed_tools.append(f"Write(./{access.pattern})")
-                disallowed_tools.append(f"Edit(./{access.pattern})")
-            elif access.access_type == AccessType.READ:
-                disallowed_tools.append(f"Write(./{access.pattern})")
-                disallowed_tools.append(f"Edit(./{access.pattern})")
-        return disallowed_tools
 
     def _create_tools(
         self,
