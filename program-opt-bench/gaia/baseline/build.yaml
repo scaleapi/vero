@@ -45,7 +45,7 @@ rescore_top_k: 3
 rescore_attempts: 1
 
 model: openai/gpt-5.4-mini-2026-03-17
-environment_name: modal
+environment_name: ${inner_env:-modal}
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
@@ -68,7 +68,7 @@ inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
   producer:
-    allowed_models: [gpt-5.4, gpt-5.5]
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
   evaluation:
     allowed_models: [gpt-5.4-mini-2026-03-17]

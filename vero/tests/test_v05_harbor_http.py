@@ -200,7 +200,9 @@ def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkey
         observed["environment"] = env
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda _path: config)
+    monkeypatch.setattr(
+        harbor_build, "load_harbor_build_config", lambda _path, **_kwargs: config
+    )
     monkeypatch.setattr(harbor_build, "compile_harbor_task", compile_task)
     monkeypatch.setattr(harbor_cli.shutil, "which", lambda _name: "/usr/bin/uvx")
     monkeypatch.setattr(harbor_cli.subprocess, "run", run)

@@ -38,7 +38,9 @@ def _git(path: Path, *arguments: str) -> str:
 @pytest.mark.parametrize(
     ("benchmark", "producer_models"),
     [
-        ("gaia", ["gpt-5.4", "gpt-5.5"]),
+        # gaia parametrizes the producer model via ${optimizer_model}; the
+        # default (no --param) resolves to gpt-5.4.
+        ("gaia", ["gpt-5.4"]),
         ("swe-atlas-qna", ["gpt-5.4"]),
         ("tau3", ["gpt-5.4"]),
     ],
@@ -66,6 +68,36 @@ def test_canonical_benchmarks_isolate_upstream_inference_credentials(
     ]
     assert config.inference_gateway.evaluation.max_requests == 15000
     assert config.inference_gateway.evaluation.max_tokens == 100000000
+
+
+def test_build_params_override_run_time_knobs_without_rebuild():
+    path = BENCHMARK_ROOT / "gaia" / "baseline" / "build.yaml"
+
+    default = load_harbor_build_config(path)
+    assert default.environment_name == "modal"
+    assert default.inference_gateway.producer.allowed_models == ["gpt-5.4"]
+
+    overridden = load_harbor_build_config(
+        path, params={"optimizer_model": "gpt-5.5", "inner_env": "docker"}
+    )
+    assert overridden.environment_name == "docker"
+    assert overridden.inference_gateway.producer.allowed_models == ["gpt-5.5"]
+    # The rest of the measurement substrate is untemplated and stays fixed.
+    assert overridden.model == default.model
+    assert overridden.task_source == default.task_source
+
+
+def test_build_param_substitution_semantics():
+    from vero.harbor.build.config import _substitute_build_param as sub
+
+    context = {"A": "x"}
+    assert sub("${A}", context) == "x"
+    assert sub("${MISSING:-fallback}", context) == "fallback"
+    assert sub("pre-${A}-post", context) == "pre-x-post"
+    with pytest.raises(ValueError, match="required build parameter 'MISSING'"):
+        sub("${MISSING:?please set it}", context)
+    with pytest.raises(ValueError, match="build parameter 'MISSING' is unset"):
+        sub("${MISSING}", context)
 
 
 def _target_repo(path: Path) -> Path:

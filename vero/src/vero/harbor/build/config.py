@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from pathlib import Path
 from typing import Literal
@@ -362,8 +363,58 @@ class HarborBuildConfig(EvaluationModel):
         return self
 
 
-def load_harbor_build_config(path: Path | str) -> HarborBuildConfig:
-    """Load YAML and resolve local paths relative to the configuration file."""
+_BUILD_PARAM = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::(-|\?)([^}]*))?\}")
+
+
+def _substitute_build_param(text: str, context: dict[str, str]) -> str:
+    """Resolve ``${NAME}`` / ``${NAME:-default}`` / ``${NAME:?message}`` in one scalar."""
+
+    def replace(match: re.Match[str]) -> str:
+        name, operator, argument = match.group(1), match.group(2), match.group(3)
+        resolved = context.get(name)
+        if resolved:
+            return resolved
+        if operator == "-":
+            return argument or ""
+        if operator == "?":
+            raise ValueError(
+                f"required build parameter {name!r} is unset: "
+                f"{argument or 'no message provided'}"
+            )
+        raise ValueError(
+            f"build parameter {name!r} is unset; pass --param {name}=VALUE "
+            "or set the environment variable"
+        )
+
+    return _BUILD_PARAM.sub(replace, text)
+
+
+def _resolve_build_params(value: object, context: dict[str, str]) -> object:
+    """Recursively resolve ``${...}`` placeholders in string scalars of a YAML value."""
+    if isinstance(value, str):
+        return _substitute_build_param(value, context)
+    if isinstance(value, dict):
+        return {key: _resolve_build_params(item, context) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_build_params(item, context) for item in value]
+    return value
+
+
+def load_harbor_build_config(
+    path: Path | str,
+    *,
+    params: dict[str, str] | None = None,
+) -> HarborBuildConfig:
+    """Load YAML and resolve local paths relative to the configuration file.
+
+    ``${NAME}`` placeholders in the YAML are substituted at load time from
+    ``params`` (explicit, e.g. ``--param NAME=VALUE``) layered over the process
+    environment, so run-time knobs (optimizer model, inner sandbox provider,
+    concurrency, ...) can be varied without rebuilding the task. Use
+    ``${NAME:-default}`` for a fallback and ``${NAME:?message}`` to require a
+    value. Fields left un-templated stay fixed (the reproducible measurement
+    substrate).
+    """
     try:
         import yaml
     except ImportError as error:
@@ -375,6 +426,8 @@ def load_harbor_build_config(path: Path | str) -> HarborBuildConfig:
     value = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("Harbor build config must be a YAML object")
+    context = {**os.environ, **(params or {})}
+    value = _resolve_build_params(value, context)
     base = config_path.parent
     partition_files = value.pop("partition_files", None)
     if partition_files is not None:

@@ -270,6 +270,28 @@ def harbor() -> None:
     """Run VeRO across a Harbor sidecar boundary."""
 
 
+def _parse_build_params(values: tuple[str, ...]) -> dict[str, str]:
+    """Parse repeatable ``--param NAME=VALUE`` into a substitution context."""
+    params: dict[str, str] = {}
+    for item in values:
+        name, separator, value = item.partition("=")
+        if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+            raise click.ClickException(
+                f"--param must be NAME=VALUE with a valid NAME: {item!r}"
+            )
+        params[name] = value
+    return params
+
+
+_PARAM_OPTION = click.option(
+    "--param",
+    "params",
+    multiple=True,
+    metavar="NAME=VALUE",
+    help="Substitute ${NAME} in the build YAML; repeatable. Overrides the environment.",
+)
+
+
 @harbor.command("build")
 @click.option(
     "--config",
@@ -282,12 +304,13 @@ def harbor() -> None:
     required=True,
     type=click.Path(path_type=Path, file_okay=False),
 )
-def build_command(config_path, output):
+@_PARAM_OPTION
+def build_command(config_path, output, params):
     """Compile a build YAML into a runnable Harbor task directory."""
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
     compiled = compile_harbor_task(
-        load_harbor_build_config(config_path),
+        load_harbor_build_config(config_path, params=_parse_build_params(params)),
         output,
     )
     click.echo(f"Compiled Harbor task: {compiled}")
@@ -306,15 +329,22 @@ def build_command(config_path, output):
 @click.option("--agent", required=True, help="Harbor optimizer agent.")
 @click.option("--model", help="Model used by the optimizer agent.")
 @click.option("--environment", default="modal", show_default=True)
+@_PARAM_OPTION
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
-def run_command(config_path, agent, model, environment, extra):
+def run_command(config_path, agent, model, environment, params, extra):
     """Compile to a temporary directory and invoke `harbor run`."""
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
     uvx = shutil.which("uvx")
     if uvx is None:
         raise click.ClickException("uvx is required to run a compiled Harbor task")
-    config = load_harbor_build_config(config_path)
+    resolved = _parse_build_params(params)
+    # The optimizer model is both codex's -m and the producer scope's allow-list;
+    # expose it as the reserved ${optimizer_model} so a build that references it
+    # keeps the two in lockstep (no 403 model mismatch).
+    if model is not None:
+        resolved.setdefault("optimizer_model", model)
+    config = load_harbor_build_config(config_path, params=resolved)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(
             config,
