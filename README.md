@@ -2,6 +2,7 @@
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 VeRO gives a coding agent something to edit, an evaluation boundary, and durable
 memory of every candidate it tried. The target is anything you can put under Git
@@ -11,10 +12,12 @@ Agents are programs, but not everyone reads "program" that way, so VeRO names
 them explicitly: it was introduced to optimize agents and generalizes the same
 version / evaluate / select loop to any Git-versioned artifact.
 
-```text
-strategy -> candidate producers -> evaluation backends -> selection
-                  |                       |
-          isolated workspaces       versioned reports
+```mermaid
+flowchart LR
+    S["Strategy<br/>proposes ideas"] --> P["Candidate producers<br/>edit isolated workspaces"]
+    P --> E["Evaluation backends<br/>score versioned reports"]
+    E --> Sel["Selection keeps the<br/>best feasible candidate"]
+    Sel -->|"next round"| S
 ```
 
 The target and evaluator do not need to be Python. External evaluators and

@@ -1,5 +1,9 @@
 # VeRO: a harness for agents to optimize programs, text, and agents
 
+[![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+
 VeRO gives an optimizer something to edit, a controlled way to evaluate it, and
 durable memory of everything it tried. The target is anything you can put under
 Git and score:
@@ -19,15 +23,27 @@ backend communicates with an external evaluation harness through versioned JSON,
 and candidate changes can come from a coding agent, an external command, or a
 custom optimization strategy.
 
-```text
-strategy proposes ideas
-        ↓
-producers edit isolated candidate workspaces (in parallel if desired)
-        ↓
-evaluation backend measures each version
-        ↓
-selection keeps the best candidate and the next round continues
+```mermaid
+flowchart LR
+    S["Strategy<br/>proposes ideas"] --> P["Producers edit<br/>isolated candidate<br/>workspaces"]
+    P --> E["Evaluation backend<br/>scores each version"]
+    E --> Sel["Selection keeps the<br/>best feasible candidate"]
+    Sel -->|"next round"| S
 ```
+
+## Highlights
+
+|  |  |
+| --- | --- |
+| **Any target** | a program (one function up to a whole repo), text (prompts, specs, configs), or an agent |
+| **Any evaluator** | a language-neutral command harness, or Python tasks via `scale-vero-tasks` |
+| **Any producer** | a coding agent (any provider via LiteLLM), an external command, or a custom strategy |
+| **Real containment** | edits run in a sandbox bound to the candidate checkout; Harbor for untrusted / reproducible runs |
+| **Durable & inspectable** | every candidate is versioned and re-selectable; tool calls and evaluations stream to an event log |
+| **Population search** | `EvolutionaryStrategy` fans out N offspring per round with tournament selection |
+
+> **Just want to try it?** Jump to the [Quickstart](#quickstart) — the C-matmul
+> example is deterministic and needs no model credentials.
 
 ## Quickstart
 
@@ -651,6 +667,22 @@ a non-Git version store, an evolutionary search algorithm, or an orchestrator
 that delegates proposals to several specialized producers.
 
 ## Core concepts
+
+Production is a swappable `GenerationBackend`: the native in-process producer (a
+coding agent whose harness runs on the host while its edits run in a sandbox), or
+a Harbor run (the whole agent contained). Either way the orchestrator evaluates,
+selects, and remembers — separately from the feedback the producer saw.
+
+```mermaid
+flowchart TB
+    O["Optimizer loop<br/>(strategy · selection · durable session)"] --> G{"GenerationBackend"}
+    G -->|native| N["VeroAgent harness (host)<br/>shell / read_file / write_file"]
+    N --> SB["Sandbox<br/>candidate checkout"]
+    G -->|contained| H["Harbor run<br/>agent in a container"]
+    SB --> EV["Evaluator<br/>budget · disclosure · scoring"]
+    H --> EV
+    EV --> O
+```
 
 | Concept | Meaning |
 | --- | --- |
