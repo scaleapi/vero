@@ -11,10 +11,12 @@ from vero.evaluation import (
     EvaluationRecord,
     ObjectiveSpec,
 )
+from vero.candidate import Candidate
 from vero.optimization.models import (
     CandidateChange,
     CandidateProductionContext,
     CandidateProposal,
+    GenerationOutcome,
     OptimizationContext,
 )
 from vero.workspace import Workspace
@@ -54,6 +56,29 @@ class CandidateProducer(Protocol):
         workspace: Workspace,
         evaluation: CandidateEvaluationGateway,
     ) -> CandidateChange | None: ...
+
+
+@runtime_checkable
+class GenerationBackend(Protocol):
+    """Turn a parent + proposal into candidate(s) plus generation-time feedback.
+
+    This is the swappable unit the Optimizer drives. The default is the
+    Optimizer's built-in native production (an agent or operator editing a
+    checkout in a sandbox, with mid-run self-eval). A Harbor implementation
+    delegates to a ``harbor run`` instead. Either way, the orchestrator performs
+    selection and target scoring *separately* on the returned candidate; the
+    ``GenerationOutcome.trial_evaluations`` are only the generation-time feedback
+    the producer observed while iterating.
+    """
+
+    async def generate(
+        self,
+        *,
+        proposal: CandidateProposal,
+        parent: Candidate,
+        context: OptimizationContext,
+        evaluation_records: Sequence[EvaluationRecord],
+    ) -> GenerationOutcome: ...
 
 
 @runtime_checkable

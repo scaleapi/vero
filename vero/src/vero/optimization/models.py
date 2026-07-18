@@ -95,6 +95,32 @@ class CandidateProductionContext:
 
 
 @dataclass(frozen=True)
+class GenerationOutcome:
+    """Candidates and generation-time feedback from executing one proposal.
+
+    Produced by a :class:`~vero.optimization.protocols.GenerationBackend` (the
+    native in-process producer by default, or a Harbor run). ``candidate`` is the
+    produced candidate (``None`` if the producer made no change);
+    ``trial_candidates`` are the intermediate checkpoints it captured. Crucially,
+    ``trial_evaluations`` are the **generation-time feedback** evaluations the
+    producer *observed while iterating* (mid-run self-eval, or a Harbor sidecar's
+    disclosed-partition scores) — distinct from the orchestrator's later
+    selection and target scoring, which the Optimizer performs separately on the
+    returned candidate.
+    """
+
+    candidate: Candidate | None
+    trial_candidates: tuple[Candidate, ...]
+    trial_evaluations: tuple[EvaluationRecord, ...]
+
+    @property
+    def candidates(self) -> tuple[Candidate, ...]:
+        if self.candidate is None:
+            return self.trial_candidates
+        return (*self.trial_candidates, self.candidate)
+
+
+@dataclass(frozen=True)
 class OptimizationResult:
     baseline: EvaluationRecord
     evaluations: tuple[EvaluationRecord, ...]

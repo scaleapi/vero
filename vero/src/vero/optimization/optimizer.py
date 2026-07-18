@@ -33,12 +33,14 @@ from vero.evaluation import (
 from vero.optimization.models import (
     CandidateProductionContext,
     CandidateProposal,
+    GenerationOutcome,
     OptimizationContext,
     OptimizationResult,
 )
 from vero.optimization.protocols import (
     CandidateProducer,
     CandidateEvaluationGateway,
+    GenerationBackend,
     OptimizationStrategy,
     SelectionPolicy,
 )
@@ -47,21 +49,6 @@ from vero.workspace import Workspace
 
 if TYPE_CHECKING:
     from vero.runtime.context import AgentDisclosureLedger, WorkspaceContextManager
-
-
-@dataclass(frozen=True)
-class _ProductionOutcome:
-    """Candidates and evaluations created while executing one proposal."""
-
-    candidate: Candidate | None
-    trial_candidates: tuple[Candidate, ...]
-    trial_evaluations: tuple[EvaluationRecord, ...]
-
-    @property
-    def candidates(self) -> tuple[Candidate, ...]:
-        if self.candidate is None:
-            return self.trial_candidates
-        return (*self.trial_candidates, self.candidate)
 
 
 class _ScopedEvaluationGateway(CandidateEvaluationGateway):
@@ -226,6 +213,7 @@ class Optimizer:
     strategy: OptimizationStrategy
     producers: dict[str, CandidateProducer]
     selection: SelectionPolicy = field(default_factory=ObjectiveSelectionPolicy)
+    generation_backend: GenerationBackend | None = None
     parameters: dict[str, JsonValue] = field(default_factory=dict)
     limits: EvaluationLimits = field(default_factory=EvaluationLimits)
     seed: int | None = None
@@ -299,7 +287,7 @@ class Optimizer:
         context: OptimizationContext,
         parent: Candidate,
         evaluation_records: tuple[EvaluationRecord, ...],
-    ) -> _ProductionOutcome:
+    ) -> GenerationOutcome:
         try:
             producer = self.producers[proposal.producer_id]
         except KeyError as error:
@@ -376,7 +364,7 @@ class Optimizer:
                     evaluation=evaluation,
                 )
             if change is None:
-                return _ProductionOutcome(
+                return GenerationOutcome(
                     candidate=None,
                     trial_candidates=evaluation.trial_candidates,
                     trial_evaluations=evaluation.trial_evaluations,
@@ -387,13 +375,13 @@ class Optimizer:
                 else await candidate_workspace.current_version()
             )
             if version == parent.version and not evaluation.trial_candidates:
-                return _ProductionOutcome(
+                return GenerationOutcome(
                     candidate=None,
                     trial_candidates=(),
                     trial_evaluations=(),
                 )
             if version == evaluation.last_candidate_version:
-                return _ProductionOutcome(
+                return GenerationOutcome(
                     candidate=None,
                     trial_candidates=evaluation.trial_candidates,
                     trial_evaluations=evaluation.trial_evaluations,
@@ -412,7 +400,7 @@ class Optimizer:
                 metadata=metadata,
             )
             await self._capture_candidate(candidate, candidate_workspace)
-            return _ProductionOutcome(
+            return GenerationOutcome(
                 candidate=candidate,
                 trial_candidates=evaluation.trial_candidates,
                 trial_evaluations=evaluation.trial_evaluations,
@@ -635,7 +623,7 @@ class Optimizer:
             if any(proposal_id in candidates for proposal_id in proposal_ids):
                 raise ValueError("strategy reused an existing candidate ID")
 
-            async def produce(proposal: CandidateProposal) -> _ProductionOutcome:
+            async def produce(proposal: CandidateProposal) -> GenerationOutcome:
                 parent_id = proposal.parent_id or (
                     best.request.candidate.id if best is not None else baseline.id
                 )
@@ -646,6 +634,13 @@ class Optimizer:
                         f"proposal {proposal.id!r} names unknown parent {parent_id!r}"
                     ) from error
                 async with semaphore:
+                    if self.generation_backend is not None:
+                        return await self.generation_backend.generate(
+                            proposal=proposal,
+                            context=context,
+                            parent=parent,
+                            evaluation_records=visible_evaluations,
+                        )
                     return await self._produce_candidate(
                         proposal=proposal,
                         context=context,

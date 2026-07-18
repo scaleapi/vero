@@ -8,6 +8,7 @@ from vero.optimization.models import (
     CandidateChange,
     CandidateProductionContext,
     CandidateProposal,
+    GenerationOutcome,
     OptimizationContext,
     OptimizationResult,
 )
@@ -15,6 +16,7 @@ from vero.optimization.optimizer import Optimizer
 from vero.optimization.protocols import (
     CandidateEvaluationGateway,
     CandidateProducer,
+    GenerationBackend,
     OptimizationStrategy,
     SelectionPolicy,
 )
@@ -28,6 +30,8 @@ __all__ = [
     "CandidateProposal",
     "CommandCandidateProducer",
     "CommandCandidateProducerConfig",
+    "GenerationBackend",
+    "GenerationOutcome",
     "ObjectiveSelectionPolicy",
     "OptimizationContext",
     "OptimizationResult",
