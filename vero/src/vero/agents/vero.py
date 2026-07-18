@@ -23,6 +23,7 @@ from agents import (
     ModelRetrySettings,
     ModelSettings,
     OpenAIChatCompletionsModel,
+    OpenAIResponsesModel,
     RunConfig,
     RunResultStreaming,
     Runner,
@@ -70,27 +71,39 @@ def default_tool_sets() -> list[ToolSet | object | Callable]:
     ]
 
 
-def _default_oai_agent(
-    model: str = "anthropic/claude-sonnet-4-5-20250929",
-) -> Agent:
+def _default_oai_agent(model: str | None = None) -> Agent:
+    """Build the template Agent.
+
+    SandboxAgent's Shell/Filesystem capabilities register *hosted* tools
+    (apply_patch, shell) that are only supported by the OpenAI Responses API,
+    not ChatCompletions. So the native agentic path uses OpenAIResponsesModel
+    against an OpenAI-compatible endpoint (e.g. the LiteLLM proxy exposed via
+    OPENAI_BASE_URL), which limits models to the Responses-capable / OpenAI
+    family served there.
+    """
     import os
 
-    litellm_kwargs = {}
-    if os.getenv("LITELLM_API_KEY") and os.getenv("LITELLM_BASE_URL"):
-        litellm_kwargs["api_key"] = os.getenv("LITELLM_API_KEY")
-        litellm_kwargs["base_url"] = os.getenv("LITELLM_BASE_URL")
+    from openai import AsyncOpenAI
 
-        if litellm_kwargs["base_url"]:
-            litellm_kwargs["base_url"] = litellm_kwargs["base_url"].rstrip("/")
+    model = model or os.getenv("VERO_OPTIMIZER_MODEL") or "openai/gpt-5.4"
 
-    configured_model = LitellmModel(model=model, **litellm_kwargs)
+    client_kwargs: dict[str, str] = {}
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url.rstrip("/")
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key:
+        client_kwargs["api_key"] = api_key
+
+    configured_model = OpenAIResponsesModel(
+        model=model, openai_client=AsyncOpenAI(**client_kwargs)
+    )
 
     return Agent(
         name="VeroAgent",
         model=configured_model,
         model_settings=ModelSettings(
             include_usage=True,
-            max_tokens=None,
             retry=ModelRetrySettings(
                 max_retries=3,
                 backoff={
@@ -256,7 +269,10 @@ class VeroAgent:
         return None
 
     def model_str(self) -> str | None:
-        if isinstance(self.oai_agent.model, (LitellmModel, OpenAIChatCompletionsModel)):
+        if isinstance(
+            self.oai_agent.model,
+            (LitellmModel, OpenAIChatCompletionsModel, OpenAIResponsesModel),
+        ):
             return self.oai_agent.model.model
         elif isinstance(self.oai_agent.model, str):
             return self.oai_agent.model
