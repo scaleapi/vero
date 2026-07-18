@@ -443,6 +443,17 @@ def create_inference_gateway_app(
             value = json.loads(body) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
             return _provider_error(400, "request body must be JSON", "invalid_request")
+        # Per-scope allow-list: producer (optimizer) and evaluation (target) have
+        # separate tokens + allowed_models, so the target is normally confined to
+        # its fixed eval model. NOTE (known, deferred): this is not a *hard*
+        # fixed-target guarantee. Both scopes share one gateway host, split only by
+        # URL path, and the optimizer holds the producer token and authors the
+        # candidate. An adversarial optimizer can smuggle its producer token into
+        # the candidate and, from the eval sandbox (which already reaches this host
+        # for its legit calls), hit /scopes/producer to run the optimizer model.
+        # Closing this needs structural egress isolation (per-role/per-eval
+        # endpoints), not path-scoping — deferred as it requires an adversarial
+        # producer.
         model = value.get("model") if isinstance(value, dict) else None
         if not isinstance(model, str) or model not in scope.allowed_models:
             return _provider_error(
