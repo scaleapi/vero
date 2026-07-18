@@ -195,10 +195,15 @@ vero optimize ./my-program \
   --max-proposals 5
 ```
 
-Use `--agent vero` for VeRO's OpenAI Agents SDK implementation. In
-`vero.toml`, `optimizer.model` selects an explicit Claude or LiteLLM model
-identifier; omitting it preserves that adapter's default. Provider-specific
-dependencies and credentials are required for either built-in coding agent.
+Use `--agent vero` for VeRO's OpenAI Agents SDK implementation. It runs on any
+provider via LiteLLM; its harness runs on the host while its shell and file
+edits execute inside a sandbox bound to the candidate checkout (see [Safety
+boundaries](#safety-boundaries)). In `vero.toml`, `optimizer.model` selects an
+explicit model identifier; for the `vero` agent you can also set it via the
+`VERO_OPTIMIZER_MODEL` environment variable, and omitting both preserves the
+adapter's default. Provider-specific dependencies and credentials are required
+for either built-in coding agent. For a contained/untrusted producer, run the
+agent through Harbor (see [`examples/harbor-circle-packing`](examples/harbor-circle-packing/)).
 
 ### Optimize with any external producer
 
@@ -646,7 +651,8 @@ that delegates proposals to several specialized producers.
 | `EvaluationRecord` | The durable request, report, provenance, and objective result |
 | `EvaluationBackend` | Measures a candidate without assuming its language or framework |
 | `CandidateProducer` | Edits one isolated workspace to realize a proposed idea |
-| `OptimizationStrategy` | Chooses parents, ideas, and producers for the next batch |
+| `GenerationBackend` | Produces candidates plus their generation-time feedback for a proposal — the swappable unit that is the in-process native producer by default or a Harbor run |
+| `OptimizationStrategy` | Chooses parents, ideas, and producers for the next batch (e.g. `SequentialStrategy`, or `EvolutionaryStrategy` for population/tournament search) |
 | `SelectionPolicy` | Chooses the best feasible evaluation for the configured objective |
 | `OptimizationSession` | Owns lifecycle, events, artifacts, budgets, and durable state |
 
@@ -749,6 +755,11 @@ so treat the resulting file as sensitive experiment data.
 - Agent-visible cases, histories, and evaluation details are projected into a
   generated `.vero/` view according to the same authorization boundary.
 - Budgets are reserved atomically before backend execution.
+- A built-in coding agent's shell and file actions execute inside a sandbox
+  bound to its candidate checkout, so containment is the sandbox boundary rather
+  than in-process checks. The local sandbox is for fast, trusted runs; for a
+  contained or untrusted producer run the agent through Harbor, which isolates
+  the agent (and, in separate-verifier mode, the scorer) in its own environment.
 
 ## Paper and reproduction
 
