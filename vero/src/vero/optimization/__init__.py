@@ -20,7 +20,11 @@ from vero.optimization.protocols import (
     OptimizationStrategy,
     SelectionPolicy,
 )
-from vero.optimization.strategy import ObjectiveSelectionPolicy, SequentialStrategy
+from vero.optimization.strategy import (
+    EvolutionaryStrategy,
+    ObjectiveSelectionPolicy,
+    SequentialStrategy,
+)
 
 __all__ = [
     "CandidateChange",
@@ -30,6 +34,7 @@ __all__ = [
     "CandidateProposal",
     "CommandCandidateProducer",
     "CommandCandidateProducerConfig",
+    "EvolutionaryStrategy",
     "GenerationBackend",
     "GenerationOutcome",
     "ObjectiveSelectionPolicy",
