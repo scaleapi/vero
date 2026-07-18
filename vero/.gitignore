@@ -16,6 +16,9 @@ build/
 !src/vero/harbor/build/templates/
 !src/vero/harbor/build/templates/*
 
+#harbor
+jobs/
+
 # Testing
 .pytest_cache/
 .mypy_cache/
