@@ -341,23 +341,6 @@ class VeroAgent:
             return False
         return strict_mode_from_model(self.oai_agent.model)
 
-    @property
-    def orchestrator_tool_sets(self) -> list[type]:
-        import inspect
-
-        return [type(ts) for ts in self.tool_sets if not inspect.isfunction(ts)]
-
-    @property
-    def sub_agent_tool_sets(self) -> list[type]:
-        for ts in self.tool_sets:
-            if isinstance(ts, SubAgentTool):
-                return [type(t) for t in ts.allowed_tools if not callable(t)]
-        return []
-
-    @property
-    def sub_agents_enabled(self) -> bool:
-        return any(isinstance(ts, SubAgentTool) for ts in self.tool_sets)
-
     def _create_agent(self, session: Any) -> Agent:
         """Build the Agent: sandbox function tools + vero tools + the template.
 
@@ -388,20 +371,6 @@ class VeroAgent:
             tools.extend(tool_list)
         tools.sort(key=lambda tool: tool.name)
         return tools
-
-    def tool_set_enabled(
-        self, tool_set_key: type | str, for_sub_agent: bool = False
-    ) -> bool:
-        """Check if a tool set is enabled. Accepts class or string name."""
-        if isinstance(tool_set_key, str):
-            return any(
-                type(ts).__name__ == tool_set_key
-                or (callable(ts) and getattr(ts, "__name__", "") == tool_set_key)
-                for ts in self.tool_sets
-            )
-        return any(
-            type(ts) is tool_set_key or ts is tool_set_key for ts in self.tool_sets
-        )
 
     def _create_tools(
         self, context: AgentContext

@@ -25,13 +25,3 @@ def run_result_to_messages(
         return item
 
     return [process_item(item) for item in result]
-
-
-def get_token_count(
-    result: "RunResult | RunResultStreaming | list[TResponseInputItem]", model: str
-) -> int:
-    """Get the token count for a RunResult or RunResultStreaming or list of TResponseInputItem."""
-    from litellm import token_counter
-
-    messages = run_result_to_messages(result)
-    return token_counter(model=model, messages=messages)

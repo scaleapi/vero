@@ -212,30 +212,6 @@ class ClaudeCodeAgent:
             logger.warning(f"Failed to parse structured output: {e}")
             return result.structured_output
 
-    def reset_trace(self) -> None:
-        """Resets the trace."""
-        self.trace = []
-
-    def tool_set_enabled(
-        self, tool_set_key: type | str, for_sub_agent: bool = False
-    ) -> bool:
-        """Check if a tool set is enabled. Accepts class or string name."""
-        if isinstance(tool_set_key, str):
-            return any(type(ts).__name__ == tool_set_key for ts in self.tool_sets)
-        return any(isinstance(ts, tool_set_key) for ts in self.tool_sets)
-
-    @property
-    def orchestrator_tool_sets(self) -> list[type]:
-        return [type(ts) for ts in self.tool_sets]
-
-    @property
-    def sub_agents_enabled(self) -> bool:
-        return False  # ClaudeCodeAgent doesn't support sub-agents
-
-    @property
-    def sub_agent_tool_sets(self) -> list[type]:
-        return []
-
     # -------------------------------------------------------------------------
     # Internal helpers
     # -------------------------------------------------------------------------
