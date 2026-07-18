@@ -1,0 +1,15 @@
+schema_version = "1.3"
+
+[task]
+name = "vero/circle-packing"
+description = "Optimize packing.py to maximize the sum of 26 non-overlapping circle radii in the unit square."
+
+[agent]
+user = "agent"
+
+[verifier]
+environment_mode = "shared"
+timeout_sec = 600
+
+[environment]
+build_timeout_sec = 1800
