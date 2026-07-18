@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -70,6 +71,37 @@ class EventBus:
             except Exception:
                 logger.exception("Runtime event sink failed for %s", event.id)
         return event
+
+
+def agent_event_emitter(
+    bus: EventBus,
+    session_id: str,
+    agent: object,
+    *,
+    kind: str = "agent",
+) -> Callable[[object], Awaitable[None]] | None:
+    """Build an ``on_event`` callback that publishes agent activity to ``bus``.
+
+    The coding agent streams SDK-specific stream events; the agent normalizes
+    them via ``serialize_event`` into ``AgentEvent`` dicts (message / thinking /
+    tool_call / tool_result). This adapts that normalized stream onto the runtime
+    ``EventBus`` so tool calls, reasoning, and messages land in ``events.jsonl``
+    and any registered sink (e.g. W&B) live — the native runner's introspection
+    advantage over opaque environments. Returns ``None`` if the agent cannot
+    normalize its events.
+    """
+    serialize = getattr(agent, "serialize_event", None)
+    if not callable(serialize):
+        return None
+
+    async def _emit(raw_event: object) -> None:
+        normalized = serialize(raw_event)
+        if normalized:
+            await bus.emit(
+                session_id=session_id, kind=kind, payload=dict(normalized)
+            )
+
+    return _emit
 
 
 class JsonlEventSink:

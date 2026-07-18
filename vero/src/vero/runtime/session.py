@@ -26,7 +26,7 @@ from vero.evaluation import (
 from vero.evaluation.persistence import _atomic_write_json
 from vero.optimization import OptimizationResult, Optimizer
 from vero.runtime.artifacts import ArtifactStore
-from vero.runtime.events import EventBus, JsonlEventSink
+from vero.runtime.events import EventBus, JsonlEventSink, agent_event_emitter
 from vero.workspace import Workspace
 
 
@@ -173,6 +173,27 @@ class OptimizationSession:
         self.artifacts = ArtifactStore(self.session_dir / "artifacts")
         self._event_step = len(self.optimizer.engine.database.evaluations)
         self.optimizer.engine.listeners.append(self._on_evaluation_completed)
+        self._wire_agent_events()
+
+    def _wire_agent_events(self) -> None:
+        """Publish agent activity (tool calls, reasoning, messages) to the bus.
+
+        Agent producers that expose a settable ``on_event`` and a normalizing
+        agent get their events routed onto the session event bus. A
+        caller-provided ``on_event`` is left untouched.
+        """
+        assert self.events is not None
+        for producer in self.optimizer.producers.values():
+            if getattr(producer, "on_event", None) is not None:
+                continue
+            if not hasattr(producer, "on_event"):
+                continue
+            agent = getattr(producer, "agent", None)
+            if agent is None:
+                continue
+            emitter = agent_event_emitter(self.events, self.id, agent)
+            if emitter is not None:
+                producer.on_event = emitter
 
     @property
     def manifest_path(self) -> Path:

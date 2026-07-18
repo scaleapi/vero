@@ -192,7 +192,9 @@ class VeroAgent:
                 self._run_result, event_timeout=self.event_timeout
             ):
                 if on_event is not None:
-                    on_event(event)
+                    result = on_event(event)
+                    if inspect.isawaitable(result):
+                        await result
                 await asyncio.sleep(0)
             self.state = self._run_result.to_input_list()
         finally:
@@ -233,6 +235,17 @@ class VeroAgent:
                     if text:
                         parts.append(text)
             return {"kind": "message", "text": "\n".join(parts)} if parts else None
+
+        if item_type in ("reasoning", "thinking"):
+            parts = []
+            for block in (raw.get("summary") or raw.get("content") or []):
+                if isinstance(block, dict):
+                    text = block.get("text") or block.get("summary") or ""
+                    if text:
+                        parts.append(text)
+                elif isinstance(block, str) and block:
+                    parts.append(block)
+            return {"kind": "thinking", "text": "\n".join(parts)} if parts else None
 
         if item_type == "function_call":
             return {

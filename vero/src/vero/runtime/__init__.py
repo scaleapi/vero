@@ -10,7 +10,13 @@ from vero.runtime.context import (
     make_evaluation_receipt,
     narrower_disclosure,
 )
-from vero.runtime.events import EventBus, EventSink, JsonlEventSink, RuntimeEvent
+from vero.runtime.events import (
+    EventBus,
+    EventSink,
+    JsonlEventSink,
+    RuntimeEvent,
+    agent_event_emitter,
+)
 from vero.runtime.factory import (
     create_local_optimization_session,
     create_optimization_session,
@@ -44,6 +50,7 @@ __all__ = [
     "SessionStatus",
     "WandbEventSink",
     "WorkspaceContextManager",
+    "agent_event_emitter",
     "create_optimization_session",
     "evaluation_result_path",
     "make_evaluation_receipt",
