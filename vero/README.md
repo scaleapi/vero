@@ -52,15 +52,18 @@ editable target contains only C; a trusted external harness compiles it, checks
 correctness, and measures latency.
 
 ```bash
-uv pip install scale-vero
+# Install VeRO from this checkout. Do NOT `pip install scale-vero` from public
+# PyPI — that name is currently an unrelated placeholder, not VeRO.
+uv sync --extra optimize
+
 cd examples/c-matmul/target
 git init -b main
 git add .
 git -c user.name=vero -c user.email=vero@localhost commit -m baseline
 cd ..
 
-vero evaluate --config vero.toml
-vero run --config vero.toml
+uv run vero evaluate --config vero.toml
+uv run vero run --config vero.toml
 ```
 
 The example is deterministic and needs no model credentials. VeRO evaluates the
@@ -265,10 +268,11 @@ run `vero optimize --help` for the full surface.
 
 ## Track runs with Weights & Biases
 
-Install the optional integration and add a section to `vero.toml`:
+Install the optional integration (the `wandb` extra) and add a section to
+`vero.toml`:
 
 ```bash
-uv pip install 'scale-vero[wandb]'
+uv sync --extra wandb
 ```
 
 ```toml
@@ -518,7 +522,8 @@ candidate before producing Harbor rewards. Hidden final evaluations use the
 same backend contracts with unmetered admin authorization, so this deployment
 does not introduce a parallel evaluation model.
 
-Install the optional server dependencies with `scale-vero[harbor]`. A sidecar
+Install the optional server dependencies via the `harbor` extra (e.g.
+`uv sync --extra harbor` from a checkout). A sidecar
 image provides a trusted `module:factory` callable that accepts its JSON config
 and returns `SidecarComponents`; start it with:
 

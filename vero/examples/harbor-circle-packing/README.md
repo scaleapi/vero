@@ -59,9 +59,11 @@ Harbor builds the two images, starts the sidecar, runs the agent against
 
 ## Notes
 
-- The images `pip install scale-vero[harbor]`. From a local checkout instead,
-  copy the package into the build context and `uv pip install "/opt/vero[harbor]"`
-  (see the commented lines in the Dockerfiles).
+- **Install:** VeRO is not published on public PyPI (the `scale-vero` name there
+  is an unrelated placeholder), so both images vendor the package. Before
+  `harbor run`, copy the VeRO package into this build context:
+  `cp -r <repo>/vero environment/vero` (it is git-ignored). The Dockerfiles then
+  `COPY vero /opt/vero && uv pip install "/opt/vero[harbor]"`.
 - Multi-metric rewards: the verifier emits `reward.json` (a dict), and the
   sidecar can run in a separate verifier environment for stronger isolation from
   an untrusted agent — see the Harbor task docs.

@@ -7,9 +7,11 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install VeRO's harbor client. From a local checkout, replace with:
-#   COPY vero /opt/vero && uv pip install --system "/opt/vero[harbor]"
-RUN uv pip install --system "scale-vero[harbor]"
+# Install VeRO's harbor client. VeRO is NOT on public PyPI (the `scale-vero`
+# name there is an unrelated placeholder), so vendor the package into this build
+# context first — e.g. `cp -r <repo>/vero environment/vero` — then install it:
+COPY vero /opt/vero
+RUN uv pip install --system "/opt/vero[harbor]"
 
 COPY agent-seed /opt/agent-seed
 COPY main/seed.sh /opt/seed.sh

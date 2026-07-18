@@ -1,0 +1,3 @@
+# Vendored VeRO package copied into the build context before `harbor run`
+# (VeRO is not on public PyPI). Do not commit the copy.
+environment/vero/
