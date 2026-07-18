@@ -110,10 +110,12 @@ class SubAgentTool:
             tool_sets: Tool set names to provide (e.g. ["FileRead", "Grep"]). Defaults to all available.
             model_alias: Model alias to use. Defaults to first available model.
         """
-        import agents as agents_lib
-        from agents import Agent
+        import asyncio
 
-        from vero.utils.openai_agents import run_agent_with_json_sanitization
+        import agents as agents_lib
+        from agents import Agent, Runner
+
+        from vero.utils.openai_agents import stream_events
 
         if model_alias is None:
             model_alias = next(iter(self.models.keys()))
@@ -171,13 +173,13 @@ class SubAgentTool:
                 instructions=instructions,
             )
 
-        result, error = await run_agent_with_json_sanitization(
-            subagent,
-            input,
-            max_turns=max_turns,
-            sanitize_invalid_json=True,
-            max_retries=MAX_SANITIZATION_RETRIES,
-        )
+        result = Runner.run_streamed(subagent, input=input, max_turns=max_turns)
+        error: Exception | None = None
+        try:
+            async for _event in stream_events(result):
+                await asyncio.sleep(0)
+        except Exception as exc:  # surfaced via the isinstance checks below
+            error = exc
         self.sessions[agent_name] = SubAgentSession(agent=subagent, session=result)
 
         if isinstance(error, StreamEventTimeout):

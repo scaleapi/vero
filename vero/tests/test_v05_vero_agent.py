@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("agents")
 
-from agents import Agent
+from agents import Agent, Runner
 
 from vero.agents import AgentContext, CodingAgent
 from vero.agents.vero import VeroAgent, default_tool_sets
@@ -16,9 +16,15 @@ from vero.optimization import CandidateProposal
 from vero.tools.evaluation import EvaluationTools
 
 
+class StubSandbox:
+    def host_path(self, path):
+        return Path(path)
+
+
 class StubWorkspace:
     def __init__(self, project_path: Path):
         self.project_path = str(project_path)
+        self.sandbox = StubSandbox()
         self.accesses = []
 
 
@@ -35,6 +41,13 @@ class FakeRunResult:
         self.context_wrapper = SimpleNamespace(
             usage={"requests": 1, "input_tokens": 8, "output_tokens": 2}
         )
+
+    def stream_events(self):
+        async def _gen():
+            return
+            yield  # pragma: no cover - marks this as an async generator
+
+        return _gen()
 
     def to_input_list(self):
         return [
@@ -79,14 +92,14 @@ async def test_vero_agent_implements_canonical_coding_agent_contract(
     )
     captured = {}
 
-    async def fake_run_agent_with_json_sanitization(**kwargs):
-        captured.update(kwargs)
-        return FakeRunResult(), None
+    def fake_run_streamed(agent, *, input, max_turns, run_config=None):
+        captured["agent"] = agent
+        captured["input"] = input
+        captured["max_turns"] = max_turns
+        captured["run_config"] = run_config
+        return FakeRunResult()
 
-    monkeypatch.setattr(
-        "vero.agents.vero.run_agent_with_json_sanitization",
-        fake_run_agent_with_json_sanitization,
-    )
+    monkeypatch.setattr(Runner, "run_streamed", staticmethod(fake_run_streamed))
     context = agent_context(tmp_path, gateway)
     result = await agent.run(
         context=context,

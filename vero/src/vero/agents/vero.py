@@ -1,7 +1,17 @@
-"""VeroAgent - Agent backend using OpenAI Agents SDK for optimization."""
+"""VeroAgent - Agent backend using the OpenAI Agents SDK SandboxAgent.
+
+The agent harness (model orchestration, tool dispatch, event streaming) runs
+on the host; shell and filesystem effects execute inside a sandbox via the
+SDK's ``Shell``/``Filesystem`` capabilities. For the trusted/local path the
+sandbox is bound directly to the candidate checkout's host directory
+(``Manifest(root=...)`` with ``UnixLocalSandboxClient``), so mid-run evaluation
+and candidate capture operate on that directory unchanged. Swapping the sandbox
+client (Docker/Modal/E2B) is the seam for real containment.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -15,35 +25,30 @@ from agents import (
     OpenAIChatCompletionsModel,
     RunConfig,
     RunResultStreaming,
+    Runner,
     TResponseInputItem,
     retry_policies,
     set_tracing_disabled,
 )
 from agents.extensions.models.litellm_model import LitellmModel
+from agents.sandbox import Manifest, SandboxRunConfig
+from agents.sandbox.capabilities import Filesystem, Shell
+from agents.sandbox.sandbox_agent import SandboxAgent
+from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
 from pydantic import BaseModel
 
 from vero.agents.events import AgentEvent
 from vero.agents.protocol import AgentContext, AgentRunResult
-from vero.tools.bash import BashTool
 from vero.tools.base import ToolSet
 from vero.tools.evaluation import EvaluationTools
-from vero.tools.file_read import FileRead
-from vero.tools.file_write import FileWrite
-from vero.tools.git_control import GitControl
-from vero.tools.git_viewer import GitViewer
-from vero.tools.grep import Grep
 from vero.tools.planning import TodoList, think
 from vero.tools.sub_agent import SubAgentTool
 from vero.tools.utils.openai_agents import (
     callable_to_oai_tool,
     tool_set_instance_to_oai_tools,
 )
-from vero.tools.web import WebFetch
 from vero.utils.general import recursively_serialize
-from vero.utils.openai_agents import (
-    run_agent_with_json_sanitization,
-    strict_mode_from_model,
-)
+from vero.utils.openai_agents import stream_events, strict_mode_from_model
 
 logger = logging.getLogger(__name__)
 
@@ -51,20 +56,17 @@ set_tracing_disabled(True)
 
 
 def default_tool_sets() -> list[ToolSet | object | Callable]:
-    """Default tools for the VeroAgent."""
+    """Default vero-specific tools for the VeroAgent.
+
+    Shell/file/grep/git capabilities are provided by the SDK's ``Shell`` and
+    ``Filesystem`` capabilities (see :meth:`VeroAgent._create_agent`), so only
+    vero-specific tools live here.
+    """
 
     return [
-        BashTool(),
         EvaluationTools(),
-        FileRead(),
-        FileWrite(),
-        GitControl(),
-        GitViewer(),
-        Grep(),
-        SubAgentTool(),
         TodoList(),
         think,
-        WebFetch(),
     ]
 
 
@@ -118,6 +120,7 @@ class VeroAgent:
     )
     max_retries: int = 3
     event_timeout: int | None = 60 * 12
+    sandbox_client_factory: Callable[[], Any] = UnixLocalSandboxClient
     state: list[TResponseInputItem] | None = field(default=None, repr=False)
 
     _context: AgentContext | None = field(default=None, repr=False)
@@ -162,23 +165,25 @@ class VeroAgent:
         run_config = RunConfig(
             workflow_name=f"vero::{context.session_id}",
             trace_id=context.session_id,
+            sandbox=SandboxRunConfig(
+                client=self.sandbox_client_factory(),
+                manifest=Manifest(root=str(context.project_path)),
+            ),
         )
 
-        self._run_result, error = await run_agent_with_json_sanitization(
-            agent=agent,
+        self._run_result = Runner.run_streamed(
+            agent,
             input=inputs,
             max_turns=max_turns,
-            sanitize_invalid_json=True,
-            max_retries=self.max_retries,
             run_config=run_config,
-            event_timeout=self.event_timeout,
-            on_event=on_event,
         )
-        if self._run_result:
-            self.state = self._run_result.to_input_list()
-
-        if isinstance(error, Exception):
-            raise error
+        async for event in stream_events(
+            self._run_result, event_timeout=self.event_timeout
+        ):
+            if on_event is not None:
+                on_event(event)
+            await asyncio.sleep(0)
+        self.state = self._run_result.to_input_list()
 
         metadata = {"usage": self.usage()}
         model = self.model_str()
@@ -324,19 +329,26 @@ class VeroAgent:
     def sub_agents_enabled(self) -> bool:
         return any(isinstance(ts, SubAgentTool) for ts in self.tool_sets)
 
-    def _create_agent(self) -> Agent:
-        """Create the OAI Agent by augmenting the template with vero tools and hooks."""
+    def _create_agent(self) -> SandboxAgent:
+        """Build the SandboxAgent from the template, adding vero tools + capabilities.
+
+        ``Shell`` and ``Filesystem`` capabilities give the agent a real shell,
+        file operations, and ``apply_patch`` that execute inside the sandbox
+        (bound to the candidate checkout). Vero-specific tools (evaluation,
+        planning) run host-side in the harness.
+        """
         tools = self._get_tools() + list(self.oai_agent.tools)
 
         instructions = self._context.instructions if self._context else None
 
-        return Agent(
+        return SandboxAgent(
             name=self.oai_agent.name,
             model=self.oai_agent.model,
             model_settings=self.oai_agent.model_settings,
             output_type=self.oai_agent.output_type,
             tools=tools,
             instructions=instructions or self.oai_agent.instructions,
+            capabilities=[Shell(), Filesystem()],
         )
 
     def _get_tools(self) -> list[FunctionTool]:
