@@ -1,17 +1,23 @@
-"""VeroAgent - Agent backend using the OpenAI Agents SDK SandboxAgent.
+"""VeroAgent - native coding agent on the OpenAI Agents SDK.
 
-The agent harness (model orchestration, tool dispatch, event streaming) runs
-on the host; shell and filesystem effects execute inside a sandbox via the
-SDK's ``Shell``/``Filesystem`` capabilities. For the trusted/local path the
-sandbox is bound directly to the candidate checkout's host directory
-(``Manifest(root=...)`` with ``UnixLocalSandboxClient``), so mid-run evaluation
-and candidate capture operate on that directory unchanged. Swapping the sandbox
-client (Docker/Modal/E2B) is the seam for real containment.
+The agent harness (model orchestration, tool dispatch, event streaming) runs on
+the host. Shell and file effects execute INSIDE a sandbox via plain *function
+tools* (see ``vero.tools.sandbox_tools``) that drive an SDK ``SandboxSession``.
+The sandbox is bound to the candidate checkout's host directory
+(``Manifest(root=...)``), so mid-run evaluation and candidate capture operate on
+that directory unchanged; the sandbox *client* is the containment seam
+(unix-local by default; docker / modal / e2b for real isolation).
+
+Using function tools rather than the SDK's hosted ``Shell``/``Filesystem``
+capabilities keeps the native path model-agnostic: it works with any provider
+over LiteLLM (ChatCompletions) or the Responses API. Hosted capabilities would
+restrict it to the OpenAI Responses API.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 from dataclasses import dataclass, field
@@ -23,7 +29,6 @@ from agents import (
     ModelRetrySettings,
     ModelSettings,
     OpenAIChatCompletionsModel,
-    OpenAIResponsesModel,
     RunConfig,
     RunResultStreaming,
     Runner,
@@ -32,9 +37,7 @@ from agents import (
     set_tracing_disabled,
 )
 from agents.extensions.models.litellm_model import LitellmModel
-from agents.sandbox import Manifest, SandboxRunConfig
-from agents.sandbox.capabilities import Filesystem, Shell
-from agents.sandbox.sandbox_agent import SandboxAgent
+from agents.sandbox import Manifest
 from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
 from pydantic import BaseModel
 
@@ -43,6 +46,7 @@ from vero.agents.protocol import AgentContext, AgentRunResult
 from vero.tools.base import ToolSet
 from vero.tools.evaluation import EvaluationTools
 from vero.tools.planning import TodoList, think
+from vero.tools.sandbox_tools import build_sandbox_tools
 from vero.tools.sub_agent import SubAgentTool
 from vero.tools.utils.openai_agents import (
     callable_to_oai_tool,
@@ -59,8 +63,8 @@ set_tracing_disabled(True)
 def default_tool_sets() -> list[ToolSet | object | Callable]:
     """Default vero-specific tools for the VeroAgent.
 
-    Shell/file/grep/git capabilities are provided by the SDK's ``Shell`` and
-    ``Filesystem`` capabilities (see :meth:`VeroAgent._create_agent`), so only
+    Shell and file access are provided by function tools bound to the sandbox
+    session at run time (see :meth:`VeroAgent._create_agent`), so only
     vero-specific tools live here.
     """
 
@@ -74,30 +78,23 @@ def default_tool_sets() -> list[ToolSet | object | Callable]:
 def _default_oai_agent(model: str | None = None) -> Agent:
     """Build the template Agent.
 
-    SandboxAgent's Shell/Filesystem capabilities register *hosted* tools
-    (apply_patch, shell) that are only supported by the OpenAI Responses API,
-    not ChatCompletions. So the native agentic path uses OpenAIResponsesModel
-    against an OpenAI-compatible endpoint (e.g. the LiteLLM proxy exposed via
-    OPENAI_BASE_URL), which limits models to the Responses-capable / OpenAI
-    family served there.
+    The native path drives the sandbox with plain function tools, so any
+    provider works via LiteLLM. Model is configurable via VERO_OPTIMIZER_MODEL
+    or VeroAgent.for_model().
     """
     import os
 
-    from openai import AsyncOpenAI
-
     model = model or os.getenv("VERO_OPTIMIZER_MODEL") or "openai/gpt-5.4"
 
-    client_kwargs: dict[str, str] = {}
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if base_url:
-        client_kwargs["base_url"] = base_url.rstrip("/")
-    api_key = os.getenv("OPENAI_API_KEY")
+    litellm_kwargs: dict[str, str] = {}
+    api_key = os.getenv("LITELLM_API_KEY")
     if api_key:
-        client_kwargs["api_key"] = api_key
+        litellm_kwargs["api_key"] = api_key
+    base_url = os.getenv("LITELLM_BASE_URL")
+    if base_url:
+        litellm_kwargs["base_url"] = base_url.rstrip("/")
 
-    configured_model = OpenAIResponsesModel(
-        model=model, openai_client=AsyncOpenAI(**client_kwargs)
-    )
+    configured_model = LitellmModel(model=model, **litellm_kwargs)
 
     return Agent(
         name="VeroAgent",
@@ -174,29 +171,35 @@ class VeroAgent:
         input = prompt or "Improve the program, using evaluation feedback when useful."
         inputs = state + [{"role": "user", "content": input}]
 
-        agent = self._create_agent()
-        run_config = RunConfig(
-            workflow_name=f"vero::{context.session_id}",
-            trace_id=context.session_id,
-            sandbox=SandboxRunConfig(
-                client=self.sandbox_client_factory(),
-                manifest=Manifest(root=str(context.project_path)),
-            ),
+        client = self.sandbox_client_factory()
+        session = await client.create(
+            manifest=Manifest(root=str(context.project_path))
         )
-
-        self._run_result = Runner.run_streamed(
-            agent,
-            input=inputs,
-            max_turns=max_turns,
-            run_config=run_config,
-        )
-        async for event in stream_events(
-            self._run_result, event_timeout=self.event_timeout
-        ):
-            if on_event is not None:
-                on_event(event)
-            await asyncio.sleep(0)
-        self.state = self._run_result.to_input_list()
+        await session.start()
+        try:
+            agent = self._create_agent(session)
+            run_config = RunConfig(
+                workflow_name=f"vero::{context.session_id}",
+                trace_id=context.session_id,
+            )
+            self._run_result = Runner.run_streamed(
+                agent,
+                input=inputs,
+                max_turns=max_turns,
+                run_config=run_config,
+            )
+            async for event in stream_events(
+                self._run_result, event_timeout=self.event_timeout
+            ):
+                if on_event is not None:
+                    on_event(event)
+                await asyncio.sleep(0)
+            self.state = self._run_result.to_input_list()
+        finally:
+            with contextlib.suppress(Exception):
+                await session.stop()
+            with contextlib.suppress(Exception):
+                await client.delete(session)
 
         metadata = {"usage": self.usage()}
         model = self.model_str()
@@ -269,10 +272,7 @@ class VeroAgent:
         return None
 
     def model_str(self) -> str | None:
-        if isinstance(
-            self.oai_agent.model,
-            (LitellmModel, OpenAIChatCompletionsModel, OpenAIResponsesModel),
-        ):
+        if isinstance(self.oai_agent.model, (LitellmModel, OpenAIChatCompletionsModel)):
             return self.oai_agent.model.model
         elif isinstance(self.oai_agent.model, str):
             return self.oai_agent.model
@@ -345,26 +345,28 @@ class VeroAgent:
     def sub_agents_enabled(self) -> bool:
         return any(isinstance(ts, SubAgentTool) for ts in self.tool_sets)
 
-    def _create_agent(self) -> SandboxAgent:
-        """Build the SandboxAgent from the template, adding vero tools + capabilities.
+    def _create_agent(self, session: Any) -> Agent:
+        """Build the Agent: sandbox function tools + vero tools + the template.
 
-        ``Shell`` and ``Filesystem`` capabilities give the agent a real shell,
-        file operations, and ``apply_patch`` that execute inside the sandbox
-        (bound to the candidate checkout). Vero-specific tools (evaluation,
-        planning) run host-side in the harness.
+        The shell/read_file/write_file tools execute inside ``session`` (bound
+        to the candidate checkout). Vero-specific tools (evaluation, planning)
+        run host-side in the harness.
         """
-        tools = self._get_tools() + list(self.oai_agent.tools)
+        tools = (
+            build_sandbox_tools(session)
+            + self._get_tools()
+            + list(self.oai_agent.tools)
+        )
 
         instructions = self._context.instructions if self._context else None
 
-        return SandboxAgent(
+        return Agent(
             name=self.oai_agent.name,
             model=self.oai_agent.model,
             model_settings=self.oai_agent.model_settings,
             output_type=self.oai_agent.output_type,
             tools=tools,
             instructions=instructions or self.oai_agent.instructions,
-            capabilities=[Shell(), Filesystem()],
         )
 
     def _get_tools(self) -> list[FunctionTool]:

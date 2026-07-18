@@ -34,6 +34,7 @@ optimize = [
     "httpx>=0.28.1",
     "lxml>=6.0.2",
     "openai-agents[litellm]>=0.18.3,<0.19",
+    "orjson>=3.10",
     "pypdf>=6.2.0",
     "trafilatura>=2.0.0",
 ]
