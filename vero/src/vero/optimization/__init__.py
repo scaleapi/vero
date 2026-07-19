@@ -21,6 +21,7 @@ from vero.optimization.protocols import (
     SelectionPolicy,
 )
 from vero.optimization.strategy import (
+    DarwinGodelStrategy,
     EvolutionaryStrategy,
     ObjectiveSelectionPolicy,
     SequentialStrategy,
@@ -34,6 +35,7 @@ __all__ = [
     "CandidateProposal",
     "CommandCandidateProducer",
     "CommandCandidateProducerConfig",
+    "DarwinGodelStrategy",
     "EvolutionaryStrategy",
     "GenerationBackend",
     "GenerationOutcome",
