@@ -38,16 +38,35 @@ and token budgets are recorded separately and are visible through
 
 Run the outer optimization through VeRO so it can give Harbor's coding-agent
 adapter the scoped credential while forwarding the upstream credential only to
-the gateway:
+the gateway. `vero harbor run` is the whole pipeline in one command: it compiles
+the `build.yaml` to a temporary task, wires credentials (relocating the upstream
+inference key to the gateway and handing the optimizer a scoped producer token),
+and invokes Harbor. Put run secrets in a dotenv file rather than exporting them
+by hand — copy `secrets.env.example` to `secrets.env` (gitignored) and fill it
+in:
 
 ```bash
+cp program-opt-bench/gaia/baseline/secrets.env.example \
+   program-opt-bench/gaia/baseline/secrets.env   # then edit it
+
 cd vero
 uv run vero harbor run \
   --config ../program-opt-bench/gaia/baseline/build.yaml \
-  --environment modal \
+  --env-file ../program-opt-bench/gaia/baseline/secrets.env \
+  --environment docker \
   --agent codex \
-  --model openai/gpt-5.5
+  --model gpt-5.6-sol \
+  --yes \
+  -o ../runs/gaia-full/jobs
 ```
+
+`--env-file` values override the ambient shell and are passed only through the
+subprocess environment, never on the command line. Anything after the known
+options (here `--yes -o ...`) is forwarded verbatim to `harbor run`. The
+`--model` value is fed to `${optimizer_model}` so the producer scope's
+allow-list and the optimizer agent's model stay in lockstep (no 403 mismatch).
+Use `--environment modal` to run the optimizer itself remotely, or `docker` to
+run it locally against Modal eval backends.
 
 The coding agent edits only `target/`; inner evaluations run the candidate
 against the pinned GAIA tasks on Modal. Complete development tasks and

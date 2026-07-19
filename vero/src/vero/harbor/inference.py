@@ -347,9 +347,6 @@ _RESPONSE_HEADERS = {
     "request-id",
     "x-request-id",
 }
-_ALLOWED_ENDPOINTS = {"responses", "chat/completions", "embeddings"}
-
-
 def _provider_error(status_code: int, message: str, code: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -423,9 +420,14 @@ def create_inference_gateway_app(
         endpoint: str,
         request: Request,
         authorization: Annotated[str | None, Header()] = None,
+        x_api_key: Annotated[str | None, Header()] = None,
     ):
         scope = config.scopes.get(scope_name)
-        token = _bearer_token(authorization)
+        # Provider-agnostic auth: OpenAI/codex clients send the scope token as
+        # `Authorization: Bearer`, Anthropic/Claude clients send it as `x-api-key`.
+        token = _bearer_token(authorization) or (
+            x_api_key.strip() if x_api_key and x_api_key.strip() else None
+        )
         if (
             scope is None
             or token is None
@@ -434,9 +436,14 @@ def create_inference_gateway_app(
             return _provider_error(
                 403, "invalid inference scope token", "invalid_token"
             )
-        if endpoint not in _ALLOWED_ENDPOINTS:
+        # Provider-agnostic passthrough: forward any inference endpoint
+        # (responses, chat/completions, messages, embeddings, ...) to the upstream
+        # litellm proxy, which decides what it supports. Guard only against path
+        # traversal escaping the scoped upstream base — not a per-provider list.
+        endpoint = endpoint.strip("/")
+        if not endpoint or ".." in endpoint.split("/"):
             return _provider_error(
-                403, "inference endpoint is not allowed", "endpoint_denied"
+                400, "invalid inference endpoint", "invalid_endpoint"
             )
         try:
             body = await request.body()

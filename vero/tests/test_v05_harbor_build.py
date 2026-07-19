@@ -16,6 +16,7 @@ from vero.harbor import (
     InferenceBudgetSpec,
     InferenceGatewaySpec,
     VerificationTargetSpec,
+    WorkspaceOverlaySpec,
     compile_harbor_task,
     load_harbor_build_config,
 )
@@ -151,6 +152,50 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
     }
     values.update(updates)
     return HarborBuildConfig(**values)
+
+
+def test_compiler_bakes_workspace_overlay_into_agent_environment(tmp_path):
+    bundle = tmp_path / "bundle"
+    (bundle / ".claude" / "agents").mkdir(parents=True)
+    (bundle / ".claude" / "agents" / "insights.md").write_text("# a\n", encoding="utf-8")
+    (bundle / "skills" / "insights").mkdir(parents=True)
+    (bundle / "skills" / "insights" / "SKILL.md").write_text("# s\n", encoding="utf-8")
+
+    config = _config(
+        tmp_path,
+        workspace_overlays=[
+            WorkspaceOverlaySpec(source=str(bundle / ".claude"), dest=".claude"),
+            WorkspaceOverlaySpec(source=str(bundle / "skills"), dest="skills"),
+        ],
+    )
+    output = compile_harbor_task(config, tmp_path / "compiled")
+    env = output / "environment"
+
+    # staged into the build context under environment/overlay/<dest>
+    assert (env / "overlay" / ".claude" / "agents" / "insights.md").is_file()
+    assert (env / "overlay" / "skills" / "insights" / "SKILL.md").is_file()
+    # Dockerfile copies it, seed applies it, injected tooling is git-excluded
+    assert "COPY overlay /opt/overlay" in (env / "Dockerfile").read_text()
+    seed = (env / "main" / "seed.sh").read_text()
+    assert "cp -a /opt/overlay/. /work/agent/" in seed
+    assert "/.claude/" in seed and "/skills/" in seed
+
+
+def test_compiler_omits_overlay_when_unset(tmp_path):
+    output = compile_harbor_task(_config(tmp_path), tmp_path / "compiled")
+    env = output / "environment"
+    assert not (env / "overlay").exists()
+    assert "COPY overlay" not in (env / "Dockerfile").read_text()
+    assert "/opt/overlay" not in (env / "main" / "seed.sh").read_text()
+
+
+def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):
+    present = tmp_path / "present"
+    present.mkdir()
+    with pytest.raises(ValidationError):
+        WorkspaceOverlaySpec(source=str(present), dest="../escape")
+    with pytest.raises(ValidationError):
+        WorkspaceOverlaySpec(source=str(tmp_path / "missing"), dest="ok")
 
 
 def test_build_config_requires_pins_and_valid_partition_references(tmp_path):

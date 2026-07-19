@@ -10,3 +10,8 @@ wheels/
 # Virtual environments
 .venv
 .env*
+
+# Run secrets loaded via `vero harbor run --env-file` (keep only *.example)
+secrets.env
+*.secrets.env
+!*.example

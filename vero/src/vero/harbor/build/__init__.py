@@ -7,6 +7,7 @@ from vero.harbor.build.config import (
     InferenceBudgetSpec,
     InferenceGatewaySpec,
     VerificationTargetSpec,
+    WorkspaceOverlaySpec,
     load_harbor_build_config,
 )
 
@@ -16,6 +17,7 @@ __all__ = [
     "InferenceBudgetSpec",
     "InferenceGatewaySpec",
     "VerificationTargetSpec",
+    "WorkspaceOverlaySpec",
     "compile_harbor_task",
     "load_harbor_build_config",
 ]

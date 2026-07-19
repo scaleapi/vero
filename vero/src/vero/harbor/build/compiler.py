@@ -454,6 +454,26 @@ def compile_harbor_task(
         environment_dir / "agent-baseline",
         environment_dir / "agent-seed",
     )
+    # General filesystem overlay: bake arbitrary host files/dirs into the agent
+    # workspace at build time. A source dir's *contents* land under dest; a source
+    # file lands as dest/<name>. dest="." is the workspace root.
+    overlay_present = bool(config.workspace_overlays)
+    overlay_excludes: list[str] = []
+    if overlay_present:
+        overlay_root = environment_dir / "overlay"
+        for spec in config.workspace_overlays:
+            source = Path(spec.source)
+            target = overlay_root if spec.dest == "." else overlay_root / spec.dest
+            if source.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source, target, dirs_exist_ok=True)
+            else:
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target / source.name)
+            if spec.dest != ".":
+                top = spec.dest.split("/", 1)[0]
+                if top not in overlay_excludes:
+                    overlay_excludes.append(top)
     _write_cases(config, sidecar_dir / "cases")
     local_task_source = Path(config.task_source).exists()
     if local_task_source:
@@ -581,6 +601,8 @@ def compile_harbor_task(
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),
+        "overlay_present": overlay_present,
+        "overlay_excludes": overlay_excludes,
     }
     _render("task.toml.j2", output / "task.toml", **context)
     _render("instruction.md.j2", output / "instruction.md", **context)

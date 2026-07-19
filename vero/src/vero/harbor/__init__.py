@@ -7,6 +7,7 @@ from vero.harbor.build import (
     InferenceBudgetSpec,
     InferenceGatewaySpec,
     VerificationTargetSpec,
+    WorkspaceOverlaySpec,
     compile_harbor_task,
     load_harbor_build_config,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "InferenceBudgetSpec",
     "InferenceGatewaySpec",
     "VerificationTargetSpec",
+    "WorkspaceOverlaySpec",
     "CandidateTransferError",
     "CandidateTransport",
     "EvaluationAccessError",

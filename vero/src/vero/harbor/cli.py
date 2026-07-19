@@ -195,9 +195,46 @@ def _load_agent_trace(path: Path) -> object:
     return entries or values
 
 
-def _compiled_run_environment(task: Path) -> dict[str, str]:
-    """Separate provider credentials from the environment seen by Harbor agents."""
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a dotenv-style ``NAME=VALUE`` secrets file.
+
+    Blank lines and ``#`` comments are ignored; a leading ``export`` is
+    tolerated and surrounding single/double quotes are stripped. Values are
+    kept verbatim otherwise (no shell/variable expansion) so a secret cannot
+    be silently mangled.
+    """
+    values: dict[str, str] = {}
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export ") or line.startswith("export\t"):
+            line = line[len("export ") :].lstrip()
+        name, separator, value = line.partition("=")
+        name = name.strip()
+        if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
+            raise click.ClickException(
+                f"{path}:{lineno}: expected NAME=VALUE with a valid NAME, got {raw!r}"
+            )
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        values[name] = value
+    return values
+
+
+def _compiled_run_environment(
+    task: Path, overrides: dict[str, str] | None = None
+) -> dict[str, str]:
+    """Separate provider credentials from the environment seen by Harbor agents.
+
+    ``overrides`` (e.g. a loaded ``--env-file``) take precedence over the
+    ambient environment so a run is reproducible from an explicit secrets file
+    regardless of what happens to be exported in the shell.
+    """
     environment = os.environ.copy()
+    if overrides:
+        environment.update(overrides)
     path = task / "environment/gateway/launch.json"
     if not path.exists():
         return environment
@@ -241,6 +278,15 @@ def _compiled_run_environment(task: Path) -> dict[str, str]:
         environment[base_target] = upstream_base_url
     environment["OPENAI_API_KEY"] = producer_api_key
     environment["OPENAI_BASE_URL"] = producer_base_url
+    # Claude Code (harbor -a claude) reads the Anthropic surface from the host
+    # env; point it at the same producer scope. The Anthropic SDK re-appends
+    # "/v1/messages", so hand it the scope root without the trailing "/v1".
+    # Set unconditionally: codex ignores ANTHROPIC_*, claude ignores OPENAI_*, so
+    # one compiled task serves either optimizer via `--agent`.
+    environment["ANTHROPIC_API_KEY"] = producer_api_key
+    environment["ANTHROPIC_BASE_URL"] = producer_base_url[: -len("/v1")] if (
+        producer_base_url.endswith("/v1")
+    ) else producer_base_url
     return environment
 
 
@@ -329,15 +375,32 @@ def build_command(config_path, output, params):
 @click.option("--agent", required=True, help="Harbor optimizer agent.")
 @click.option("--model", help="Model used by the optimizer agent.")
 @click.option("--environment", default="modal", show_default=True)
+@click.option(
+    "--env-file",
+    "env_file",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    help=(
+        "Load NAME=VALUE run secrets (e.g. the upstream inference key and "
+        "MODAL_TOKEN_ID/SECRET) from a dotenv file. File values take precedence "
+        "over the ambient environment and never appear on the command line."
+    ),
+)
 @_PARAM_OPTION
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
-def run_command(config_path, agent, model, environment, params, extra):
+def run_command(config_path, agent, model, environment, params, env_file, extra):
     """Compile to a temporary directory and invoke `harbor run`."""
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
     uvx = shutil.which("uvx")
     if uvx is None:
         raise click.ClickException("uvx is required to run a compiled Harbor task")
+    overrides = _load_env_file(env_file) if env_file else None
+    if overrides:
+        click.echo(f"Loaded {len(overrides)} secret(s) from {env_file}")
+        # Apply before compiling: the build's declared-credential check and the
+        # ${NAME} param resolution both read os.environ, so the env-file must
+        # satisfy them too — not just the launched subprocess.
+        os.environ.update(overrides)
     resolved = _parse_build_params(params)
     # The optimizer model is both codex's -m and the producer scope's allow-list;
     # expose it as the reserved ${optimizer_model} so a build that references it
@@ -371,7 +434,7 @@ def run_command(config_path, agent, model, environment, params, extra):
         click.echo(shlex.join(command))
         completed = subprocess.run(
             command,
-            env=_compiled_run_environment(task),
+            env=_compiled_run_environment(task, overrides),
         )
         if completed.returncode:
             raise SystemExit(completed.returncode)

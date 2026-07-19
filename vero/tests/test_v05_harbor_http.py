@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import click
+import pytest
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
@@ -19,7 +22,12 @@ from vero.evaluation import (
     EvaluationStatus,
 )
 from vero.harbor.app import create_app
-from vero.harbor.cli import _compiled_run_environment, _load_agent_trace, harbor
+from vero.harbor.cli import (
+    _compiled_run_environment,
+    _load_agent_trace,
+    _load_env_file,
+    harbor,
+)
 from vero.harbor.auth import (
     check_admin_token,
     read_admin_token,
@@ -148,6 +156,70 @@ def test_compiled_run_environment_keeps_upstream_credentials_from_agent(
     assert environment["VERO_INFERENCE_UPSTREAM_BASE_URL"] == (
         "https://provider.example/v1"
     )
+    # Claude Code (harbor -a claude) is pointed at the same producer scope; the
+    # Anthropic SDK re-appends "/v1/messages" so the base drops the trailing /v1.
+    assert environment["ANTHROPIC_API_KEY"] == "producer-scope-token"
+    assert environment["ANTHROPIC_BASE_URL"] == (
+        "http://inference/scopes/producer/optimizer"
+    )
+
+
+def test_load_env_file_parses_comments_export_and_quotes(tmp_path):
+    path = tmp_path / "secrets.env"
+    path.write_text(
+        "# a comment\n"
+        "\n"
+        "OPENAI_API_KEY=upstream-secret\n"
+        "export MODAL_TOKEN_ID='mt-id'\n"
+        'MODAL_TOKEN_SECRET="mt-secret"\n'
+    )
+
+    values = _load_env_file(path)
+
+    assert values == {
+        "OPENAI_API_KEY": "upstream-secret",
+        "MODAL_TOKEN_ID": "mt-id",
+        "MODAL_TOKEN_SECRET": "mt-secret",
+    }
+
+
+def test_load_env_file_rejects_malformed_line(tmp_path):
+    path = tmp_path / "secrets.env"
+    path.write_text("NOT_AN_ASSIGNMENT\n")
+
+    with pytest.raises(click.ClickException):
+        _load_env_file(path)
+
+
+def test_env_file_overrides_take_precedence_over_ambient_environment(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-wrong-key")
+    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
+    launch = tmp_path / "environment/gateway/launch.json"
+    launch.parent.mkdir(parents=True)
+    launch.write_text(
+        json.dumps(
+            {
+                "upstream_api_key_source": "OPENAI_API_KEY",
+                "upstream_api_key_target": "VERO_INFERENCE_UPSTREAM_API_KEY",
+                "producer_api_key": "producer-scope-token",
+                "producer_base_url": "http://inference/scopes/producer/optimizer/v1",
+                "upstream_base_url_target": "VERO_INFERENCE_UPSTREAM_BASE_URL",
+            }
+        )
+    )
+
+    environment = _compiled_run_environment(
+        tmp_path,
+        {"OPENAI_API_KEY": "file-upstream-secret", "MODAL_TOKEN_ID": "mt-id"},
+    )
+
+    # The upstream credential relocated to the gateway target comes from the
+    # env-file, not the ambient shell.
+    assert environment["VERO_INFERENCE_UPSTREAM_API_KEY"] == "file-upstream-secret"
+    assert environment["OPENAI_API_KEY"] == "producer-scope-token"
+    assert environment["MODAL_TOKEN_ID"] == "mt-id"
 
 
 def test_codex_jsonl_is_converted_to_a_redacted_producer_trace(tmp_path):
@@ -229,6 +301,63 @@ def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkey
         "harbor[modal]==0.18.0",
         "harbor",
     ]
+
+
+def test_harbor_run_env_file_secrets_reach_subprocess_not_command_line(
+    tmp_path, monkeypatch
+):
+    import vero.harbor.build as harbor_build
+    import vero.harbor.cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("task_name: unused\n")
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text("MODAL_TOKEN_ID=mt-id\nMODAL_TOKEN_SECRET=mt-secret\n")
+    config = SimpleNamespace(harbor_requirement="harbor[modal]==0.18.0")
+    observed = {}
+
+    def compile_task(_config, output):
+        # The build's declared-credential check reads os.environ at compile time,
+        # so the env-file must already be applied here (not just at subprocess launch).
+        observed["modal_at_compile"] = os.environ.get("MODAL_TOKEN_ID")
+        output.mkdir(parents=True)
+        return output
+
+    def run(command, *, env):
+        observed["command"] = command
+        observed["environment"] = env
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(
+        harbor_build, "load_harbor_build_config", lambda _path, **_kwargs: config
+    )
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", compile_task)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda _name: "/usr/bin/uvx")
+    monkeypatch.setattr(harbor_cli.subprocess, "run", run)
+
+    result = CliRunner().invoke(
+        harbor,
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "codex",
+            "--environment",
+            "docker",
+            "--env-file",
+            str(env_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed["modal_at_compile"] == "mt-id"
+    assert observed["environment"]["MODAL_TOKEN_ID"] == "mt-id"
+    assert observed["environment"]["MODAL_TOKEN_SECRET"] == "mt-secret"
+    # Secrets are passed via the environment only, never on argv.
+    assert "mt-secret" not in " ".join(observed["command"])
+    assert "Loaded 2 secret(s)" in result.output
+    assert "mt-secret" not in result.output
 
 
 def test_http_app_separates_agent_and_admin_surfaces(tmp_path, monkeypatch):

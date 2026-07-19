@@ -64,6 +64,15 @@ verifier_timeout_seconds: 7200
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
+
+# Bake the Insights Generator subagent bundle into the optimizer workspace so a
+# Claude Code optimizer (harbor -a claude) can dispatch insights-generator /
+# ig-scout / ig-investigator over its own .vero trace corpus between proposals.
+workspace_overlays:
+  - source: ../../../vero/examples/insights-bundle/.claude
+    dest: .claude
+  - source: ../../../vero/examples/insights-bundle/skills
+    dest: skills
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL

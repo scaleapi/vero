@@ -100,6 +100,46 @@ class InferenceGatewaySpec(EvaluationModel):
         return value.rstrip("/")
 
 
+class WorkspaceOverlaySpec(EvaluationModel):
+    """A host file or directory to copy into the compiled task's agent workspace.
+
+    General-purpose filesystem injection: bake anything (agent definitions,
+    skills, config, data) into the optimizer's ``/work/agent`` at build time.
+    ``source`` is a host path (resolved relative to the build YAML); ``dest`` is
+    where its contents land relative to the workspace root (``.`` = the root).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    dest: str = "."
+
+    @field_validator("source")
+    @classmethod
+    def validate_source(cls, value: str) -> str:
+        if not value.strip() or not Path(value).exists():
+            raise ValueError("overlay source must be an existing file or directory")
+        return value
+
+    @field_validator("dest")
+    @classmethod
+    def validate_dest(cls, value: str) -> str:
+        candidate = value.strip()
+        path = Path(candidate)
+        if candidate == ".":
+            return candidate
+        if (
+            not candidate
+            or path.is_absolute()
+            or ".." in path.parts
+            or re.fullmatch(r"[A-Za-z0-9_./-]+", candidate) is None
+        ):
+            raise ValueError(
+                "overlay dest must be a safe relative path within the workspace"
+            )
+        return candidate
+
+
 class HarborBuildConfig(EvaluationModel):
     """Everything needed to emit an isolated Harbor optimization task."""
 
@@ -156,6 +196,7 @@ class HarborBuildConfig(EvaluationModel):
     secrets: list[str] = Field(default_factory=list)
     inference_gateway: InferenceGatewaySpec | None = None
     read_only_paths: list[str] = Field(default_factory=list)
+    workspace_overlays: list[WorkspaceOverlaySpec] = Field(default_factory=list)
     instruct_multifidelity: bool = True
     instruct_exhaust_budget: bool = True
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
@@ -467,4 +508,10 @@ def load_harbor_build_config(
     task_manifest = value.get("task_manifest")
     if isinstance(task_manifest, str) and not Path(task_manifest).is_absolute():
         value["task_manifest"] = str((base / task_manifest).resolve())
+    overlays = value.get("workspace_overlays")
+    if isinstance(overlays, list):
+        for entry in overlays:
+            source = entry.get("source") if isinstance(entry, dict) else None
+            if isinstance(source, str) and not Path(source).is_absolute():
+                entry["source"] = str((base / source).resolve())
     return HarborBuildConfig.model_validate(value)

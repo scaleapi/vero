@@ -174,7 +174,7 @@ def test_gateway_meters_streaming_responses(tmp_path):
     assert usage["total_tokens"] == 8
 
 
-def test_gateway_reloads_usage_and_denies_disallowed_endpoints(tmp_path):
+def test_gateway_reloads_usage_and_enforces_budget(tmp_path):
     config = _config(tmp_path, max_requests=1)
     (tmp_path / "usage.json").write_text(
         json.dumps(
@@ -200,20 +200,102 @@ def test_gateway_reloads_usage_and_denies_disallowed_endpoints(tmp_path):
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
     )
     with TestClient(app) as client:
-        endpoint = client.post(
-            "/scopes/producer/optimizer/v1/files",
-            headers={"Authorization": "Bearer scoped-token"},
-            json={"model": "gpt-test"},
-        )
         exhausted = client.post(
             "/scopes/producer/optimizer/v1/responses",
             headers={"Authorization": "Bearer scoped-token"},
             json={"model": "gpt-test", "input": "hello"},
         )
 
-    assert endpoint.status_code == 403
     assert exhausted.status_code == 429
     assert app.state.usage_store.ledger.scopes["producer"].active_requests == 0
+
+
+def test_gateway_forwards_arbitrary_endpoints_to_upstream(tmp_path):
+    # Provider-agnostic passthrough: an endpoint the gateway has never heard of
+    # (here the Anthropic Messages surface) is forwarded to the upstream proxy,
+    # with the same scope-token + model + budget enforcement as any other call.
+    observed = []
+
+    def upstream(request: httpx.Request):
+        observed.append(request)
+        return httpx.Response(
+            200, json={"usage": {"input_tokens": 3, "output_tokens": 2}}
+        )
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        forwarded = client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "messages": []},
+        )
+        wrong_model = client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "other", "messages": []},
+        )
+
+    assert forwarded.status_code == 200
+    assert wrong_model.status_code == 403  # model allow-list still applies
+    assert str(observed[0].url) == "https://provider.example/v1/messages"
+    assert observed[0].headers["authorization"] == "Bearer upstream-secret"
+
+
+def test_gateway_accepts_scope_token_via_x_api_key_header(tmp_path):
+    # Anthropic/Claude clients send the scope token as `x-api-key`, not
+    # `Authorization: Bearer`; the gateway must accept either.
+    observed = []
+
+    def upstream(request: httpx.Request):
+        observed.append(request)
+        return httpx.Response(200, json={"usage": {"input_tokens": 1}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        via_x_api_key = client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers={"x-api-key": "scoped-token"},
+            json={"model": "gpt-test", "messages": []},
+        )
+        no_token = client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers={"x-api-key": "wrong"},
+            json={"model": "gpt-test", "messages": []},
+        )
+
+    assert via_x_api_key.status_code == 200
+    assert no_token.status_code == 403
+    # the upstream never sees the scope token; it gets the upstream credential
+    assert observed[0].headers["authorization"] == "Bearer upstream-secret"
+
+
+def test_gateway_rejects_path_traversal_endpoints(tmp_path):
+    app = create_inference_gateway_app(
+        config=_config(tmp_path),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={})),
+    )
+    with TestClient(app) as client:
+        # Percent-encoded so the client doesn't normalize `..` away before it
+        # reaches the route; the server-side guard must still reject it.
+        traversal = client.post(
+            "/scopes/producer/optimizer/v1/%2e%2e/admin",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test"},
+        )
+
+    assert traversal.status_code == 400
+    assert traversal.json()["error"]["code"] == "invalid_endpoint"
 
 
 def test_gateway_releases_concurrency_reservation_on_upstream_failure(tmp_path):
