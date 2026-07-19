@@ -237,6 +237,7 @@ class EvaluationSidecar:
         inference_usage_path: Path | None = None,
         inference_limits: dict[str, dict[str, JsonValue]] | None = None,
         submit_enabled: bool = False,
+        disclose_budget: bool = True,
     ):
         self.engine = engine
         self.candidate_transport = candidate_transport
@@ -247,6 +248,7 @@ class EvaluationSidecar:
         )
         self.inference_limits = inference_limits or {}
         self.submit_enabled = submit_enabled
+        self.disclose_budget = disclose_budget
         self._context_lock = asyncio.Lock()
         self._context_initialized = False
         self._evaluation_jobs_dir = (
@@ -729,7 +731,8 @@ class EvaluationSidecar:
                     min_aggregate_cases=policy.min_aggregate_cases,
                     allowed_parameters=list(policy.allowed_parameters),
                     limits=policy.limits,
-                    budget=budget,
+                    # Budget is enforced regardless; disclosure is what we gate.
+                    budget=budget if self.disclose_budget else None,
                 )
             )
         inference_usage: dict[str, JsonValue] | None = None
@@ -743,7 +746,7 @@ class EvaluationSidecar:
                     observed_scopes = scopes
             except (OSError, ValueError):
                 observed_scopes = {}
-        if self.inference_limits:
+        if self.inference_limits and self.disclose_budget:
             inference_usage = {}
             for name, limits in self.inference_limits.items():
                 observed = observed_scopes.get(name)

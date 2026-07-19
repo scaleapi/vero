@@ -170,7 +170,7 @@ class StubTransport:
         return self.candidate
 
 
-def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False):
+def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False, disclose_budget=True):
     candidate = Candidate(
         id="candidate",
         version="candidate-version",
@@ -225,6 +225,7 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False):
         agent_volume=tmp_path / "agent-volume",
         admin_volume=tmp_path / "admin-volume",
         submit_enabled=submit_enabled,
+        disclose_budget=disclose_budget,
     )
     return sidecar, transport, ledger
 
@@ -431,6 +432,24 @@ def test_sidecar_status_reports_inference_usage_and_remaining_budget(tmp_path):
     assert usage["producer"]["requests"] == 3
     assert usage["producer"]["remaining_requests"] == 7
     assert usage["producer"]["remaining_tokens"] == 880
+
+
+def test_sidecar_hides_budget_when_disclosure_disabled(tmp_path):
+    # Budget-blind mode: enforcement is unchanged but /status must not reveal
+    # per-set case budgets or inference remaining, closing the live leak.
+    disclosed, _, _ = _sidecar(tmp_path)
+    assert any(a.budget is not None for a in disclosed.status().evaluation_access)
+
+    blind, _, _ = _sidecar(tmp_path, disclose_budget=False)
+    usage_path = tmp_path / "inference/usage.json"
+    usage_path.parent.mkdir()
+    usage_path.write_text(json.dumps({"schema_version": 1, "scopes": {}}))
+    blind.inference_usage_path = usage_path
+    blind.inference_limits = {"producer": {"max_requests": 10, "max_tokens": 1000}}
+
+    status = blind.status()
+    assert all(a.budget is None for a in status.evaluation_access)
+    assert status.inference_usage is None
 
 
 @pytest.mark.asyncio

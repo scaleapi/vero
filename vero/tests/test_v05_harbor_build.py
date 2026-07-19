@@ -189,6 +189,26 @@ def test_compiler_omits_overlay_when_unset(tmp_path):
     assert "/opt/overlay" not in (env / "main" / "seed.sh").read_text()
 
 
+def test_compiler_budget_disclosure_toggle(tmp_path):
+    disclosed = compile_harbor_task(_config(tmp_path / "on"), tmp_path / "on/out")
+    instruction_on = (disclosed / "instruction.md").read_text(encoding="utf-8")
+    serve_on = json.loads(
+        (disclosed / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    assert "budget" in instruction_on.lower()
+    assert serve_on["disclose_budget"] is True
+
+    blind = compile_harbor_task(
+        _config(tmp_path / "off", disclose_budget=False), tmp_path / "off/out"
+    )
+    instruction_off = (blind / "instruction.md").read_text(encoding="utf-8")
+    serve_off = json.loads(
+        (blind / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    assert "budget" not in instruction_off.lower()
+    assert serve_off["disclose_budget"] is False
+
+
 def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):
     present = tmp_path / "present"
     present.mkdir()

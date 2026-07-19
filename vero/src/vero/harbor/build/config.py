@@ -199,6 +199,12 @@ class HarborBuildConfig(EvaluationModel):
     workspace_overlays: list[WorkspaceOverlaySpec] = Field(default_factory=list)
     instruct_multifidelity: bool = True
     instruct_exhaust_budget: bool = True
+    # Master switch for budget *disclosure* to the optimizer (not enforcement).
+    # When False, no budget language is rendered into the instruction and the
+    # sidecar `/status` omits remaining budgets, so the agent cannot see or reason
+    # about its budget — enabling budget-blind optimization runs. The two
+    # instruct_* flags above only take effect when this is True.
+    disclose_budget: bool = True
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
     base_image_sidecar: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 

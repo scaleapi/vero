@@ -355,6 +355,7 @@ def _deployment_config(
         "agent_volume": AGENT_VOLUME,
         "admin_volume": ADMIN_VOLUME,
         "submit_enabled": config.reward_mode == "submit",
+        "disclose_budget": config.disclose_budget,
         "score_baseline": config.score_baseline,
         "evaluation_drain_timeout_seconds": (
             config.evaluation_drain_timeout_seconds or config.timeout_seconds
@@ -598,6 +599,7 @@ def compile_harbor_task(
             if access.expose_case_resources
         ],
         "exhaust_budget": config.instruct_exhaust_budget,
+        "disclose_budget": config.disclose_budget,
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),

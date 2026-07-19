@@ -83,6 +83,7 @@ class HarborDeploymentConfig(EvaluationModel):
     inference_usage_path: str | None = None
     inference_limits: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
     submit_enabled: bool = False
+    disclose_budget: bool = True
     score_baseline: bool = True
     evaluation_drain_timeout_seconds: float = Field(default=600.0, gt=0)
 
@@ -257,6 +258,7 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         ),
         admin_volume=Path(parsed.admin_volume),
         submit_enabled=parsed.submit_enabled,
+        disclose_budget=parsed.disclose_budget,
         inference_usage_path=(
             Path(parsed.inference_usage_path)
             if parsed.inference_usage_path is not None

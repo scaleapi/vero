@@ -2,7 +2,7 @@
 
 Improve the program in `/work/agent` so it scores as highly as possible on the
 hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
-budget, and final candidate selection.
+{% if disclose_budget %}budget, {% endif %}and final candidate selection.
 
 {% if description %}
 ## Objective
@@ -30,8 +30,8 @@ budget, and final candidate selection.
    outstanding job and do not claim an improvement before its comparison
    baseline has completed.
 
-4. Use `vero harbor status` to inspect evaluation jobs, allowed evaluation sets,
-   and remaining budgets.
+4. Use `vero harbor status` to inspect evaluation jobs and allowed evaluation
+   sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
 {% if submit_enabled %}
 5. When finished, nominate the chosen commit with `vero harbor submit`.
 {% else %}
@@ -40,7 +40,7 @@ budget, and final candidate selection.
    used as a floor, so a regression is not shipped.
 {% endif %}
 
-{% if multifidelity %}
+{% if multifidelity and disclose_budget %}
 ## Allocate the evaluation budget
 
 You decide how to allocate the finite case budget. Use `--start 0 --stop N` or
@@ -85,11 +85,13 @@ those findings guide your next candidate edit. Re-run it as the corpus grows.
 - Only the sidecar evaluates candidates. Only explicitly authorized case
   resources are mounted; validation and final targets remain outside this
   container.
+{% if disclose_budget %}
 - Evaluation budgets are finite and are charged by backend and evaluation set.
+{% endif %}
 - Scores may be noisy; compare candidates on the same selection whenever possible.
 - Reusing the same cases removes case-sampling differences, but target-model
   randomness remains. Replicate important comparisons before assigning causality.
-{% if exhaust_budget %}
+{% if exhaust_budget and disclose_budget %}
 - Unspent evaluation budget is wasted. Use remaining calls to re-measure the
   strongest candidate or try another plausible change.
 {% endif %}
