@@ -608,6 +608,11 @@ class HarborBackend:
             self.config.harbor_requirement,
             "harbor",
             "run",
+            # Non-interactive: a task that declares env vars (e.g. tau3's user-sim
+            # TAU2_* and grader TAU2_NL_ASSERTIONS_MODEL) makes `harbor run` prompt
+            # "Proceed? (Y/n)"; with no stdin the sub-run aborts (0 trials). GAIA
+            # declares none, so it never hit this.
+            "--yes",
             *self._source_args(task_source, local=local_task_source),
             "--agent-import-path",
             self.config.agent_import_path,
@@ -1032,10 +1037,16 @@ class HarborBackend:
 
         matching_tasks = requested_tasks & set(groups)
         if not matching_tasks:
-            message = stderr.strip() or (
-                "Harbor infrastructure produced no matching trials for "
-                f"{len(cases)} requested tasks after {len(attempts)} attempts"
+            # Distinguish "sub-run produced nothing" from "produced trials whose
+            # task_name doesn't match what we requested" — the two collapse to the
+            # same failure otherwise. Surface the found group keys + exit status.
+            detail = (
+                f"no matching trials for {len(cases)} requested tasks after "
+                f"{len(attempts)} attempts; requested e.g. {sorted(requested_tasks)[:2]}, "
+                f"harbor produced {len(groups)} trial group(s) e.g. {sorted(groups)[:3]}, "
+                f"returncode={result.returncode}"
             )
+            message = (stderr.strip() + " || " + detail) if stderr.strip() else detail
             report = EvaluationReport(
                 status=EvaluationStatus.FAILED,
                 diagnostics=[

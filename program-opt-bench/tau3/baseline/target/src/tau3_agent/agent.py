@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shlex
 from typing import Any, override
@@ -71,8 +72,17 @@ class Tau3Agent(BaseAgent):
         instruction_path.write_text(instruction, encoding="utf-8")
         await environment.upload_file(instruction_path, f"{REMOTE_ROOT}/instruction.md")
 
+        # The runner is a fresh process inside the task environment, so forward the
+        # inference credentials Harbor gave this agent into its exec — otherwise the
+        # runner's AsyncOpenAI() has no key (only the host-side agent process does).
+        creds = [
+            f"{name}={shlex.quote(value)}"
+            for name in ("OPENAI_API_KEY", "OPENAI_BASE_URL")
+            if (value := os.environ.get(name))
+        ]
         command = " ".join(
             [
+                *creds,
                 "python3",
                 f"{REMOTE_ROOT}/runner.py",
                 "--instruction",
