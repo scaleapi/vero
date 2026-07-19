@@ -6,22 +6,17 @@
 
 VeRO gives an optimizer something to edit, a controlled way to evaluate it, and
 durable memory of everything it tried. The target is anything you can put under
-Git and score:
+Git and score — a **program** (one function to a whole repo), **text** (a prompt,
+spec, or config), or an **agent** (its scaffold, tools, and prompts).
 
-- a **program** — from a single function to a whole multi-file codebase (a
-  compiler pass, a CUDA kernel, a matmul, a service);
-- **text** — a prompt, specification, config, or document;
-- an **agent** — its scaffold, tools, and prompts.
-
-Agents are programs, but not everyone reads "program" that way, so VeRO calls
-them out as a first-class target: it was introduced to optimize agents and
-generalizes the same version / evaluate / select loop to any Git-versioned
-artifact — a single file or an entire repository.
-
-The target and evaluator do not need to be Python. VeRO's built-in command
-backend communicates with an external evaluation harness through versioned JSON,
-and candidate changes can come from a coding agent, an external command, or a
-custom optimization strategy.
+VeRO runs the same **version → evaluate → select** loop over all of them. *Where*
+each candidate is produced and contained is a swappable backend — and
+**[Harbor](#optimize-an-agent-with-harbor) is the recommended one**: it runs the
+whole coding agent inside a reproducible, credential-isolated container and scores
+it against a trusted evaluation sidecar. That's the right default for optimizing
+agents and for any untrusted or reproducibility-critical run. Lighter local
+backends (a language-neutral command harness, Python tasks) are there for trusted
+work that doesn't need containment.
 
 ```mermaid
 flowchart LR
@@ -35,14 +30,38 @@ flowchart LR
 
 |  |  |
 | --- | --- |
+| **Harbor-first containment** | run the whole agent in a reproducible container against a trusted eval sidecar, behind a credential-isolating inference gateway — the recommended backend |
 | **Any target** | a program (one function up to a whole repo), text (prompts, specs, configs), or an agent |
-| **Any evaluator** | a language-neutral command harness, or Python tasks via `scale-vero-tasks` |
 | **Any producer** | a coding agent (any provider via LiteLLM), an external command, or a custom strategy |
-| **Real containment** | edits run in a sandbox bound to the candidate checkout; Harbor for untrusted / reproducible runs |
 | **Durable & inspectable** | every candidate is versioned and re-selectable; tool calls and evaluations stream to an event log |
 | **Population search** | `EvolutionaryStrategy` fans out N offspring per round with tournament selection |
 
-> **Just want to try it?** Jump to the [Quickstart](#quickstart) — the C-matmul
+## Backends
+
+VeRO separates *what* it optimizes from *how* candidates are produced and scored.
+Start with Harbor; drop to a lighter backend when you don't need containment.
+
+| Backend | Best for | Entry point |
+| --- | --- | --- |
+| **[Harbor](#optimize-an-agent-with-harbor)** — recommended | optimizing agents; untrusted or reproducibility-critical runs. Runs the whole agent in a container against a trusted eval sidecar, with a credential-isolating inference gateway. | `vero harbor run` |
+| [Command harness](#optimize-a-program-with-a-command-harness) | any language; a trusted local evaluator you drive over versioned JSON | `vero run` |
+| [Python tasks](#python-benchmark-tasks) | Python evaluators via `scale-vero-tasks`, no JSON contract to write | `PythonTaskBackend` |
+| [Native in-process](#python-api) | fast trusted local runs; a coding agent whose edits execute in a host-bound sandbox | `vero optimize` |
+
+**Harbor in one command** — compile a build file into a contained task and run an
+agent against it, with secrets kept off the command line:
+
+```bash
+vero harbor run \
+  --config build.yaml \
+  --agent claude-code --model claude-sonnet-4-6 \
+  --env-file secrets.env
+```
+
+See [Optimize an agent with Harbor](#optimize-an-agent-with-harbor) for the build
+file, the inference gateway, and how disclosure and budgets are enforced.
+
+> **Just want to kick the tires first?** The [Quickstart](#quickstart) C-matmul
 > example is deterministic and needs no model credentials.
 
 ## Quickstart
@@ -78,9 +97,218 @@ ShinkaEvolve. It asks an agent to improve a 26-circle packing, exposes exact
 geometric diagnostics and layout artifacts after each authorized evaluation,
 and re-evaluates the selected candidate through a hidden final evaluation.
 
-## Configure an optimization
+## Optimize an agent with Harbor
 
-`vero.toml` is the shortest path from a program to a repeatable optimization:
+Harbor is VeRO's recommended backend for optimizing agents. Each candidate runs
+as a **contained agent**, scored by a **trusted sidecar**, with provider
+credentials held by a **separate gateway** the agent never sees:
+
+```mermaid
+flowchart LR
+    A["Optimizer container<br/>agent edits the candidate<br/>+ calls the CLI"]
+    S["Eval sidecar (trusted)<br/>owns cases, scoring,<br/>budgets, finalization"]
+    G["Inference gateway (trusted)<br/>holds the upstream key,<br/>issues scoped tokens"]
+    A -->|"vero harbor eval"| S
+    A -->|"scoped model calls"| G
+    G --> U["Provider / litellm proxy"]
+```
+
+Two steps: **build** a contained task from a YAML file, then **run** an agent
+against it.
+
+### 1. The build file
+
+`build.yaml` declares the target repo, the task source and case partitions, what
+the agent may evaluate, and the inference gateway:
+
+```yaml
+name: example/optimize-agent
+agent_repo: ../my-program                       # editable target (a Git repo)
+task_source: example/terminal-benchmark@1.0     # pinned registry tasks
+agent_import_path: my_program.agent:Agent
+harbor_requirement: harbor[modal]==0.18.0
+environment_name: modal                         # where each nested eval runs
+secrets: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]   # sidecar-only; stripped from the agent
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:                                     # the optimizer's scope
+    allowed_models: [gpt-5]
+  evaluation:                                   # the target's scope
+    allowed_models: [gpt-5-mini]
+    max_requests: 5000
+    max_tokens: 20000000
+
+partitions:
+  validation: [example/task-a, example/task-b, example/task-c]
+  test: [example/task-hidden]
+
+agent_access:                                   # what the agent may evaluate, and how much it sees
+  - partition: validation
+    disclosure: aggregate                       # full | aggregate | none
+    total_runs: 10
+    total_cases: 50
+
+selection_partition: validation                 # candidates are ranked here
+targets:
+  - partition: test                             # held-out; trusted verifier scores it after selection
+    reward_key: reward
+```
+
+| Knob | What it controls |
+| --- | --- |
+| `agent_access[].disclosure` | how much of an evaluation the agent sees: `full` (per-case traces), `aggregate` (scores only), `none` |
+| `agent_access[].total_runs` / `total_cases` | the agent's **cumulative** eval budget — it may spend it all in one run |
+| `selection_partition` | the fixed set every candidate is ranked on |
+| `targets` | held-out partitions scored after selection; never enter agent context |
+| `inference_gateway.{producer,evaluation}.allowed_models` | the models each scope may call (optimizer vs. target) |
+
+### 2. Run it
+
+`vero harbor run` compiles the build file and launches the agent, keeping secrets
+off the command line via `--env-file`:
+
+```bash
+vero harbor run \
+  --config build.yaml \
+  --agent claude-code --model claude-sonnet-4-6 \
+  --environment modal \
+  --env-file secrets.env
+```
+
+`--agent` picks the coding agent (`claude-code`, `codex`, …) and `--model` sets
+both its model and its producer-scope allow-list. `vero harbor build --config
+build.yaml --output task` compiles without running, for inspection.
+
+> **Use `vero harbor run`, not `harbor run` directly.** For a gateway-enabled
+> build the VeRO launcher renames provider credentials for the gateway before
+> Harbor constructs the agent; a raw `harbor run` would let the agent adapter
+> read the upstream key from its own host process first.
+
+Inside the container the agent evaluates candidates with `vero harbor eval
+--detach`, then `eval-status` / `eval-result` / `status` (via `VERO_EVAL_URL`).
+Detached evaluations are **durable jobs** — the candidate version is captured
+before the command returns, so ending the agent process can't lose or race a
+running measurement.
+
+### How the boundaries hold
+
+- **The sidecar is the only evaluator.** It owns the cases, scoring, budget
+  ledger, and candidate selection. The optimizer container gets only the editable
+  baseline, the agent CLI, and approved result projections; the `test` partition
+  and task source live only in the sidecar image.
+- **The gateway holds the provider key.** A third trusted service alone receives
+  the upstream credential, then forwards any inference endpoint to your upstream
+  proxy while restricting each scope to its configured models and metering usage.
+  The optimizer gets a producer-scoped token (uncapped by default); each
+  candidate evaluation gets an independently budgeted token on a URL attributed
+  to its evaluation ID.
+- **Disclosure is graded.** `full` exposes per-case traces for the agent to
+  inspect, `aggregate` returns scores only, and held-out `targets` are
+  unreachable from agent context. Aggregate validation is optimization data, not
+  a privacy guarantee — arbitrary subsets are allowed; the final target is not.
+
+### Artifacts
+
+The verifier shares the environment, so it exports the full session before
+teardown: a successful run leaves `session.tar.gz` (+ `.sha256`),
+`experiment.html`, `status.json`, and `finalization.json` in the verifier
+artifacts. The archive holds the bare candidate Git repo, canonical evaluation
+records, budget state, the finalization result, and the producer trajectory —
+re-render it any time with `vero report`. Export failure fails the run rather
+than discarding the only durable copy.
+
+> **Security boundary.** The inference gateway protects *provider credentials*,
+> not the OS process. The pinned Harbor overlay and sidecar keep budget and
+> scoring trusted, but candidate code still runs inside the nested Harbor
+> process, and a Modal controller still needs Modal auth. When target programs
+> are **adversarial**, run them in a separate sandbox that can't reach verifier
+> data or credentials.
+
+<details>
+<summary><b>Operational details</b> — timeouts, finalization draining, budgets</summary>
+
+- **Timeouts.** `case_timeout_seconds` is VeRO's absolute limit for the agent
+  phase. Because Harbor applies task timeouts as a multiplier, set
+  `task_agent_timeout_seconds` to the pinned task's declared agent timeout; the
+  compiler passes their ratio (e.g. `180 / 600 = 0.3`) as Harbor's multiplier,
+  leaving verifier and setup timeouts unchanged.
+- **Finalization** closes the agent's eval entrance and waits for every
+  already-accepted request (including ones launched from a background shell)
+  before selecting, so ending the optimizer can't race a running validation.
+  After `evaluation_drain_timeout_seconds` (default `timeout_seconds`) it cancels
+  and refunds the unfinished eval. Trusted verifier evals remain available after
+  the entrance closes.
+- **Budgets** are cumulative and split between agent- and system-triggered evals.
+  Cancelled runs and execution failures are refunded; completed failure reports
+  stay charged as measurements. Whole-run infrastructure failures are retried and
+  surfaced separately, so an outage fails the session rather than becoming a
+  candidate regression.
+- **Request vs. token limits.** Request limits are exact; a token limit stops the
+  *next* request after reported usage crosses it, so in-flight concurrent
+  responses can overshoot slightly. Omit either to record usage without a ceiling.
+- **Admin credential.** The shared-container topology protects the admin token
+  with Unix ownership/permissions and assumes candidate code can't gain root;
+  higher-assurance setups keep finalization credentials out of the agent
+  workbench entirely.
+
+</details>
+
+<details>
+<summary><b>Advanced</b> — Harbor as a plain <code>EvaluationBackend</code></summary>
+
+Harbor is also a normal backend you can drive from Python. Map each
+`EvaluationSet` case to one Harbor task and pin the orchestrating package:
+
+```json
+{"id": "task-1", "task_name": "org/terminal-task-1"}
+{"id": "task-2", "task_name": "org/terminal-task-2"}
+```
+
+```python
+from vero.harbor import HarborBackend, HarborBackendConfig
+
+backend = HarborBackend(HarborBackendConfig(
+    task_source="org/terminal-benchmark@1.0",
+    agent_import_path="my_program.agent:Agent",
+    cases_path=str(Path("../harbor-cases.jsonl").resolve()),
+    harbor_requirement="harbor[modal]==0.18.0",
+    evaluation_set_name="terminal-benchmark",
+    partition="test",
+    passthrough_environment=["ANTHROPIC_API_KEY"],
+))
+```
+
+VeRO invokes `harbor run` without importing Harbor into the core library,
+collates verifier rewards into schema-v1 case results, zero-fills dead attempts,
+and preserves Harbor output as artifacts.
+
+For optimization-as-a-Harbor-task, `EvaluationSidecar` exposes the same engine
+across a process boundary — install the `harbor` extra (`uv sync --extra harbor`)
+and serve a trusted factory:
+
+```bash
+vero harbor serve \
+  --factory trusted_deployment:build_components \
+  --config /etc/vero/sidecar.json \
+  --admin-token /shared/admin-token
+```
+
+`SidecarEvaluationPolicy` maps partitions to full/aggregate/none disclosure,
+`GitCandidateTransport` imports agent commits under trusted refs, and
+`CanonicalVerifier` re-scores the selected candidate. `EvaluationBackend`,
+`CandidateProducer`, `OptimizationStrategy`, and `SelectionPolicy` are all
+protocols — implement them for a remote evaluator, a non-Git store, or a custom
+search strategy.
+
+</details>
+
+## Optimize a program with a command harness
+
+When you don't need containment — a trusted local evaluator, any language — the
+**command backend** is the lightest path: VeRO drives your evaluator over
+versioned JSON, and `vero.toml` is the shortest way to configure it.
 
 ```toml
 [target]
@@ -421,7 +649,7 @@ workspace because its SDK takes a local `cwd`; `VeroAgent` and custom agents
 whose tools operate through `Sandbox` can work without one. Incompatible agents
 are rejected when the session is created.
 
-### Python benchmark tasks
+## Python benchmark tasks
 
 Python targets can use the optional `scale-vero-tasks` package instead of
 writing the JSON command contract directly. It provides only task definition
@@ -476,200 +704,6 @@ backend = PythonTaskBackend(PythonTaskBackendConfig(
     ],
 ))
 ```
-
-### Harbor tasks
-
-Harbor is also an evaluation backend, rather than a separate optimization
-runtime. Map each `EvaluationSet` case to one Harbor task and pin the Harbor
-package used to orchestrate the nested run:
-
-```json
-{"id": "task-1", "task_name": "org/terminal-task-1"}
-{"id": "task-2", "task_name": "org/terminal-task-2"}
-```
-
-```python
-from vero.harbor import HarborBackend, HarborBackendConfig
-
-backend = HarborBackend(HarborBackendConfig(
-    task_source="org/terminal-benchmark@1.0",
-    agent_import_path="my_program.agent:Agent",
-    cases_path=str(Path("../harbor-cases.jsonl").resolve()),
-    harbor_requirement="harbor[modal]==0.18.0",
-    evaluation_set_name="terminal-benchmark",
-    partition="test",
-    passthrough_environment=["ANTHROPIC_API_KEY"],
-))
-```
-
-VeRO invokes `harbor run` without importing Harbor into the core library,
-collates verifier rewards into schema-v1 case results, zero-fills dead attempts
-for mean aggregation, and preserves Harbor output as evaluation artifacts. The
-pinned Harbor overlay protects against a candidate changing its dependency pin;
-it is not a process isolation boundary because candidate code still runs inside
-the nested Harbor process. The sidecar isolates the optimizer process and keeps
-budget/finalization state trusted, but it does not by itself contain malicious
-target code loaded by the nested runner. When targets are adversarial, execute
-them in a separate sandbox that cannot read verifier data or credentials.
-
-For optimization-as-a-Harbor-task, `EvaluationSidecar` exposes the same engine
-across a process boundary. `SidecarEvaluationPolicy` maps each backend and
-evaluation-set partition to canonical full, aggregate, or acknowledgement-only
-disclosure; the canonical budget ledger meters agent calls. The sidecar can
-host several backends at once. `GitCandidateTransport` imports agent commits
-under durable trusted refs, and `CanonicalVerifier` selects and re-scores a
-candidate before producing Harbor rewards. Hidden final evaluations use the
-same backend contracts with unmetered admin authorization, so this deployment
-does not introduce a parallel evaluation model.
-
-Install the optional server dependencies via the `harbor` extra (e.g.
-`uv sync --extra harbor` from a checkout). A sidecar
-image provides a trusted `module:factory` callable that accepts its JSON config
-and returns `SidecarComponents`; start it with:
-
-```bash
-vero harbor serve \
-  --factory trusted_deployment:build_components \
-  --config /etc/vero/sidecar.json \
-  --admin-token /shared/admin-token
-```
-
-The optimizer uses `vero harbor eval --detach`, `eval-status`, `eval-result`,
-`status`, and `submit` through `VERO_EVAL_URL`. Detached evaluations are durable
-session jobs: their candidate version is captured before the start command
-returns, their lifecycle appears in `status`, and their terminal receipt remains
-retrievable if the original client exits. Plain `vero harbor eval` remains a
-blocking compatibility shortcut. Harbor's trusted verifier uses `vero harbor
-finalize` with the root-readable token file and writes only the final reward
-mapping to `reward.json`.
-
-The built-in Harbor compiler supplies that factory and container topology for
-nested Harbor evaluations. A minimal build file looks like:
-
-```yaml
-name: example/optimize-agent
-agent_repo: ../my-program
-task_source: example/terminal-benchmark@1.0
-agent_import_path: my_program.agent:Agent
-harbor_requirement: harbor[modal]==0.18.0
-environment_name: modal
-secrets: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]
-inference_gateway:
-  upstream_api_key_env: OPENAI_API_KEY
-  upstream_base_url_env: OPENAI_BASE_URL
-  producer:
-    allowed_models: [gpt-5]
-  evaluation:
-    allowed_models: [gpt-5-mini]
-    max_requests: 5000
-    max_tokens: 20000000
-
-partitions:
-  validation: [example/task-a, example/task-b, example/task-c,
-               example/task-d, example/task-e]
-  test: [example/task-hidden]
-
-agent_access:
-  - partition: validation
-    disclosure: aggregate
-    expose_case_resources: false
-    total_runs: 10
-    total_cases: 50
-
-selection_partition: validation
-targets:
-  - partition: test
-    reward_key: reward
-```
-
-Compile it with `vero harbor build --config build.yaml --output task`. The
-`environment_name` selects Modal for each nested evaluation. `secrets` are
-sidecar-only environment references and are explicitly removed from the
-optimizer container. The inference gateway runs as a third, trusted service:
-it alone receives the upstream provider credential. The optimizer receives a
-producer-scoped token with no default request or token ceiling, while candidate
-evaluations receive an independently budgeted evaluation token and a URL
-attributed to the evaluation ID.
-For a real optimization, use the VeRO launcher so provider credentials are
-renamed for the gateway before Harbor constructs the coding agent:
-
-```bash
-vero harbor run \
-  --config build.yaml \
-  --environment modal \
-  --agent codex \
-  --model openai/gpt-5
-```
-
-Do not invoke `harbor run` directly for a gateway-enabled build: Harbor coding
-agent adapters otherwise discover the upstream provider credential from their
-own host process before entering the task container.
-
-The gateway implements the Responses, Chat Completions, and Embeddings HTTP
-surfaces, restricts each scope to configured models, and records requests and
-provider-reported token usage durably. Request and token limits are optional per
-scope; omit them to record usage without enforcing a ceiling. `vero harbor
-status` includes used inference and any configured remaining budgets. Request
-limits are exact; token limits stop the next request after reported usage
-reaches the limit, so already accepted concurrent responses can cross a token
-boundary.
-
-Evaluation case budgets are cumulative rather than per-run. An agent may spend
-its entire remaining case budget in one authorized evaluation; deciding between
-wide measurements and more iterations is part of its optimization strategy.
-
-`case_timeout_seconds` is an absolute VeRO limit for the Harbor agent phase.
-Because Harbor applies task timeouts through a multiplier, set
-`task_agent_timeout_seconds` to the agent timeout declared by the pinned task
-source. The compiler passes their ratio as Harbor's agent-timeout multiplier;
-for example, `180 / 600 = 0.3`. This leaves verifier and environment setup
-timeouts unchanged.
-
-Finalization closes the agent evaluation entrance and waits for every request
-the sidecar already accepted before selecting a candidate. This includes an
-evaluation launched from a background shell, so ending the optimizer process
-cannot race a still-running validation measurement. The compiled deployment's
-`evaluation_drain_timeout_seconds` defaults to `timeout_seconds`; after that
-bounded wait, VeRO cancels the unfinished evaluation through the normal durable
-cancellation and budget-refund path. Trusted verifier evaluations remain
-available after the agent entrance closes.
-
-Because Harbor verification uses the shared environment, the verifier exports
-the complete sidecar session before teardown. Successful runs contain
-`session.tar.gz`, `session.tar.gz.sha256`, `experiment.html`, `status.json`, and
-`finalization.json` under the verifier artifacts. The archive contains the bare
-candidate Git repository, canonical evaluation records and artifacts, budget
-state, finalization result, and an available producer trajectory. Export or
-report-generation failure fails verification rather than silently deleting the
-only durable copy with an ephemeral environment.
-
-The test partition and task source exist only in the sidecar image; the optimizer
-container receives the editable baseline, the agent-facing CLI, and approved
-result projections. Exact Harbor and registry task-source versions are required
-so the measurement substrate is reproducible.
-
-Agent-triggered and system-triggered evaluations use independent budgets.
-Reservations for cancelled runs or execution failures are durably refunded;
-completed failure reports remain measurements and stay charged. Harbor retries
-whole-run infrastructure failures and surfaces exhausted outages separately so
-they fail the session instead of becoming candidate regressions. Aggregate
-validation is optimization data, not a privacy guarantee: arbitrary subsets are
-allowed by default, while the separate final evaluation remains unreachable.
-The generated shared-container topology protects the admin credential with
-Unix ownership and permissions. It assumes candidate code cannot gain root in
-that container; higher-assurance deployments should keep finalization
-credentials outside the candidate workbench entirely.
-
-The inference boundary protects provider credentials, not infrastructure
-credentials. A Harbor controller using Modal still needs Modal authorization;
-arbitrary target code imported into that controller is not isolated from its
-OS process. Use a separately sandboxed runner or infrastructure broker when
-target programs themselves are adversarial.
-
-`EvaluationBackend`, `CandidateProducer`, `OptimizationStrategy`, and
-`SelectionPolicy` are protocols. Implement them to connect a remote evaluator,
-a non-Git version store, an evolutionary search algorithm, or an orchestrator
-that delegates proposals to several specialized producers.
 
 ## Core concepts
 
