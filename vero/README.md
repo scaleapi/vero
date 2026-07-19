@@ -306,36 +306,36 @@ search strategy.
 
 ## Optimize a program with a command harness
 
-When you don't need containment — a trusted local evaluator, any language — the
-**command backend** is the lightest path: VeRO drives your evaluator over
-versioned JSON, and `vero.toml` is the shortest way to configure it.
+When you don't need containment — a trusted local evaluator, in any language —
+the **command backend** is the lightest path: VeRO drives your evaluator over
+versioned JSON, and `vero.toml` is the shortest way to configure it. The comments
+below cover most of what you need:
 
 ```toml
 [target]
-root = "./my-program"
+root = "./my-program"                                    # a clean Git repo — the editable target
 ref = "HEAD"
 
 [backend]
 id = "command"
 kind = "command"
-harness_root = "../my-evaluator"
+harness_root = "../my-evaluator"                         # trusted; must live outside the target
 command = ["python3", "evaluate.py", "{workspace}", "{request}", "{report}"]
 
-[backend.staged_inputs]
+[backend.staged_inputs]                                  # trusted files, referenced via {input:NAME}
 train_cases = "../my-evaluator/train.jsonl"
 validation_cases = "../my-evaluator/validation.jsonl"
 test_cases = "../my-evaluator/test.jsonl"
 
-[backend.agent_context_inputs]
+[backend.agent_context_inputs]                           # per-evaluation allowlist of what the agent may see
 train = ["train_cases"]
 
-[[evaluations]]
+[[evaluations]]                                          # what the agent may run, and how much it sees
 name = "train"
 partition = "train"
 agent_can_evaluate = true
 agent_visible = true
-agent_selection = "arbitrary"
-disclosure = "full"
+disclosure = "full"                                      # full | aggregate | none
 expose_case_resources = true
 
 [[evaluations]]
@@ -343,31 +343,24 @@ name = "validation"
 partition = "validation"
 agent_can_evaluate = true
 agent_visible = true
-agent_selection = "arbitrary"
 disclosure = "aggregate"
 
-[evaluations.agent_budget]
+[evaluations.agent_budget]                               # cumulative; the agent decides how to spend it
 total_runs = 50
 total_cases = 5000
 
 [[evaluations]]
-name = "test"
+name = "test"                                            # held-out — agent can neither see nor run it
 partition = "test"
 agent_can_evaluate = false
 agent_visible = false
-agent_selection = "fixed"
 disclosure = "none"
 
 [protocol]
-selection_evaluation = "validation"
-final_evaluation = "test"
+selection_evaluation = "validation"                      # every candidate is ranked here
+final_evaluation = "test"                                # scored by the trusted runtime after selection
 max_proposals = 5
-error_rate_threshold = 0.1
-
-[protocol.retry]
-max_attempts = 3
-initial_delay_seconds = 4
-maximum_delay_seconds = 120
+error_rate_threshold = 0.1                               # an eval fails if >=10% of its cases error
 
 [objective]
 metric = "latency_ms"
@@ -387,47 +380,23 @@ instruction = "Make the program faster without changing its output"
 directory = "../runs/my-program"
 ```
 
-Run `vero evaluate` to measure only the baseline or `vero run` to produce and
-evaluate candidates. Paths are resolved relative to the config file. A target
-must be a clean Git repository, while the session directory, evaluation harness,
-and command producer must live outside it.
+Run `vero evaluate` to measure only the baseline, or `vero run` to produce and
+evaluate candidates. `vero init` writes this starter profile and `vero check`
+validates it before an expensive run. Paths resolve relative to the config; the
+session directory, harness, and producer must all live outside the target.
 
-Retries wrap each individual case's inference or scoring call. By default VeRO
-retries provider rate limits, HTTP 429/503/529 responses, and timeouts up to
-three attempts with bounded exponential backoff. A successful retry remains a
-successful case, while its earlier failed attempts are retained in the case's
-structured error history. Set `max_attempts = 1` to disable retries.
-
-An otherwise successful evaluation becomes failed when 10% or more of its
-selected cases end in error; configure `protocol.error_rate_threshold` to
-change that boundary. For objectives aggregated from case metrics, set
-`aggregation = "mean"` (or another case aggregation) and
-`case_failure_value` to assign a direction-appropriate penalty to errored,
-skipped, or metric-less cases. This prevents a candidate from improving its
-score by failing difficult cases.
-
-The protocol ranks every candidate on the fixed base selection of
-`validation`, regardless of which cheaper subsets the agent explored. The
-agent sees only aggregate validation feedback. `test` is evaluated by the
-trusted runtime after selection and never enters agent context. `train` cases
-are explicitly mounted read-only because that evaluation opts into case
-resources. Run `vero init` for this starter profile and `vero check` before an
-expensive run.
-
-The evaluator receives an isolated candidate workspace and paths for a
-versioned request and report:
+The evaluator gets an isolated candidate workspace and writes a versioned JSON
+report:
 
 ```python
 # ../my-evaluator/evaluate.py
-import json
-import sys
+import json, sys
 from pathlib import Path
 
 workspace = Path(sys.argv[1])
 report_path = Path(sys.argv[2])
 
-# Build, run, benchmark, call another service, etc.
-latency_ms = measure(workspace)
+latency_ms = measure(workspace)                # build, run, benchmark, call a service, ...
 
 report_path.write_text(json.dumps({
     "schema_version": 1,
@@ -435,6 +404,23 @@ report_path.write_text(json.dumps({
     "metrics": {"latency_ms": latency_ms},
 }))
 ```
+
+<details>
+<summary><b>Retries, error thresholds, and case aggregation</b></summary>
+
+- **Retries** wrap each case's inference/scoring call — by default provider rate
+  limits, HTTP 429/503/529, and timeouts, up to 3 attempts with bounded backoff.
+  A successful retry stays a success; earlier failed attempts are kept in the
+  case's structured error history. Set `max_attempts = 1` to disable them.
+- **Error threshold.** An otherwise-successful evaluation becomes *failed* once
+  ≥10% of its selected cases error (`protocol.error_rate_threshold`). For
+  mean-aggregated objectives, set `aggregation = "mean"` and `case_failure_value`
+  so a candidate can't improve its score by failing hard cases.
+- **Selection is fixed.** Candidates are ranked on the full `validation`
+  selection regardless of the cheaper subsets the agent explored; the agent sees
+  only aggregate validation feedback, and `test` never enters agent context.
+
+</details>
 
 Then choose how candidates are changed.
 
@@ -757,26 +743,25 @@ Each producer workspace contains a generated, read-only `.vero/` directory:
 └── evaluations/    # authorized summaries or full case/trace/artifact trees
 ```
 
-The agent can inspect this with ordinary filesystem and Git commands. Full
-evaluation disclosure splits potentially long traces into separate files;
-aggregate disclosure includes only aggregate metrics and counts; none includes
-only status. Candidate history includes durable Git refs, so siblings do not
-need to be ancestors of the current checkout. A proposal sees the candidates
-from the start of its generation, then immediately sees its own evaluated
-checkpoints. Parallel siblings become visible in the next generation.
+The agent inspects this with ordinary filesystem and Git commands. Disclosure
+governs what lands there:
 
-The directory is excluded from Git, protected by workspace read rules and file
-permissions, and rejected if a candidate force-adds it anyway. Its contents are
-a disposable view: durable candidate and evaluation stores remain the trusted
-source. In Harbor, the sidecar owns the writable volume and the coding-agent
-container mounts the same directory read-only. Case resources are exported only
-when the evaluation authorization explicitly permits them and the backend
-provides a safe export. For Harbor datasets, an authorized partition contains
-the complete pinned task directories and dataset-level files—not merely case
-identifiers. Full-disclosure Harbor evaluations also expose the complete
-downloaded trial record for every successful or failed case, including exact
-failure results, exception tracebacks, trial logs, and target-agent artifacts;
-aggregate projections expose neither case records nor their trial artifacts.
+- **full** — per-case traces split into separate files (and, for Harbor, the
+  complete downloaded trial record per case: failure results, tracebacks, trial
+  logs, target-agent artifacts);
+- **aggregate** — metrics and counts only, no case records or trial artifacts;
+- **none** — status only.
+
+Candidate history uses durable Git refs, so siblings need not be ancestors of the
+current checkout: a proposal sees the candidates from the start of its generation
+plus its own evaluated checkpoints, and parallel siblings appear the next round.
+
+The `.vero/` view is disposable and read-only — Git-excluded, permission-
+protected, and rejected if a candidate force-adds it; the durable candidate and
+evaluation stores stay the trusted source. In Harbor the sidecar owns the
+writable volume and the agent mounts it read-only, and case resources (for
+datasets, the complete pinned task directories) are exported only when the
+evaluation's authorization permits it.
 
 Strategies can propose a batch of candidates and route each proposal to a named
 producer. Set `max_concurrency` to produce and evaluate independent candidates in
