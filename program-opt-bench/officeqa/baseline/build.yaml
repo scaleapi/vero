@@ -1,0 +1,84 @@
+name: vero/optimize-officeqa-baseline
+description: >-
+  Improve a grounded-reasoning agent on OfficeQA (Treasury Bulletin corpus QA).
+  The agent must search /app/corpus/ and write the exact answer to /app/answer.txt;
+  scoring is rule-based (numeric/text match with 1% tolerance).
+# Local (vendored) dataset — OfficeQA is not in the Harbor hub, only the
+# harbor-datasets git repo. task_source points at the vendored task dirs; the
+# per-task task.toml carries docker_image=officeqa-corpus (full-corpus mode), so
+# extra_harbor_args uses --no-force-build to pull that prebuilt image instead of
+# building the guard Dockerfile.
+agent_repo: target
+task_source: ../tasks
+task_manifest: ../partitions/manifest.json
+agent_import_path: officeqa_agent.agent:OfficeQaAgent
+harbor_requirement: harbor[modal]==0.18.0
+extra_harbor_args: ["--no-force-build"]
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 6
+    total_cases: 98
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 4
+    total_cases: 196
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: officeqa
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: auto_best
+baseline_floor: true
+score_baseline: true
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: openai/gpt-5.4-mini-2026-03-17
+environment_name: modal
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 12000
+expose_attempt_detail: false
+timeout_seconds: 7200
+case_timeout_seconds: 300
+task_agent_timeout_seconds: 1800
+max_concurrency: 8
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 3600
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini-2026-03-17]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
