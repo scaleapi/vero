@@ -598,6 +598,7 @@ def compile_harbor_task(
         "evaluation_set_name": config.evaluation_set_name,
         "selection_partition": config.selection_partition,
         "submit_enabled": config.reward_mode == "submit",
+        "task_services_use_upstream": config.task_services_use_upstream,
         "multifidelity": config.instruct_multifidelity,
         "minimum_subset_cases": (
             selection_access.min_aggregate_cases

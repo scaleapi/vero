@@ -243,6 +243,14 @@ def test_compiler_plumbs_task_services_use_upstream(tmp_path, monkeypatch):
             / f"environment/sidecar/cases/{partition.removeprefix('harbor-')}.jsonl"
         )
     HarborDeploymentConfig.model_validate(serve)
+    # the trusted eval-sidecar receives the real upstream (main keeps it scrubbed)
+    compose = yaml.safe_load((output / "environment/docker-compose.yaml").read_text())
+    sidecar_env = compose["services"]["eval-sidecar"]["environment"]
+    assert "VERO_INFERENCE_UPSTREAM_API_KEY" in sidecar_env
+    assert "VERO_INFERENCE_UPSTREAM_BASE_URL" in sidecar_env
+    assert compose["services"]["main"]["environment"][
+        "VERO_INFERENCE_UPSTREAM_API_KEY"
+    ] == ""
 
 
 def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):

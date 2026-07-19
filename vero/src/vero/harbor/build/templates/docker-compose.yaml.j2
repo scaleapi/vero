@@ -50,6 +50,14 @@ services:
 {% else %}
       LANG: "C.UTF-8"
 {% endif %}
+{% if task_services_use_upstream %}
+{# Trusted sidecar receives the real upstream so it can hand task-owned eval
+   services (LLM user-sims/graders) a reachable provider. The optimizer/main keeps
+   these scrubbed to "" so it never sees the raw upstream credential. #}
+{% for secret in gateway_environment %}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the eval sidecar{{ '}' }}"
+{% endfor %}
+{% endif %}
     volumes:
       - agent_repo:/work/agent:ro
       - agent_context:/state/agent-context
