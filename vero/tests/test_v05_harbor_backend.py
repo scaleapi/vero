@@ -84,6 +84,56 @@ def test_backend_accepts_pinned_environment_extra(tmp_path):
     assert config.harbor_requirement == "harbor[modal]==0.18.0"
 
 
+def test_environment_default_routes_agent_through_gateway_on_openai(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway_url="http://inference-gateway:8001",
+        inference_gateway_token="gw-token",
+    )
+    env = HarborBackend(config)._environment("eval-1")
+
+    assert env["OPENAI_API_KEY"] == "gw-token"
+    assert env["OPENAI_BASE_URL"] == (
+        "http://inference-gateway:8001/scopes/evaluation/eval-1/v1"
+    )
+    assert "VERO_AGENT_INFERENCE_API_KEY" not in env
+
+
+def test_environment_routes_task_services_to_upstream(tmp_path, monkeypatch):
+    monkeypatch.setenv("VERO_INFERENCE_UPSTREAM_API_KEY", "upstream-key")
+    monkeypatch.setenv("VERO_INFERENCE_UPSTREAM_BASE_URL", "https://upstream/v1")
+    config = _config(
+        tmp_path,
+        inference_gateway_url="http://inference-gateway:8001",
+        inference_gateway_token="gw-token",
+        task_services_use_upstream=True,
+        upstream_api_key_env="VERO_INFERENCE_UPSTREAM_API_KEY",
+        upstream_base_url_env="VERO_INFERENCE_UPSTREAM_BASE_URL",
+    )
+    env = HarborBackend(config)._environment("eval-1")
+
+    # task-owned eval services reach the real upstream via OPENAI_*
+    assert env["OPENAI_API_KEY"] == "upstream-key"
+    assert env["OPENAI_BASE_URL"] == "https://upstream/v1"
+    # the candidate agent keeps the metered gateway on dedicated vars
+    assert env["VERO_AGENT_INFERENCE_API_KEY"] == "gw-token"
+    assert env["VERO_AGENT_INFERENCE_BASE_URL"] == (
+        "http://inference-gateway:8001/scopes/evaluation/eval-1/v1"
+    )
+
+
+def test_task_services_use_upstream_requires_gateway_and_upstream_env(tmp_path):
+    with pytest.raises(ValueError, match="requires an inference gateway"):
+        _config(tmp_path, task_services_use_upstream=True)
+    with pytest.raises(ValueError, match="requires upstream_api_key_env"):
+        _config(
+            tmp_path,
+            task_services_use_upstream=True,
+            inference_gateway_url="http://inference-gateway:8001",
+            inference_gateway_token="gw-token",
+        )
+
+
 @pytest.mark.parametrize(
     ("request_factory", "message"),
     [

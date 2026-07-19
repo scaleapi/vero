@@ -75,3 +75,12 @@ inference_gateway:
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
+
+# tau3's environment runs its own LLM services — the user-simulator (inside the
+# task container) and the NL-assertions grader (verifier) — which cannot reach the
+# compose-internal inference gateway. Give them the real upstream directly while
+# the candidate agent keeps the metered/allow-listed gateway (VERO_AGENT_INFERENCE_*).
+task_services_use_upstream: true
+task_environment:
+  TAU2_USER_MODEL: openai/gpt-5.4-mini-2026-03-17
+  TAU2_NL_ASSERTIONS_MODEL: openai/gpt-5.4-mini-2026-03-17

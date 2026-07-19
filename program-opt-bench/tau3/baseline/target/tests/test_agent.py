@@ -196,3 +196,41 @@ async def test_run_drives_loop_and_records_usage(tmp_path, monkeypatch):
     assert context.n_output_tokens == 10
     assert context.n_cache_tokens == 6
     assert context.metadata["turns"] == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_prefers_dedicated_gateway_creds(tmp_path, monkeypatch):
+    # When the eval reroutes OPENAI_* to the task's own LLM services, the agent's
+    # metered gateway arrives on VERO_AGENT_INFERENCE_* — the agent must use those.
+    agent = _agent(tmp_path, monkeypatch, mcp_servers=[_server()])
+    monkeypatch.setenv("VERO_AGENT_INFERENCE_API_KEY", "gw-key")
+    monkeypatch.setenv("VERO_AGENT_INFERENCE_BASE_URL", "http://gw/scopes/evaluation/e/v1")
+
+    captured = {}
+    script = [_response(calls=[_call("end_conversation", {"message": "bye"})], rid="r1")]
+
+    class _FakeResponses:
+        def __init__(self):
+            self._i = 0
+
+        async def create(self, **kwargs):
+            item = script[self._i]
+            self._i += 1
+            return item
+
+    class _FakeClient:
+        def __init__(self):
+            self.responses = _FakeResponses()
+
+    def _fake(*a, **k):
+        captured.update(k)
+        return _FakeClient()
+
+    monkeypatch.setattr(agent_module, "AsyncOpenAI", _fake)
+    context = SimpleNamespace(
+        n_input_tokens=0, n_output_tokens=0, n_cache_tokens=0, metadata=None
+    )
+    await agent.run("POLICY", _RecordingEnv(), context)
+
+    assert captured.get("api_key") == "gw-key"
+    assert captured.get("base_url") == "http://gw/scopes/evaluation/e/v1"

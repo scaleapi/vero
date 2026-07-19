@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from typing import Any, override
 
 from harbor.agents.base import BaseAgent
@@ -266,7 +267,15 @@ class Tau3Agent(BaseAgent):
         context: AgentContext,
     ) -> None:
         self._mcp_url = self._server_url()
-        client = AsyncOpenAI()  # OPENAI_API_KEY / OPENAI_BASE_URL from the env
+        # When the eval reroutes OPENAI_* to the task's own LLM services
+        # (user-sim/grader), the candidate agent's metered gateway is supplied on
+        # dedicated vars; otherwise fall back to OPENAI_* from the environment.
+        gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
+        gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
+        if gateway_key and gateway_url:
+            client = AsyncOpenAI(api_key=gateway_key, base_url=gateway_url)
+        else:
+            client = AsyncOpenAI()  # OPENAI_API_KEY / OPENAI_BASE_URL from the env
         input_tokens = output_tokens = cached_tokens = turns = 0
 
         session_id, tools = await self._open_session(environment)

@@ -243,10 +243,21 @@ def _deployment_config(
             "feedback_max_bytes": config.feedback_max_bytes,
             "expose_attempt_detail": config.expose_attempt_detail,
             "passthrough_environment": config.secrets,
+            "environment": config.task_environment,
             "inference_gateway_url": (
                 INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
             ),
             "inference_gateway_token": evaluation_inference_token,
+            "task_services_use_upstream": config.task_services_use_upstream,
+            "upstream_api_key_env": (
+                UPSTREAM_API_KEY_ENV if config.inference_gateway is not None else None
+            ),
+            "upstream_base_url_env": (
+                UPSTREAM_BASE_URL_ENV
+                if config.inference_gateway is not None
+                and config.inference_gateway.upstream_base_url_env is not None
+                else None
+            ),
             "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
             "extra_args": config.extra_harbor_args,
         }

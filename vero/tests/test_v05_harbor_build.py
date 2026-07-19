@@ -209,6 +209,42 @@ def test_compiler_budget_disclosure_toggle(tmp_path):
     assert serve_off["disclose_budget"] is False
 
 
+def test_compiler_plumbs_task_services_use_upstream(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_UPSTREAM_KEY", "real-provider-secret")
+    monkeypatch.setenv("TEST_UPSTREAM_URL", "https://provider.example/v1")
+    monkeypatch.setenv("TEST_MODAL_TOKEN", "modal-secret")
+    config = _config(
+        tmp_path,
+        secrets=["TEST_MODAL_TOKEN"],
+        task_services_use_upstream=True,
+        task_environment={"TAU2_USER_MODEL": "openai/gpt-target"},
+        inference_gateway=InferenceGatewaySpec(
+            upstream_api_key_env="TEST_UPSTREAM_KEY",
+            upstream_base_url_env="TEST_UPSTREAM_URL",
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        ),
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    serve = json.loads(
+        (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    backend = next(iter(serve["backends"].values()))
+    assert backend["task_services_use_upstream"] is True
+    assert backend["upstream_api_key_env"] == "VERO_INFERENCE_UPSTREAM_API_KEY"
+    assert backend["upstream_base_url_env"] == "VERO_INFERENCE_UPSTREAM_BASE_URL"
+    assert backend["environment"] == {"TAU2_USER_MODEL": "openai/gpt-target"}
+    # validates against the deployment schema (backend config accepts the flags)
+    for partition, b in serve["backends"].items():
+        b["cases_path"] = str(
+            output
+            / f"environment/sidecar/cases/{partition.removeprefix('harbor-')}.jsonl"
+        )
+    HarborDeploymentConfig.model_validate(serve)
+
+
 def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):
     present = tmp_path / "present"
     present.mkdir()

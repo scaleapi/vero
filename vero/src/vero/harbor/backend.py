@@ -75,6 +75,14 @@ class HarborCase(EvaluationModel):
         return self.result_task_name or self.task_name
 
 
+# Dedicated env vars carrying the candidate agent's gateway credentials when
+# task_services_use_upstream reroutes OPENAI_* to the real upstream. A custom
+# agent reads these to keep its own inference on the metered/allow-listed gateway.
+# This name is a contract shared with agents (they cannot import this module).
+AGENT_INFERENCE_API_KEY_ENV = "VERO_AGENT_INFERENCE_API_KEY"
+AGENT_INFERENCE_BASE_URL_ENV = "VERO_AGENT_INFERENCE_BASE_URL"
+
+
 class HarborBackendConfig(EvaluationModel):
     """Trusted configuration for nested ``harbor run`` evaluation."""
 
@@ -120,6 +128,15 @@ class HarborBackendConfig(EvaluationModel):
     passthrough_environment: list[str] = Field(default_factory=list)
     inference_gateway_url: str | None = None
     inference_gateway_token: str | None = None
+    # When True, task-owned evaluation services (e.g. LLM user-simulators or graders
+    # that run *inside* the task containers and cannot reach the compose-internal
+    # gateway) receive the real upstream credentials via OPENAI_*, while the
+    # candidate agent still routes through the metered/allow-listed gateway via
+    # VERO_AGENT_INFERENCE_*. upstream_*_env name the host env vars holding the
+    # upstream credentials (read from the sidecar process environment).
+    task_services_use_upstream: bool = False
+    upstream_api_key_env: str | None = None
+    upstream_base_url_env: str | None = None
     case_resources_cache_path: str | None = None
     extra_args: list[str] = Field(default_factory=list)
 
@@ -270,6 +287,8 @@ class HarborBackendConfig(EvaluationModel):
         ):
             raise ValueError("inference_gateway_url must be HTTP(S)")
         gateway_names = {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+        if self.task_services_use_upstream:
+            gateway_names |= {AGENT_INFERENCE_API_KEY_ENV, AGENT_INFERENCE_BASE_URL_ENV}
         gateway_overlap = gateway_names & (
             set(self.environment) | set(self.passthrough_environment)
         )
@@ -278,6 +297,15 @@ class HarborBackendConfig(EvaluationModel):
                 "gateway-managed environment variables must not also be configured: "
                 + ", ".join(sorted(gateway_overlap))
             )
+        if self.task_services_use_upstream:
+            if self.inference_gateway_url is None:
+                raise ValueError(
+                    "task_services_use_upstream requires an inference gateway"
+                )
+            if not self.upstream_api_key_env:
+                raise ValueError(
+                    "task_services_use_upstream requires upstream_api_key_env"
+                )
         return self
 
 
@@ -571,11 +599,28 @@ class HarborBackend:
             if name in os.environ:
                 environment[name] = os.environ[name]
         if self.config.inference_gateway_url is not None:
-            environment["OPENAI_API_KEY"] = self.config.inference_gateway_token or ""
-            environment["OPENAI_BASE_URL"] = (
+            gateway_token = self.config.inference_gateway_token or ""
+            gateway_url = (
                 f"{self.config.inference_gateway_url.rstrip('/')}/scopes/evaluation/"
                 f"{evaluation_id}/v1"
             )
+            if self.config.task_services_use_upstream:
+                # Task-owned eval services (user-sims, LLM graders) run inside the
+                # task containers and can't reach the compose-internal gateway; hand
+                # them the real upstream via OPENAI_*. The candidate agent keeps its
+                # metered/allow-listed gateway on dedicated VERO_AGENT_INFERENCE_*.
+                environment["OPENAI_API_KEY"] = os.environ.get(
+                    self.config.upstream_api_key_env or "", ""
+                )
+                if self.config.upstream_base_url_env:
+                    environment["OPENAI_BASE_URL"] = os.environ.get(
+                        self.config.upstream_base_url_env, ""
+                    )
+                environment[AGENT_INFERENCE_API_KEY_ENV] = gateway_token
+                environment[AGENT_INFERENCE_BASE_URL_ENV] = gateway_url
+            else:
+                environment["OPENAI_API_KEY"] = gateway_token
+                environment["OPENAI_BASE_URL"] = gateway_url
         return environment
 
     def _source_args(self, task_source: str, *, local: bool) -> list[str]:

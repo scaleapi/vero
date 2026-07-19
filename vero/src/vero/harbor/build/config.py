@@ -205,6 +205,15 @@ class HarborBuildConfig(EvaluationModel):
     # about its budget — enabling budget-blind optimization runs. The two
     # instruct_* flags above only take effect when this is True.
     disclose_budget: bool = True
+    # Give task-owned evaluation services (LLM user-simulators/graders that run
+    # inside the task containers and can't reach the compose-internal gateway) the
+    # real upstream via OPENAI_*, while the candidate agent keeps the metered/
+    # allow-listed gateway on dedicated VERO_AGENT_INFERENCE_* vars. Needed for
+    # benchmarks like tau3 whose environment makes its own LLM calls.
+    task_services_use_upstream: bool = False
+    # Extra environment injected into the eval sub-run (and thus available for the
+    # task's ${VAR} substitutions), e.g. TAU2_USER_MODEL. Must not name secrets.
+    task_environment: dict[str, str] = Field(default_factory=dict)
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
     base_image_sidecar: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 
