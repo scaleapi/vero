@@ -653,3 +653,75 @@ async def test_harbor_backend_fails_when_no_requested_trials_match(tmp_path):
 def test_harbor_backend_rejects_controlled_extra_flags(tmp_path):
     with pytest.raises(ValueError, match="backend-controlled"):
         _config(tmp_path, extra_args=["--jobs-dir=/tmp/forged"])
+
+
+def test_environment_routes_finalization_to_reserved_scope(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway_url="http://inference-gateway:8001",
+        inference_gateway_token="gw-eval",
+        inference_gateway_finalization_token="gw-fin",
+    )
+    backend = HarborBackend(config)
+
+    search = backend._environment("eval-1", finalization=False)
+    assert search["OPENAI_API_KEY"] == "gw-eval"
+    assert "/scopes/evaluation/eval-1/" in search["OPENAI_BASE_URL"]
+
+    final = backend._environment("eval-1", finalization=True)
+    assert final["OPENAI_API_KEY"] == "gw-fin"
+    assert "/scopes/finalization/eval-1/" in final["OPENAI_BASE_URL"]
+
+
+def test_environment_finalization_falls_back_when_no_reserved_token(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway_url="http://inference-gateway:8001",
+        inference_gateway_token="gw-eval",
+    )
+    final = HarborBackend(config)._environment("eval-1", finalization=True)
+    assert final["OPENAI_API_KEY"] == "gw-eval"
+    assert "/scopes/evaluation/eval-1/" in final["OPENAI_BASE_URL"]
+
+
+def test_retry_config_json_carries_editable_backoff(tmp_path):
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            max_retries=5,
+            retry_wait_multiplier=3.0,
+            retry_min_wait_seconds=2.0,
+            retry_max_wait_seconds=45.0,
+        )
+    )
+
+    payload = json.loads(backend._retry_config_json())
+
+    assert payload == {
+        "retry": {
+            "max_retries": 5,
+            "wait_multiplier": 3.0,
+            "min_wait_sec": 2.0,
+            "max_wait_sec": 45.0,
+        }
+    }
+
+
+def test_command_forwards_retry_config_and_max_retries(tmp_path):
+    backend = HarborBackend(_config(tmp_path, max_retries=5))
+
+    command = backend._command(
+        workspace="/work/agent",
+        request=_request(),
+        cases=[],
+        jobs_dir="/staging/jobs",
+        task_source="example/tasks@1.0",
+        local_task_source=False,
+        retry_config_path="/staging/retry-config.json",
+    )
+
+    # backoff arrives via the JobConfig snippet ...
+    assert "--config" in command
+    assert command[command.index("--config") + 1] == "/staging/retry-config.json"
+    # ... while the count stays a flag (harbor applies it over the --config base).
+    assert command[command.index("--max-retries") + 1] == "5"

@@ -214,6 +214,7 @@ def _deployment_config(
     baseline_version: str,
     local_task_source: bool,
     evaluation_inference_token: str | None,
+    finalization_inference_token: str | None,
 ) -> dict:
     task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
     backends = {}
@@ -233,6 +234,9 @@ def _deployment_config(
             "default_index": config.default_index,
             "n_attempts": config.n_attempts,
             "max_retries": config.max_retries,
+            "retry_wait_multiplier": config.retry_wait_multiplier,
+            "retry_min_wait_seconds": config.retry_min_wait_seconds,
+            "retry_max_wait_seconds": config.retry_max_wait_seconds,
             "infrastructure_max_attempts": config.infrastructure_max_attempts,
             "infrastructure_retry_delay_seconds": (
                 config.infrastructure_retry_delay_seconds
@@ -248,6 +252,7 @@ def _deployment_config(
                 INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
             ),
             "inference_gateway_token": evaluation_inference_token,
+            "inference_gateway_finalization_token": finalization_inference_token,
             "task_services_use_upstream": config.task_services_use_upstream,
             "upstream_api_key_env": (
                 UPSTREAM_API_KEY_ENV if config.inference_gateway is not None else None
@@ -499,11 +504,15 @@ def compile_harbor_task(
     evaluation_inference_token = (
         generate_inference_token() if config.inference_gateway is not None else None
     )
+    finalization_inference_token = (
+        generate_inference_token() if config.inference_gateway is not None else None
+    )
     deployment = _deployment_config(
         config,
         baseline_version=baseline,
         local_task_source=local_task_source,
         evaluation_inference_token=evaluation_inference_token,
+        finalization_inference_token=finalization_inference_token,
     )
     (sidecar_dir / "serve.json").write_text(
         json.dumps(deployment, ensure_ascii=False, indent=2) + "\n",
@@ -512,6 +521,11 @@ def compile_harbor_task(
     if config.inference_gateway is not None:
         assert producer_inference_token is not None
         assert evaluation_inference_token is not None
+        assert finalization_inference_token is not None
+        # Finalization reserves its own budget; default to the evaluation policy.
+        finalization_spec = (
+            config.inference_gateway.finalization or config.inference_gateway.evaluation
+        )
         gateway_dir.mkdir(parents=True, exist_ok=True)
         gateway_config = {
             "upstream_api_key_env": UPSTREAM_API_KEY_ENV,
@@ -532,6 +546,10 @@ def compile_harbor_task(
                 "evaluation": {
                     "token_sha256": token_digest(evaluation_inference_token),
                     **config.inference_gateway.evaluation.model_dump(mode="json"),
+                },
+                "finalization": {
+                    "token_sha256": token_digest(finalization_inference_token),
+                    **finalization_spec.model_dump(mode="json"),
                 },
             },
         }

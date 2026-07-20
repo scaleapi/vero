@@ -253,6 +253,41 @@ def test_compiler_plumbs_task_services_use_upstream(tmp_path, monkeypatch):
     ] == ""
 
 
+def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(
+                allowed_models=["gpt-target"], max_requests=15000, max_tokens=100000000
+            ),
+        ),
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    gateway = json.loads(
+        (output / "environment/gateway/config.json").read_text(encoding="utf-8")
+    )
+    scopes = gateway["scopes"]
+    # a reserved finalization scope exists, defaulting to the evaluation policy
+    assert "finalization" in scopes
+    assert scopes["finalization"]["allowed_models"] == ["gpt-target"]
+    assert scopes["finalization"]["max_tokens"] == 100000000
+    # its token is distinct from the evaluation token (optimizer can't drain it)
+    assert scopes["finalization"]["token_sha256"] != scopes["evaluation"]["token_sha256"]
+    # and the sidecar backend carries a finalization token distinct from the eval one
+    serve = json.loads(
+        (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    backend = next(iter(serve["backends"].values()))
+    assert backend["inference_gateway_finalization_token"] is not None
+    assert (
+        backend["inference_gateway_finalization_token"]
+        != backend["inference_gateway_token"]
+    )
+
+
 def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):
     present = tmp_path / "present"
     present.mkdir()

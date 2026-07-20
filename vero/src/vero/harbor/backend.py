@@ -99,6 +99,9 @@ class HarborBackendConfig(EvaluationModel):
     task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     n_attempts: int = Field(default=1, ge=1)
     max_retries: int = Field(default=2, ge=0)
+    retry_wait_multiplier: float = Field(default=2.0, ge=1.0)
+    retry_min_wait_seconds: float = Field(default=4.0, ge=0.0)
+    retry_max_wait_seconds: float = Field(default=60.0, ge=0.0)
     infrastructure_max_attempts: int = Field(default=3, ge=1)
     infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
     infrastructure_exception_patterns: list[str] = Field(
@@ -128,6 +131,10 @@ class HarborBackendConfig(EvaluationModel):
     passthrough_environment: list[str] = Field(default_factory=list)
     inference_gateway_url: str | None = None
     inference_gateway_token: str | None = None
+    # Optional reserved scope for trusted finalization (admin re-score / targets),
+    # so the optimizer's search evaluations cannot exhaust the budget the mandatory
+    # re-score needs. When unset, finalization falls back to the evaluation scope.
+    inference_gateway_finalization_token: str | None = None
     # When True, task-owned evaluation services (e.g. LLM user-simulators or graders
     # that run *inside* the task containers and cannot reach the compose-internal
     # gateway) receive the real upstream credentials via OPENAI_*, while the
@@ -563,6 +570,8 @@ class HarborBackend:
         )
         if self.config.inference_gateway_token is not None:
             values.append(self.config.inference_gateway_token)
+        if self.config.inference_gateway_finalization_token is not None:
+            values.append(self.config.inference_gateway_finalization_token)
         return values
 
     def sanitize_error(self, message: str) -> str:
@@ -589,7 +598,9 @@ class HarborBackend:
                 "pass secrets through the backend environment"
             )
 
-    def _environment(self, evaluation_id: str) -> dict[str, str]:
+    def _environment(
+        self, evaluation_id: str, *, finalization: bool = False
+    ) -> dict[str, str]:
         environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
         for name in ("TMPDIR", "TMP", "TEMP", "SYSTEMROOT"):
             if name in os.environ:
@@ -599,9 +610,20 @@ class HarborBackend:
             if name in os.environ:
                 environment[name] = os.environ[name]
         if self.config.inference_gateway_url is not None:
-            gateway_token = self.config.inference_gateway_token or ""
+            # Route trusted finalization evals to the reserved scope when configured;
+            # everything else (and the fallback) uses the shared evaluation scope.
+            use_finalization = (
+                finalization
+                and self.config.inference_gateway_finalization_token is not None
+            )
+            scope = "finalization" if use_finalization else "evaluation"
+            gateway_token = (
+                self.config.inference_gateway_finalization_token
+                if use_finalization
+                else self.config.inference_gateway_token
+            ) or ""
             gateway_url = (
-                f"{self.config.inference_gateway_url.rstrip('/')}/scopes/evaluation/"
+                f"{self.config.inference_gateway_url.rstrip('/')}/scopes/{scope}/"
                 f"{evaluation_id}/v1"
             )
             if self.config.task_services_use_upstream:
@@ -626,6 +648,26 @@ class HarborBackend:
     def _source_args(self, task_source: str, *, local: bool) -> list[str]:
         return ["-p", task_source] if local else ["-d", task_source]
 
+    def _retry_config_json(self) -> str:
+        """Partial harbor JobConfig carrying only the retry policy.
+
+        Harbor's ``run`` CLI exposes ``--max-retries``/``--retry-include``/
+        ``--retry-exclude`` but no backoff flags, so the backoff is delivered via a
+        ``--config`` snippet. The CLI loads ``--config`` as the base JobConfig and
+        then applies our flags on top (``--max-retries`` wins for the count), so a
+        retry-only partial is sufficient and safe.
+        """
+        return json.dumps(
+            {
+                "retry": {
+                    "max_retries": self.config.max_retries,
+                    "wait_multiplier": self.config.retry_wait_multiplier,
+                    "min_wait_sec": self.config.retry_min_wait_seconds,
+                    "max_wait_sec": self.config.retry_max_wait_seconds,
+                }
+            }
+        )
+
     def _command(
         self,
         *,
@@ -635,6 +677,7 @@ class HarborBackend:
         jobs_dir: str,
         task_source: str,
         local_task_source: bool,
+        retry_config_path: str,
     ) -> list[str]:
         command = [
             self.config.uv_executable,
@@ -667,6 +710,8 @@ class HarborBackend:
             str(request.limits.max_concurrency),
             "--n-attempts",
             str(self.config.n_attempts),
+            "--config",
+            retry_config_path,
             "--max-retries",
             str(self.config.max_retries),
             "--agent-timeout-multiplier",
@@ -1037,6 +1082,9 @@ class HarborBackend:
                     if local_task_source
                     else self.config.task_source
                 )
+                retry_config_path = await staging.write_text(
+                    "retry-config.json", self._retry_config_json()
+                )
                 command = self._command(
                     workspace=context.workspace.project_path,
                     request=request,
@@ -1044,12 +1092,15 @@ class HarborBackend:
                     jobs_dir=remote_jobs_dir,
                     task_source=task_source,
                     local_task_source=local_task_source,
+                    retry_config_path=retry_config_path,
                 )
                 result = await context.workspace.sandbox.run(
                     command,
                     cwd=context.workspace.project_path,
                     timeout=request.limits.timeout_seconds,
-                    env=self._environment(context.evaluation_id),
+                    env=self._environment(
+                        context.evaluation_id, finalization=context.finalization
+                    ),
                 )
                 await staging.download("jobs", attempt_jobs_dir)
             stdout = self.sanitize_error(result.stdout)

@@ -37,6 +37,10 @@ class EvaluationContext:
     result_dir: Path
     artifact_dir: Path
     case_store: CaseStore
+    # True for trusted finalization (admin) evaluations — lets a backend route
+    # target-agent inference to a reserved scope so the optimizer's search
+    # evaluations cannot starve the mandatory re-score's inference budget.
+    finalization: bool = False
 
 
 @runtime_checkable

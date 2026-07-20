@@ -156,6 +156,7 @@ class Evaluator:
                     result_dir=result_dir,
                     artifact_dir=store.artifact_dir,
                     case_store=store.cases,
+                    finalization=principal == EvaluationPrincipal.ADMIN,
                 )
                 async with asyncio.timeout(request.limits.timeout_seconds):
                     raw_report = await backend.evaluate(

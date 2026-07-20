@@ -84,6 +84,10 @@ class InferenceGatewaySpec(EvaluationModel):
     default_upstream_base_url: str = "https://api.openai.com/v1"
     producer: InferenceBudgetSpec
     evaluation: InferenceBudgetSpec
+    # Reserved budget for trusted finalization (admin re-score / targets). When
+    # omitted, it defaults to a copy of `evaluation`, giving the mandatory re-score
+    # its own pool so the optimizer's search evaluations cannot starve it.
+    finalization: InferenceBudgetSpec | None = None
 
     @field_validator("upstream_api_key_env", "upstream_base_url_env")
     @classmethod
@@ -175,7 +179,16 @@ class HarborBuildConfig(EvaluationModel):
     harbor_python_version: str = "3.12"
     default_index: str = "https://pypi.org/simple"
     n_attempts: int = Field(default=1, ge=1)
+    # Per-case retry for the nested `harbor run` eval. Harbor already retries any
+    # non-excluded exception (including rate limits) with backoff; these knobs let
+    # a build tune how hard, so a transient upstream rate-limit storm during the
+    # (mandatory) selection/rescore evals does not fail otherwise-good candidates.
+    # `max_retries` -> `harbor run --max-retries`; the backoff fields are forwarded
+    # via a `--config` JobConfig snippet (harbor's CLI exposes no backoff flags).
     max_retries: int = Field(default=2, ge=0)
+    retry_wait_multiplier: float = Field(default=2.0, ge=1.0)
+    retry_min_wait_seconds: float = Field(default=4.0, ge=0.0)
+    retry_max_wait_seconds: float = Field(default=60.0, ge=0.0)
     infrastructure_max_attempts: int = Field(default=3, ge=1)
     infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
     reward_key: str | None = None
