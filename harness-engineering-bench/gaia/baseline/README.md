@@ -19,8 +19,8 @@ From the repository root:
 ```bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../program-opt-bench/gaia/baseline/build.yaml \
-  --output ../program-opt-bench/gaia/baseline/compiled
+  --config ../harness-engineering-bench/gaia/baseline/build.yaml \
+  --output ../harness-engineering-bench/gaia/baseline/compiled
 ```
 
 Omit `VERO_SKIP_SECRET_CHECK=1` for a real build so VeRO verifies that the
@@ -46,13 +46,13 @@ by hand — copy `secrets.env.example` to `secrets.env` (gitignored) and fill it
 in:
 
 ```bash
-cp program-opt-bench/gaia/baseline/secrets.env.example \
-   program-opt-bench/gaia/baseline/secrets.env   # then edit it
+cp harness-engineering-bench/gaia/baseline/secrets.env.example \
+   harness-engineering-bench/gaia/baseline/secrets.env   # then edit it
 
 cd vero
 uv run vero harbor run \
-  --config ../program-opt-bench/gaia/baseline/build.yaml \
-  --env-file ../program-opt-bench/gaia/baseline/secrets.env \
+  --config ../harness-engineering-bench/gaia/baseline/build.yaml \
+  --env-file ../harness-engineering-bench/gaia/baseline/secrets.env \
   --environment docker \
   --agent codex \
   --model gpt-5.6-sol \

@@ -22,7 +22,7 @@ from vero.harbor import (
 )
 
 
-BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "program-opt-bench"
+BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 
 
 def _git(path: Path, *arguments: str) -> str:
@@ -49,8 +49,10 @@ def _git(path: Path, *arguments: str) -> str:
 def test_canonical_benchmarks_isolate_upstream_inference_credentials(
     benchmark, producer_models
 ):
+    # gaia is promoted to the top level; other task sets live under candidates/.
+    base = BENCHMARK_ROOT if benchmark == "gaia" else BENCHMARK_ROOT / "candidates"
     config = load_harbor_build_config(
-        BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
+        base / benchmark / "baseline" / "build.yaml"
     )
 
     assert config.inference_gateway is not None

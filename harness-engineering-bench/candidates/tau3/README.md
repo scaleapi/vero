@@ -10,13 +10,13 @@ and test. The deterministic split is stratified by domain.
 Regenerate or verify the committed split from an exported dataset:
 
 ```bash
-python program-opt-bench/scripts/partition_dataset.py tau3 \
+python harness-engineering-bench/scripts/partition_dataset.py tau3 \
   --tasks-dir /path/to/exported/dataset \
-  --output-dir program-opt-bench/tau3/partitions \
+  --output-dir harness-engineering-bench/candidates/tau3/partitions \
   --fetch-registry
 
-python program-opt-bench/scripts/partition_dataset.py tau3 \
+python harness-engineering-bench/scripts/partition_dataset.py tau3 \
   --tasks-dir /path/to/exported/dataset \
-  --output-dir program-opt-bench/tau3/partitions \
+  --output-dir harness-engineering-bench/candidates/tau3/partitions \
   --check
 ```

@@ -16,8 +16,8 @@ Compile from the repository root:
 ```bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../program-opt-bench/swe-atlas-qna/baseline/build.yaml \
-  --output ../program-opt-bench/swe-atlas-qna/baseline/compiled
+  --config ../harness-engineering-bench/candidates/swe-atlas-qna/baseline/build.yaml \
+  --output ../harness-engineering-bench/candidates/swe-atlas-qna/baseline/compiled
 ```
 
 For a real run, provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`,

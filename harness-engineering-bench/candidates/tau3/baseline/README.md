@@ -17,8 +17,8 @@ Compile from the repository root:
 ```bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../program-opt-bench/tau3/baseline/build.yaml \
-  --output ../program-opt-bench/tau3/baseline/compiled
+  --config ../harness-engineering-bench/candidates/tau3/baseline/build.yaml \
+  --output ../harness-engineering-bench/candidates/tau3/baseline/compiled
 ```
 
 For a real run, provide the OpenAI and Modal credentials declared in

@@ -11,14 +11,14 @@ the ten represented codebases occur across the three partitions.
 Regenerate or verify the committed split from an exported dataset:
 
 ```bash
-python program-opt-bench/scripts/partition_dataset.py swe-atlas-qna \
+python harness-engineering-bench/scripts/partition_dataset.py swe-atlas-qna \
   --tasks-dir /path/to/exported/dataset \
-  --output-dir program-opt-bench/swe-atlas-qna/partitions \
+  --output-dir harness-engineering-bench/candidates/swe-atlas-qna/partitions \
   --fetch-registry
 
-python program-opt-bench/scripts/partition_dataset.py swe-atlas-qna \
+python harness-engineering-bench/scripts/partition_dataset.py swe-atlas-qna \
   --tasks-dir /path/to/exported/dataset \
-  --output-dir program-opt-bench/swe-atlas-qna/partitions \
+  --output-dir harness-engineering-bench/candidates/swe-atlas-qna/partitions \
   --check
 ```
 

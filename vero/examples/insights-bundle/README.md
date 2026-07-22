@@ -1,7 +1,7 @@
 # insights-bundle — Insights Generator as an optimizer subagent
 
 This is **not a Harbor task.** It is a bundle you *inject* into an existing
-optimizer run (e.g. the GAIA build under `program-opt-bench/gaia/`) so the main
+optimizer run (e.g. the GAIA build under `harness-engineering-bench/gaia/`) so the main
 solver/optimizer agent can call it — mid-run, as a subagent — to mine its own
 accumulated `.vero` trace corpus for patterns and feed the findings into the next
 candidate proposal.

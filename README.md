@@ -35,7 +35,7 @@ includes a no-bind-mount `DockerSandbox` example.
 | --- | --- |
 | [`vero/`](vero/) | The `scale-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
 | [`vero-tasks/`](vero-tasks/) | Narrow Python task types and schema-v1 evaluation runner |
-| [`program-opt-bench/`](program-opt-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
+| [`harness-engineering-bench/`](harness-engineering-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
 
 Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/),
 try the [26-circle packing benchmark](vero/examples/circle-packing/), or read the
@@ -44,7 +44,7 @@ command protocol without model credentials. Circle packing is a substantive
 coding-agent benchmark with exact geometry checks and inspectable search
 artifacts.
 
-For a full agent-optimization example, the [GAIA benchmark](program-opt-bench/gaia/)
+For a full agent-optimization example, the [GAIA benchmark](harness-engineering-bench/gaia/)
 pairs a tool-using GPT-5.4 mini target with Harbor's canonical GAIA verifier and
 an immutable 20% / 40% / 40% development, validation, and test split.
 
@@ -69,7 +69,7 @@ git checkout paper-v1
 Use the `paper/v1` branch or `paper-v1` tag for reproduction. Development of
 the generic program optimizer continues on the `v0.5` branch. The frozen ref
 also preserves the paper-era `vero-agents` and `vero-benchmarking` directories;
-their Harbor-native replacement on `v0.5` is `program-opt-bench`.
+their Harbor-native replacement on `v0.5` is `harness-engineering-bench`.
 
 ## Citation
 
