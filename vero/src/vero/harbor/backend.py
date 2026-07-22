@@ -114,21 +114,6 @@ class HarborBackendConfig(EvaluationModel):
     retry_max_wait_seconds: float = Field(default=60.0, ge=0.0)
     infrastructure_max_attempts: int = Field(default=3, ge=1)
     infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
-    infrastructure_exception_patterns: list[str] = Field(
-        default_factory=lambda: [
-            "rate.?limit",
-            "timeout",
-            "connection",
-            "service.?unavailable",
-            "internal.?server",
-            "overloaded",
-            "authentication",
-            "permission",
-            "quota",
-            "insufficient.?credits",
-            "billing",
-        ]
-    )
     reward_key: str | None = None
     # Average attempts by default rather than taking the best: best-of-n is an
     # optimistic estimator that biases selection above the single-shot final
@@ -271,18 +256,6 @@ class HarborBackendConfig(EvaluationModel):
             )
         return value
 
-    @field_validator("infrastructure_exception_patterns")
-    @classmethod
-    def validate_infrastructure_patterns(cls, value: list[str]) -> list[str]:
-        if not value:
-            raise ValueError("infrastructure exception patterns must not be empty")
-        for pattern in value:
-            try:
-                re.compile(pattern, re.IGNORECASE)
-            except re.error as error:
-                raise ValueError(
-                    f"invalid infrastructure exception pattern {pattern!r}: {error}"
-                ) from error
         return value
 
     @model_validator(mode="after")
@@ -1081,30 +1054,6 @@ class HarborBackend:
             ),
             self.config.failure_score,
         )
-
-    def _only_infrastructure_failures(
-        self,
-        case_results: list[CaseResult],
-    ) -> bool:
-        if not case_results or any(
-            case.status != CaseStatus.ERROR for case in case_results
-        ):
-            return False
-        patterns = [
-            re.compile(pattern, re.IGNORECASE)
-            for pattern in self.config.infrastructure_exception_patterns
-        ]
-        for case in case_results:
-            output = case.output if isinstance(case.output, dict) else {}
-            names = output.get("dead_exception_types")
-            if not isinstance(names, dict) or not names:
-                return False
-            if any(
-                not any(pattern.search(str(name)) for pattern in patterns)
-                for name in names
-            ):
-                return False
-        return True
 
     async def evaluate(
         self,
