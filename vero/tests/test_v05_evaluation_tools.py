@@ -7,6 +7,7 @@ import pytest
 from vero.evaluation import (
     EvaluationAcknowledgement,
     EvaluationBudget,
+    EvaluationBudgetExceeded,
     EvaluationSet,
     EvaluationStatus,
 )
@@ -73,6 +74,23 @@ async def test_evaluation_tools_expose_only_scoped_feedback_and_budget():
         "evaluate",
         "get_evaluation_budgets",
     }
+
+
+@pytest.mark.asyncio
+async def test_evaluate_returns_clean_result_when_evaluation_budget_is_spent():
+    class ExhaustedGateway(StubEvaluationGateway):
+        async def evaluate(self, **_kwargs):
+            raise EvaluationBudgetExceeded("evaluation run budget exhausted")
+
+    result = json.loads(
+        await EvaluationTools(evaluation=ExhaustedGateway()).evaluate(
+            evaluation="validation",
+        )
+    )
+
+    # A benign, non-terminating signal the agent can absorb — not a raised error.
+    assert result["status"] == "evaluation_budget_exhausted"
+    assert "budget" in result["message"]
 
 
 def test_evaluation_tools_report_unmetered_and_require_binding():

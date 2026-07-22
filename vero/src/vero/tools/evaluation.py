@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from vero.evaluation import CaseSelection
+from vero.evaluation import CaseSelection, EvaluationBudgetExceeded
 from vero.optimization import CandidateEvaluationGateway
 from vero.tools.utils import is_tool
 
@@ -51,12 +51,30 @@ class EvaluationTools:
             complete permitted feedback under ``.vero/evaluations``.
         """
 
-        result = await self._gateway().evaluate(
-            evaluation=evaluation,
-            selection=selection,
-            candidate_id=candidate_id,
-            description=description,
-        )
+        try:
+            result = await self._gateway().evaluate(
+                evaluation=evaluation,
+                selection=selection,
+                candidate_id=candidate_id,
+                description=description,
+            )
+        except EvaluationBudgetExceeded as error:
+            # Running out of evaluation budget is expected and benign: hand the
+            # agent a clean result rather than raising, so it stops evaluating
+            # and proceeds with what it already knows. The final held-out
+            # evaluation runs on a separate trusted path and is unaffected.
+            return json.dumps(
+                {
+                    "status": "evaluation_budget_exhausted",
+                    "message": str(error),
+                    "detail": (
+                        "The evaluation budget for this evaluation is spent. "
+                        "Further evaluations of this kind are unavailable; "
+                        "proceed with the feedback you already have."
+                    ),
+                },
+                indent=2,
+            )
         return result.model_dump_json(indent=2)
 
     @is_tool
