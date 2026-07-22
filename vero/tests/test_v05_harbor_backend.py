@@ -503,7 +503,7 @@ async def test_harbor_backend_scores_agent_crash_as_informative_task_failure(tmp
     # scored at the failure value, a real SUCCESS sample that counts toward the
     # mean, and NOT an infrastructure error.
     assert report.status == EvaluationStatus.SUCCESS
-    assert report.metrics == {"score": 0.5, "error_rate": 0.0}
+    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.5}
     assert [case.status for case in report.cases] == [
         CaseStatus.SUCCESS,
         CaseStatus.SUCCESS,
@@ -725,7 +725,7 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
         request=_request(CaseIds(ids=["case-a"])),
     )
 
-    assert report.metrics == {"score": 0.5, "error_rate": 0.0}
+    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.0}
     assert report.cases[0].metrics == {
         "score": 0.5,
         "n_attempts": 2.0,

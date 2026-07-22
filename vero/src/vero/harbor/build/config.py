@@ -192,7 +192,7 @@ class HarborBuildConfig(EvaluationModel):
     infrastructure_max_attempts: int = Field(default=3, ge=1)
     infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
     reward_key: str | None = None
-    aggregate_attempts: Literal["best", "mean"] = "best"
+    aggregate_attempts: Literal["best", "mean"] = "mean"
     feedback_transcripts: bool = False
     feedback_max_bytes: int = Field(default=3000, ge=0)
     expose_attempt_detail: bool = False

@@ -10,6 +10,7 @@ import mimetypes
 import os
 import re
 import shutil
+import statistics
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -126,7 +127,10 @@ class HarborBackendConfig(EvaluationModel):
         ]
     )
     reward_key: str | None = None
-    aggregate_attempts: Literal["best", "mean"] = "best"
+    # Average attempts by default rather than taking the best: best-of-n is an
+    # optimistic estimator that biases selection above the single-shot final
+    # score. Selection and final both run through this same aggregation.
+    aggregate_attempts: Literal["best", "mean"] = "mean"
     failure_score: float = 0.0
     feedback_transcripts: bool = False
     feedback_max_bytes: int = Field(default=3000, ge=0)
@@ -1347,6 +1351,13 @@ class HarborBackend:
             metrics={
                 "score": sum(informative_scores) / len(informative_scores),
                 "error_rate": len(infra_cases) / len(case_results),
+                # Spread across informative cases, so a real difference between
+                # candidates is distinguishable from evaluation noise.
+                "score_stddev": (
+                    statistics.pstdev(informative_scores)
+                    if len(informative_scores) > 1
+                    else 0.0
+                ),
             },
             cases=case_results,
             diagnostics=diagnostics,
