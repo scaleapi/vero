@@ -27,6 +27,11 @@ class SequentialStrategy:
         self.producer_id = producer_id
         self.instruction = instruction
 
+    @property
+    def config(self) -> dict[str, object]:
+        """Identity-relevant settings, folded into the resume digest."""
+        return {"producer_id": self.producer_id, "instruction": self.instruction}
+
     async def propose(self, context: OptimizationContext) -> Sequence[CandidateProposal]:
         parent_id = (
             context.best.id
@@ -106,9 +111,24 @@ class EvolutionaryStrategy:
         self.tournament_size = tournament_size
         self.instruction = instruction
         self.evaluation_set = evaluation_set
+        self.seed = seed
         self._rng = random.Random(seed)
         self._fitness: dict[str, float] = {}
         self._generation = 0
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Every setting that changes search semantics, so the resume digest
+        rejects a resume under a materially different configuration."""
+        return {
+            "producer_id": self.producer_id,
+            "population_size": self.population_size,
+            "num_offspring": self.num_offspring,
+            "tournament_size": self.tournament_size,
+            "instruction": self.instruction,
+            "evaluation_set": self.evaluation_set,
+            "seed": self.seed,
+        }
 
     async def propose(self, context: OptimizationContext) -> Sequence[CandidateProposal]:
         self._ingest(context)
@@ -217,10 +237,24 @@ class DarwinGodelStrategy:
         self.instruction = instruction
         self.evaluation_set = evaluation_set
         self.base_weight = base_weight
+        self.seed = seed
         self._rng = random.Random(seed)
         self._score: dict[str, float] = {}
         self._children: dict[str, int] = {}
         self._generation = 0
+
+    @property
+    def config(self) -> dict[str, object]:
+        """Every setting that changes search semantics, so the resume digest
+        rejects a resume under a materially different configuration."""
+        return {
+            "producer_id": self.producer_id,
+            "num_offspring": self.num_offspring,
+            "instruction": self.instruction,
+            "evaluation_set": self.evaluation_set,
+            "base_weight": self.base_weight,
+            "seed": self.seed,
+        }
 
     async def propose(self, context: OptimizationContext) -> Sequence[CandidateProposal]:
         self._ingest(context)

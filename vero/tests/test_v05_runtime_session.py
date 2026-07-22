@@ -211,6 +211,23 @@ async def test_session_rejects_resume_with_changed_evaluation_parameters(
         await session.run(skip_baseline_evaluation=True)
 
 
+def test_component_spec_reflects_strategy_settings():
+    from vero.optimization import EvolutionaryStrategy
+
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"), direction="maximize"
+    )
+    base = EvolutionaryStrategy(objective=objective, population_size=8, seed=1)
+    bigger = EvolutionaryStrategy(objective=objective, population_size=16, seed=1)
+    reseeded = EvolutionaryStrategy(objective=objective, population_size=8, seed=2)
+
+    base_digest = OptimizationSession._component_spec(base).config_digest
+    # Built-in strategy settings and the seed now change the resume identity, so
+    # a resume under materially different search semantics is rejected.
+    assert base_digest != OptimizationSession._component_spec(bigger).config_digest
+    assert base_digest != OptimizationSession._component_spec(reseeded).config_digest
+
+
 def test_session_rejects_mismatched_evaluator_directory(tmp_path: Path):
     with pytest.raises(ValueError, match="must match"):
         OptimizationSession(

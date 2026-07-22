@@ -690,12 +690,34 @@ class Optimizer:
             ):
                 final_record = final_baseline
             else:
-                final_record = await self.evaluate_candidate(
-                    best.request.candidate,
-                    final_definition.evaluation_set,
-                    principal=EvaluationPrincipal.SYSTEM,
-                )
-                evaluations.append(final_record)
+                final_set = final_definition.evaluation_set
+                existing_final = [
+                    record
+                    for record in self.engine.database.evaluations.values()
+                    if record.request.candidate.id == best.request.candidate.id
+                    and record.request.candidate.version
+                    == best.request.candidate.version
+                    and record.backend_id == self.backend_id
+                    and record.request.evaluation_set == final_set
+                    and record.request.parameters == self.parameters
+                    and record.request.limits == self.limits
+                    and record.request.seed == self.seed
+                    and record.backend == backend_provenance
+                    and record.objective_spec == self.objective
+                ]
+                if existing_final:
+                    # On resume (or a re-run of a completed session) the winner
+                    # may already have a compatible final evaluation. Reuse it
+                    # rather than repeating a hidden-test run and spending the
+                    # system/inference budget an exact allocation may not have.
+                    final_record = existing_final[-1]
+                else:
+                    final_record = await self.evaluate_candidate(
+                        best.request.candidate,
+                        final_set,
+                        principal=EvaluationPrincipal.SYSTEM,
+                    )
+                    evaluations.append(final_record)
 
         return OptimizationResult(
             baseline=baseline_record,
