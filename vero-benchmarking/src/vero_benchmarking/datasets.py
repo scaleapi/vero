@@ -382,6 +382,34 @@ class AflowMathNoSplit(AflowDatasetBuilder):
     skip_validation_split: bool = True
 
 
+class AflowMathMini(AflowMath):
+    """Tiny subsample of AFLOW MATH (MATH-Hard) for a lower cost demo.
+
+    Same schema/splits as ``aflow_math`` but truncated to a handful of samples. 
+    Selection is deterministic (first-N).
+    """
+
+    name: Literal["aflow_math_mini"] = "aflow_math_mini"
+    aflow_dataset_name: str = "math"
+    train_mini_size: int = 16
+    validation_mini_size: int = 8
+    test_mini_size: int = 30
+
+    def build(self) -> DatasetDict:
+        ds = super().build()
+
+        def head(split: str, n: int) -> Dataset:
+            return ds[split].select(range(min(n, len(ds[split]))))
+
+        return DatasetDict(
+            {
+                "train": head("train", self.train_mini_size),
+                "validation": head("validation", self.validation_mini_size),
+                "test": head("test", self.test_mini_size),
+            }
+        )
+
+
 class AflowMbpp(AflowDatasetBuilder):
     name: Literal["aflow_mbpp"] = "aflow_mbpp"
     aflow_dataset_name: str = "mbpp"
@@ -409,6 +437,7 @@ DatasetBuilderT = Annotated[
         AflowHumanevalNoSplit,
         AflowMath,
         AflowMathNoSplit,
+        AflowMathMini,
         AflowMbpp,
         AflowMbppNoSplit,
         GaiaPureLanguage,

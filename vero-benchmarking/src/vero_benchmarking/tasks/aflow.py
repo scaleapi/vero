@@ -104,6 +104,23 @@ aflow_math_task = OptimizationTask(
     resource_namespace="math",
 )
 
+# Lower cost demo. Reuses generic-agent's
+# "math" task.
+# train_budget=8 gives the optimizer room to make a bad edit AND recover from it (a
+# single broken prompt can otherwise burn the whole run), and validation_budget=2 gives
+# a held-out split for the agent to validate its final version on 
+aflow_math_mini_task = OptimizationTask(
+    project_path=GENERIC_AGENT_PATH,
+    dataset_path=DEFAULT_DATASETS_DIR / "aflow_math_mini",
+    score_threshold=SCORE_THRESHOLD,
+    batch_size=16,
+    train_budget=8,
+    validation_budget=2,
+    task="math",
+    resource_namespace="math",
+    eval_split="test",
+)
+
 aflow_mbpp_task = OptimizationTask(
     project_path=GENERIC_AGENT_PATH,
     dataset_path=DEFAULT_DATASETS_DIR / "aflow_mbpp",
@@ -121,5 +138,6 @@ AFLOW_TASKS = {
     "hotpotqa": aflow_hotpotqa_task,
     "humaneval-nosplit": aflow_humaneval_no_split_task,
     "math": aflow_math_task,
+    "math-mini": aflow_math_mini_task,
     "mbpp": aflow_mbpp_task,
 }
