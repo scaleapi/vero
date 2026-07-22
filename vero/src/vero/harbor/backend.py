@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import mimetypes
 import os
@@ -46,6 +47,8 @@ from vero.evaluation.models import (
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.staging import SandboxStagingArea
 from vero.sandbox import CommandResult, Sandbox
+
+logger = logging.getLogger(__name__)
 
 
 def _default_uv() -> str:
@@ -626,6 +629,16 @@ class HarborBackend:
                 finalization
                 and self.config.inference_gateway_finalization_token is not None
             )
+            if finalization and not use_finalization:
+                # The trusted final re-score asked for the reserved pool but none
+                # was provisioned, so it silently shares the search budget and can
+                # be starved. Surface it loudly rather than degrading quietly.
+                logger.warning(
+                    "finalization evaluation requested the reserved inference "
+                    "scope but no finalization token is configured; falling back "
+                    "to the shared 'evaluation' scope, which search evaluations "
+                    "can exhaust"
+                )
             scope = "finalization" if use_finalization else "evaluation"
             gateway_token = (
                 self.config.inference_gateway_finalization_token

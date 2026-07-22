@@ -299,6 +299,7 @@ async def test_submit_finalization_is_durable_and_idempotent(tmp_path):
     ).finalize()
 
     assert first == replayed
+    assert replayed.shipped is True
     assert replayed.rewards == {"reward": 0.9}
     assert engine.calls == [("submitted", "test")]
 
@@ -315,6 +316,8 @@ async def test_verifier_floors_rewards_when_no_candidate_exists(tmp_path):
     ).finalize()
 
     assert result.candidate is None
+    # "Nothing shipped" is an explicit, distinct outcome — not a real zero.
+    assert result.shipped is False
     assert result.rewards == {"reward": 0.0}
     assert "selection" in result.errors
 

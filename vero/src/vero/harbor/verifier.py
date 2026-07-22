@@ -101,6 +101,11 @@ class VerificationResult(EvaluationModel):
     """Durable, idempotent output consumed by Harbor's verifier."""
 
     candidate: Candidate | None = None
+    #: Whether a candidate was actually shipped. False means selection produced
+    #: nothing (the rewards are failure values recording "no candidate"), which
+    #: a benchmark must treat as a distinct outcome from a candidate that
+    #: shipped and legitimately scored the failure value.
+    shipped: bool = True
     rewards: dict[str, float]
     evaluation_ids: dict[str, str] = Field(default_factory=dict)
     baseline_rewards: dict[str, float] = Field(default_factory=dict)
@@ -353,6 +358,7 @@ class CanonicalVerifier:
             candidate = await self._select_candidate()
         except NoCandidateError as error:
             return VerificationResult(
+                shipped=False,
                 rewards={
                     target.reward_key: target.failure_value for target in self.targets
                 },
