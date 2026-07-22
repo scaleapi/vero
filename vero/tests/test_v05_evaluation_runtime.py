@@ -246,6 +246,19 @@ async def test_store_splits_cases_from_manifest_and_round_trips(tmp_path: Path):
     assert store.load() == value
 
 
+@pytest.mark.asyncio
+async def test_store_preserves_principal_across_reconstruction(tmp_path: Path):
+    value = record().model_copy(update={"principal": EvaluationPrincipal.ADMIN})
+    store = EvaluationStore(tmp_path / value.id)
+
+    await store.save(value)
+
+    # Reconstructing from the source-of-truth directory must keep the real
+    # provenance, not silently default it to SYSTEM.
+    assert store.load().principal == EvaluationPrincipal.ADMIN
+    assert store.load() == value
+
+
 def test_running_manifest_is_not_a_completed_record(tmp_path: Path):
     value = record()
     store = EvaluationStore(tmp_path / value.id)
@@ -558,7 +571,7 @@ async def test_budget_ledger_reserves_and_restores(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_budget_reservation_stays_consistent_when_write_is_cancelled(
+async def test_budget_reservation_rolls_back_when_cancelled(
     tmp_path: Path,
     monkeypatch,
 ):
@@ -595,10 +608,13 @@ async def test_budget_reservation_stays_consistent_when_write_is_cancelled(
     with pytest.raises(asyncio.CancelledError):
         await reservation
 
+    # The reservation is atomic: a run cancelled while the charge was being
+    # written keeps its full budget rather than leaking it, and disk and memory
+    # agree on the rolled-back state.
     in_memory = ledger.get("command", evaluation_set)
     on_disk = BudgetLedger.load(path).get("command", evaluation_set)
     assert in_memory is not None
-    assert in_memory.remaining_runs == 1
+    assert in_memory.remaining_runs == 2
     assert on_disk == in_memory
 
 

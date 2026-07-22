@@ -21,6 +21,7 @@ from vero.evaluation.models import (
     BackendProvenance,
     CaseResult,
     EvaluationModel,
+    EvaluationPrincipal,
     EvaluationRecord,
     EvaluationReport,
     EvaluationRequest,
@@ -90,6 +91,11 @@ class EvaluationManifest(EvaluationModel):
     case_files: list[CaseFileReference] = Field(default_factory=list)
     backend_id: str
     backend: BackendProvenance
+    # Persist the principal so a record reconstructed from this source-of-truth
+    # directory keeps its true provenance instead of silently defaulting to
+    # SYSTEM. Older manifests without the field read back as SYSTEM, matching
+    # the historical EvaluationRecord default.
+    principal: EvaluationPrincipal = EvaluationPrincipal.SYSTEM
     objective_spec: ObjectiveSpec | None = None
     objective: ObjectiveResult | None = None
     created_at: datetime
@@ -123,6 +129,7 @@ class EvaluationManifest(EvaluationModel):
             ],
             backend_id=record.backend_id,
             backend=record.backend,
+            principal=record.principal,
             objective_spec=record.objective_spec,
             objective=record.objective,
             created_at=record.created_at,
@@ -288,6 +295,7 @@ class EvaluationStore:
             report=manifest.report.model_copy(update={"cases": cases}),
             backend_id=manifest.backend_id,
             backend=manifest.backend,
+            principal=manifest.principal,
             objective_spec=manifest.objective_spec,
             objective=manifest.objective,
             created_at=manifest.created_at,

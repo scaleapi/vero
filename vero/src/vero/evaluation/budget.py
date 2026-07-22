@@ -107,9 +107,21 @@ class BudgetLedger:
                     except asyncio.CancelledError as error:
                         cancellation = error
                 write.result()
-                self._budgets = snapshot
                 if cancellation is not None:
+                    # The run requesting this reservation is being cancelled and
+                    # will never use it. Roll the durable charge back so the
+                    # reservation is atomic — committed in full or not at all —
+                    # and a cancelled reservation never leaks budget. (In-memory
+                    # state was never updated, so we rewrite it as the truth.)
+                    await asyncio.shield(
+                        asyncio.to_thread(
+                            _atomic_write_json,
+                            self.path,
+                            self._serialize(self._budgets),
+                        )
+                    )
                     raise cancellation
+                self._budgets = snapshot
                 return updated
             self._budgets = snapshot
             return updated
