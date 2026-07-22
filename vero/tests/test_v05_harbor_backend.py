@@ -478,7 +478,7 @@ async def test_harbor_backend_exposes_exact_failed_trial_result(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
+async def test_harbor_backend_scores_agent_crash_as_informative_task_failure(tmp_path):
     sandbox = FakeSandbox(
         tmp_path,
         {
@@ -499,14 +499,17 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
         request=_request(CaseRange(stop=2)),
     )
 
+    # A candidate whose own harness crashes is an informative task failure:
+    # scored at the failure value, a real SUCCESS sample that counts toward the
+    # mean, and NOT an infrastructure error.
     assert report.status == EvaluationStatus.SUCCESS
-    assert report.metrics == {"score": 0.5, "error_rate": 0.5}
+    assert report.metrics == {"score": 0.5, "error_rate": 0.0}
     assert [case.status for case in report.cases] == [
         CaseStatus.SUCCESS,
-        CaseStatus.ERROR,
+        CaseStatus.SUCCESS,
     ]
     assert report.cases[1].metrics["score"] == 0.0
-    assert report.cases[1].errors[0].code == "harbor_no_reward"
+    assert report.cases[1].output["error_category"] == "task_failure"
     assert sandbox.command[:15] == [
         sys.executable,
         "run",
@@ -537,6 +540,107 @@ async def test_harbor_backend_runs_and_zero_fills_missing_rewards(tmp_path):
     ]
     checkpoints = await runtime_context.case_store.load_all()
     assert [case.case_id for case in checkpoints] == ["case-a", "case-b"]
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_excludes_transient_infrastructure_from_aggregate(
+    tmp_path,
+):
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
+            "example/beta": [
+                {
+                    "verifier_result": None,
+                    "exception_info": {"exception_type": "openai.RateLimitError"},
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseRange(stop=2)),
+    )
+
+    # The rate-limited case is infrastructure: excluded from the mean (which is
+    # the sole successful case, 1.0) and reported as the error rate.
+    assert report.metrics["score"] == 1.0
+    assert report.metrics["error_rate"] == 0.5
+    assert [case.status for case in report.cases] == [
+        CaseStatus.SUCCESS,
+        CaseStatus.ERROR,
+    ]
+    assert report.cases[1].output["error_category"] == "transient_infra"
+    assert report.cases[1].errors[0].code == "transient_infrastructure"
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_marks_inference_budget_exhaustion_invalid(tmp_path):
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
+            "example/beta": [
+                {
+                    "verifier_result": None,
+                    "exception_info": {
+                        "exception_type": "openai.RateLimitError",
+                        # The gateway's distinct code survives in the body message
+                        # even though the client collapses the type to a 429.
+                        "message": "Error code: 429 - inference token budget "
+                        "exhausted (code: budget_exhausted)",
+                    },
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseRange(stop=2)),
+    )
+
+    # Budget exhaustion is terminating: the whole evaluation is INVALID with a
+    # distinct, non-retryable code — never a rate-limit, never a score of zero.
+    assert report.status == EvaluationStatus.INVALID
+    assert "score" not in report.metrics
+    assert any(
+        diagnostic.code == "inference_budget_exhausted"
+        for diagnostic in report.diagnostics
+    )
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_treats_missing_coverage_as_infrastructure(tmp_path):
+    # Only alpha produces a trial; beta is dropped entirely by the sub-run.
+    sandbox = FakeSandbox(
+        tmp_path,
+        {"example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}]},
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseRange(stop=2)),
+    )
+
+    # The dropped case is infrastructure (excluded from the mean, counted as
+    # error rate) rather than a silent zero, and coverage loss is logged.
+    assert report.metrics["score"] == 1.0
+    assert report.metrics["error_rate"] == 0.5
+    assert [case.status for case in report.cases] == [
+        CaseStatus.SUCCESS,
+        CaseStatus.ERROR,
+    ]
+    assert report.cases[1].output["error_category"] == "transient_infra"
+    assert any(
+        diagnostic.code == "harbor_incomplete_coverage"
+        for diagnostic in report.diagnostics
+    )
 
 
 @pytest.mark.asyncio

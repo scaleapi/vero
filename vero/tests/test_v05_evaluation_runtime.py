@@ -393,7 +393,9 @@ async def test_evaluator_runs_at_candidate_version_and_persists(tmp_path: Path):
 
 
 @pytest.mark.asyncio
-async def test_evaluator_fails_reports_at_the_error_rate_threshold(tmp_path: Path):
+async def test_evaluator_marks_reports_invalid_at_the_error_rate_threshold(
+    tmp_path: Path,
+):
     workspace = StubWorkspace(tmp_path / "repo")
     cases = [
         CaseResult(
@@ -429,9 +431,12 @@ async def test_evaluator_fails_reports_at_the_error_rate_threshold(tmp_path: Pat
         ),
     )
 
-    assert value.report.status == EvaluationStatus.FAILED
+    assert value.report.status == EvaluationStatus.INVALID
     assert value.report.metrics["error_rate"] == pytest.approx(0.1)
-    assert value.report.diagnostics[-1].code == "error_rate_threshold_exceeded"
+    assert (
+        value.report.diagnostics[-1].code
+        == "infrastructure_invalidity_threshold_exceeded"
+    )
     assert value.objective == ObjectiveResult(value=0.0, feasible=False)
 
 

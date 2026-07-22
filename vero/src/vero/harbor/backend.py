@@ -18,6 +18,12 @@ from typing import Any, Literal
 from pydantic import Field, JsonValue, field_validator, model_validator
 
 from vero.evaluation.backend import EvaluationContext
+from vero.evaluation.error_taxonomy import (
+    NO_REWARD_SIGNAL,
+    ErrorCategory,
+    classify_case,
+    policy,
+)
 from vero.evaluation.models import (
     AllCases,
     BackendProvenance,
@@ -973,18 +979,70 @@ class HarborBackend:
                 score,
             )
 
+        # No scored attempt. Decide, from the single source of truth, whether
+        # this is the candidate's own failure (an informative low score) or an
+        # infrastructure loss (excluded from the aggregate score).
         exception_counts: dict[str, int] = {}
+        signals: list[str] = []
         for attempt in attempts:
-            name = (attempt.get("exception_info") or {}).get("exception_type")
-            key = str(name or "no_rewards_recorded")
+            info = attempt.get("exception_info") or {}
+            name = info.get("exception_type")
+            key = str(name or NO_REWARD_SIGNAL)
             exception_counts[key] = exception_counts.get(key, 0) + 1
-        message = f"No verifier reward for Harbor task {case.task_name!r}"
-        if exception_counts:
-            causes = ", ".join(
-                f"{name} x{count}" for name, count in sorted(exception_counts.items())
-            )
-            message += f"; attempts: {causes}"
+            signals.append(key)
+            # The gateway embeds a distinct "budget_exhausted" code in the error
+            # body; the in-container client collapses the type to a generic
+            # rate-limit, but the message survives, so classify on it too.
+            for detail_key in ("message", "detail", "exception_message"):
+                detail = info.get(detail_key)
+                if isinstance(detail, str) and detail:
+                    signals.append(detail)
+
+        if not attempts:
+            # Harbor produced no trial for this task at all: infrastructure
+            # dropped the case (see the coverage gate), not the candidate.
+            category = ErrorCategory.TRANSIENT_INFRA
+        else:
+            category = classify_case(signals)
+        category_policy = policy(category)
         output["dead_exception_types"] = exception_counts
+        output["error_category"] = category.value
+
+        if not attempts:
+            message = (
+                f"Harbor produced no trial for task {case.task_name!r} "
+                "(infrastructure dropped the case)"
+            )
+        else:
+            message = f"No verifier reward for Harbor task {case.task_name!r}"
+            if exception_counts:
+                causes = ", ".join(
+                    f"{name} x{count}"
+                    for name, count in sorted(exception_counts.items())
+                )
+                message += f"; attempts: {causes}"
+
+        if category_policy.is_informative_sample:
+            # The candidate produced no answer or crashed on its own: a real,
+            # scoreable outcome at the failure value, not infrastructure noise.
+            output["aggregate"] = "task_failure"
+            return (
+                CaseResult(
+                    case_id=case.id,
+                    status=CaseStatus.SUCCESS,
+                    metrics={"score": self.config.failure_score},
+                    input={"task_name": case.task_name, **case.metadata},
+                    output=output,
+                    feedback=self._transcript_feedback(attempts),
+                    metadata={"error_category": category.value},
+                    artifacts=trial_artifacts,
+                ),
+                self.config.failure_score,
+            )
+
+        # An infrastructure case: excluded from the aggregate, counted toward
+        # invalidity, and — for budget/auth — a terminating condition surfaced
+        # to the aggregation via its category.
         return (
             CaseResult(
                 case_id=case.id,
@@ -993,11 +1051,12 @@ class HarborBackend:
                 input={"task_name": case.task_name, **case.metadata},
                 output=output,
                 feedback=self._transcript_feedback(attempts),
+                metadata={"error_category": category.value},
                 artifacts=trial_artifacts,
                 errors=[
                     CaseError(
                         message=message,
-                        code="harbor_no_reward",
+                        code=category_policy.diagnostic_code,
                         phase="harbor",
                         terminal=True,
                     )
@@ -1107,7 +1166,12 @@ class HarborBackend:
             stderr = self.sanitize_error(result.stderr)
             attempts.append((result, stdout, stderr))
             groups = self._trial_groups(attempt_jobs_dir)
-            if requested_tasks & set(groups):
+            # Require FULL coverage before accepting the sub-run. Partial
+            # coverage used to be accepted silently, scoring the dropped tasks
+            # as zeros; now we retry, and any tasks still missing after retries
+            # are surfaced as infrastructure cases (excluded from the mean,
+            # counted toward invalidity) rather than folded in as zeros.
+            if requested_tasks <= set(groups):
                 jobs_dir = attempt_jobs_dir
                 break
             if attempt < self.config.infrastructure_max_attempts:
@@ -1183,31 +1247,106 @@ class HarborBackend:
                     phase="harbor",
                 )
             )
-        infrastructure_failure = self._only_infrastructure_failures(case_results)
-        if infrastructure_failure:
+
+        # Coverage: any requested task that produced no trial is an
+        # infrastructure loss, recorded loudly rather than silently zeroed.
+        missing_tasks = sorted(requested_tasks - set(groups))
+        if missing_tasks:
             diagnostics.append(
                 EvaluationDiagnostic(
-                    code="infrastructure_failure",
+                    code="harbor_incomplete_coverage",
                     message=(
-                        "All Harbor cases failed with transient infrastructure "
-                        "exceptions after Harbor retries were exhausted"
+                        f"{len(missing_tasks)} of {len(requested_tasks)} requested "
+                        f"tasks produced no trial after {len(attempts)} attempt(s): "
+                        f"{missing_tasks[:5]}"
                     ),
                     severity=DiagnosticSeverity.ERROR,
                     phase="harbor",
                 )
             )
-        report = EvaluationReport(
-            status=(
-                EvaluationStatus.FAILED
-                if infrastructure_failure
-                else EvaluationStatus.SUCCESS
+
+        # Infrastructure cases are excluded from the aggregate score; only
+        # informative samples (successes and legitimate task failures) count.
+        informative_scores = [
+            score
+            for case, score in zip(case_results, scores)
+            if case.status != CaseStatus.ERROR
+        ]
+        infra_cases = [
+            case for case in case_results if case.status == CaseStatus.ERROR
+        ]
+
+        def _category(case: CaseResult) -> ErrorCategory | None:
+            raw = case.metadata.get("error_category")
+            try:
+                return ErrorCategory(raw) if isinstance(raw, str) else None
+            except ValueError:
+                return None
+
+        # A terminating condition (inference-budget exhaustion or auth failure)
+        # anywhere fails the whole evaluation loudly: distinct code, no score.
+        terminating = next(
+            (
+                _category(case)
+                for case in infra_cases
+                if (category := _category(case)) is not None
+                and policy(category).terminating
             ),
-            metrics={
-                "score": sum(scores) / len(scores),
-                "error_rate": sum(
-                    case.status == CaseStatus.ERROR for case in case_results
+            None,
+        )
+        if terminating is not None:
+            report = EvaluationReport(
+                status=EvaluationStatus.INVALID,
+                metrics={
+                    "error_rate": len(infra_cases) / len(case_results),
+                },
+                cases=case_results,
+                diagnostics=[
+                    *diagnostics,
+                    EvaluationDiagnostic(
+                        code=policy(terminating).diagnostic_code,
+                        message=(
+                            f"terminating condition {terminating.value!r} reached; "
+                            "the run cannot continue and must not be retried"
+                        ),
+                        severity=DiagnosticSeverity.ERROR,
+                        phase="harbor",
+                    ),
+                ],
+                artifacts=artifacts,
+            )
+            return sanitize_evaluation_report(report, self._secrets())
+
+        # No informative sample survived (every case was infrastructure): the
+        # aggregate is undefined, so the whole evaluation is invalid. Retryable
+        # transient loss keeps the historical infrastructure_failure code so the
+        # engine still refunds and lets the optimizer retry.
+        if not informative_scores:
+            diagnostics.append(
+                EvaluationDiagnostic(
+                    code="infrastructure_failure",
+                    message=(
+                        "no informative sample survived; every case was lost to "
+                        "infrastructure after Harbor retries were exhausted"
+                    ),
+                    severity=DiagnosticSeverity.ERROR,
+                    phase="harbor",
                 )
-                / len(case_results),
+            )
+            report = EvaluationReport(
+                status=EvaluationStatus.INVALID,
+                metrics={"error_rate": len(infra_cases) / len(case_results)},
+                cases=case_results,
+                diagnostics=diagnostics,
+                artifacts=artifacts,
+            )
+            return sanitize_evaluation_report(report, self._secrets())
+
+        report = EvaluationReport(
+            status=EvaluationStatus.SUCCESS,
+            metrics={
+                "score": sum(informative_scores) / len(informative_scores),
+                "error_rate": len(infra_cases) / len(case_results),
             },
             cases=case_results,
             diagnostics=diagnostics,

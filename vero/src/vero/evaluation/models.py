@@ -316,6 +316,11 @@ class EvaluationStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    #: The evaluation ran, but too many cases were lost to infrastructure for
+    #: the aggregate score to be trusted. Distinct from FAILED so a benchmark
+    #: can tell "unreliable due to infrastructure" apart from a feasible low
+    #: score, and never fold "nothing usable" into a legitimate zero.
+    INVALID = "invalid"
 
 
 class DiagnosticSeverity(str, Enum):

@@ -35,6 +35,15 @@ class EvaluationInfrastructureError(EvaluationExecutionError):
     """Raised after transient/external infrastructure exhausted its retries."""
 
 
+class EvaluationTerminatedError(EvaluationExecutionError):
+    """Raised for a non-retryable, terminating condition (inference-budget
+    exhaustion or authentication failure).
+
+    Unlike :class:`EvaluationInfrastructureError`, this is never refunded and
+    never retried: the condition will not heal on its own, so the run stops
+    loudly with the cause preserved rather than burning retries on it."""
+
+
 class EvaluationCancelledError(asyncio.CancelledError):
     """Cancellation propagated after its terminal evaluation record is stored."""
 

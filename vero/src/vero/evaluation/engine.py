@@ -12,6 +12,7 @@ from typing import AsyncIterator, Awaitable, Callable
 
 from vero.evaluation.backend import BackendRegistry
 from vero.evaluation.budget import BudgetLedger
+from vero.evaluation.error_taxonomy import TERMINATING_DIAGNOSTIC_CODES
 from vero.evaluation.evaluator import Evaluator
 from vero.evaluation.exceptions import (
     EvaluationCancelledError,
@@ -19,6 +20,7 @@ from vero.evaluation.exceptions import (
     EvaluationExecutionError,
     EvaluationInfrastructureError,
     EvaluationRequestError,
+    EvaluationTerminatedError,
 )
 from vero.evaluation.models import (
     AgentSelectionMode,
@@ -363,6 +365,18 @@ class EvaluationEngine:
                 )
             raise
         await self._record(record)
+        terminating = next(
+            (
+                diagnostic
+                for diagnostic in record.report.diagnostics
+                if diagnostic.code in TERMINATING_DIAGNOSTIC_CODES
+            ),
+            None,
+        )
+        if terminating is not None:
+            # A terminating condition (inference-budget exhaustion or auth
+            # failure) will not heal: do not refund and do not retry.
+            raise EvaluationTerminatedError(record.id, terminating.message)
         infrastructure = next(
             (
                 diagnostic

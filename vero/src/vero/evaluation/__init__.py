@@ -23,6 +23,7 @@ from vero.evaluation.exceptions import (
     EvaluationError,
     EvaluationExecutionError,
     EvaluationInfrastructureError,
+    EvaluationTerminatedError,
     EvaluationRequestError,
     UnknownBackendError,
 )
@@ -127,6 +128,7 @@ __all__ = [
     "EvaluationError",
     "EvaluationExecutionError",
     "EvaluationInfrastructureError",
+    "EvaluationTerminatedError",
     "EvaluationLimits",
     "EvaluationManifest",
     "EvaluationModel",

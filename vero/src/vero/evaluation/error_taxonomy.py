@@ -113,6 +113,15 @@ def policy(category: ErrorCategory) -> CategoryPolicy:
     return _POLICIES[category]
 
 
+#: Diagnostic codes whose presence means the run must stop, unretried and
+#: unrefunded. Derived from the policy table so there is one source of truth.
+TERMINATING_DIAGNOSTIC_CODES: frozenset[str] = frozenset(
+    category_policy.diagnostic_code
+    for category_policy in _POLICIES.values()
+    if category_policy.terminating
+)
+
+
 #: The literal exception-type key the Harbor backend records when the candidate
 #: produced no answer without raising (see ``harbor/backend.py``).
 NO_REWARD_SIGNAL = "no_rewards_recorded"
@@ -127,7 +136,10 @@ NO_REWARD_SIGNAL = "no_rewards_recorded"
 # score, not an infrastructure error.
 _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], ErrorCategory]] = [
     (
-        re.compile(r"quota|insufficient.?credits|billing", re.IGNORECASE),
+        re.compile(
+            r"budget.?exhausted|quota|insufficient.?credits|billing",
+            re.IGNORECASE,
+        ),
         ErrorCategory.INFERENCE_BUDGET_EXHAUSTED,
     ),
     (

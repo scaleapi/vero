@@ -242,7 +242,13 @@ class Evaluator:
         report: EvaluationReport,
         threshold: float | None,
     ) -> EvaluationReport:
-        """Fail a successful report when too many selected cases errored."""
+        """Mark a report INVALID when too many cases were lost to infrastructure.
+
+        Only infrastructure cases (``CaseStatus.ERROR``) count: a legitimate
+        agent failure is now an informative ``SUCCESS`` at the failure value, so
+        it does not push a candidate over the threshold. Crossing the threshold
+        means the aggregate is unreliable, not that the candidate is bad, so the
+        report becomes ``INVALID`` rather than ``FAILED``."""
 
         if threshold is None or report.status != EvaluationStatus.SUCCESS:
             return report
@@ -260,17 +266,17 @@ class Evaluator:
         if error_rate is None or error_rate < threshold:
             return report
         diagnostic = EvaluationDiagnostic(
-            code="error_rate_threshold_exceeded",
+            code="infrastructure_invalidity_threshold_exceeded",
             message=(
-                f"evaluation error rate {error_rate:.6g} reached the configured "
-                f"threshold {threshold:.6g}"
+                f"infrastructure-error rate {error_rate:.6g} reached the configured "
+                f"threshold {threshold:.6g}; the aggregate score is unreliable"
             ),
             severity=DiagnosticSeverity.ERROR,
             phase="evaluation",
         )
         return report.model_copy(
             update={
-                "status": EvaluationStatus.FAILED,
+                "status": EvaluationStatus.INVALID,
                 "metrics": {**report.metrics, "error_rate": error_rate},
                 "diagnostics": [*report.diagnostics, diagnostic],
             }
