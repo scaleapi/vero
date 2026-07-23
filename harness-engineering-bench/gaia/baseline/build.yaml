@@ -38,7 +38,7 @@ objective:
     metric: score
   direction: maximize
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
-baseline_floor: true
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
 score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
