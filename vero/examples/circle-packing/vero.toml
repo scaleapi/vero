@@ -1,0 +1,86 @@
+[target]
+root = "./target"
+ref = "HEAD"
+
+[backend]
+id = "circle-packing"
+kind = "command"
+harness_root = "./harness"
+environment = { PYTHONHASHSEED = "0" }
+passthrough_environment = ["PATH", "UV_CACHE_DIR"]
+command = [
+  "uv",
+  "run",
+  "--frozen",
+  "--project",
+  "{workspace}",
+  "python",
+  "{harness}/evaluate.py",
+  "--workspace", "{workspace}",
+  "--request", "{request}",
+  "--report", "{report}",
+  "--artifacts", "{artifacts}",
+]
+
+[[evaluations]]
+name = "development"
+partition = "development"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "fixed"
+disclosure = "full"
+
+[evaluations.agent_budget]
+total_runs = 30
+
+[[evaluations]]
+name = "final"
+partition = "final"
+agent_can_evaluate = false
+agent_visible = false
+agent_selection = "fixed"
+disclosure = "none"
+
+[protocol]
+selection_evaluation = "development"
+final_evaluation = "final"
+evaluate_final_baseline = true
+timeout_seconds = 300
+max_proposals = 1
+max_rounds = 1
+max_concurrency = 1
+seed = 1337
+
+[protocol.retry]
+max_attempts = 1
+
+[objective]
+metric = "sum_radii"
+direction = "maximize"
+failure_value = 0.0
+
+[[objective.constraints]]
+metric = "valid"
+operator = "=="
+value = 1.0
+
+[optimizer]
+kind = "vero"
+model = "openai/gpt-5"
+max_turns = 200
+instruction = """
+Improve the program in packing.py to maximize the sum of the radii of exactly
+26 non-overlapping circles inside the unit square. The best published result is
+approximately 2.635, but make measurable progress from the supplied baseline
+before pursuing sophisticated refinements.
+
+Use the development evaluation repeatedly and inspect its read-only JSON and
+SVG artifacts in .vero. Preserve run_packing() and its return contract. You may
+rewrite the algorithm completely. If you need third-party Python packages, add
+and lock them with `uv add`; evaluation uses the checked-in uv.lock with
+`--frozen`. Never weaken, bypass, or reproduce the trusted evaluator.
+"""
+
+[session]
+id = "circle-packing-example"
+directory = "./.vero/session"

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+mkdir -p /logs/verifier
+vero harbor finalize \
+  --token-file /state/token/admin.token \
+  --output /logs/verifier/reward.json
+vero harbor export-session \
+  --token-file /state/token/admin.token
+cat /logs/verifier/reward.json

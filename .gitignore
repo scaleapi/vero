@@ -1,5 +1,6 @@
 # Python-generated files
 __pycache__/
+.pytest_cache/
 *.py[oc]
 build/
 dist/
@@ -9,3 +10,11 @@ wheels/
 # Virtual environments
 .venv
 .env*
+
+# Run secrets loaded via `vero harbor run --env-file` (keep only *.example)
+secrets.env
+*.secrets.env
+!*.example
+
+# Local benchmark scoping notes (paper planning; not tracked)
+harness-engineering-bench/benchmark-scoping.md

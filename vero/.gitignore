@@ -1,0 +1,40 @@
+# Environment
+.env
+.env.*
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+!src/vero/harbor/build/
+!src/vero/harbor/build/*.py
+!src/vero/harbor/build/templates/
+!src/vero/harbor/build/templates/*
+
+#harbor
+jobs/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter
+**/.ipynb_checkpoints
+
+# OS
+.DS_Store
+Thumbs.db

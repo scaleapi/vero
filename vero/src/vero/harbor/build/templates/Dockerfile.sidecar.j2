@@ -1,0 +1,42 @@
+# Trusted evaluation sidecar: baselines, cases, task source, ledger, and secrets.
+FROM {{ base_image_sidecar }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+{% if use_local_vero %}
+COPY vero /opt/vero
+RUN uv pip install --system "/opt/vero[{{ sidecar_extras }}]"
+{% else %}
+RUN uv pip install --system "{{ vero_requirement }}"
+{% endif %}
+RUN uv pip install --system "{{ harbor_requirement }}"
+
+COPY agent-baseline /opt/agent-baseline
+COPY sidecar/cases /opt/cases
+COPY sidecar/serve.json /opt/serve.json
+{% if local_task_source %}
+COPY sidecar/task-source /opt/task-source
+{% endif %}
+
+RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
+RUN git config --system --add safe.directory /opt/agent-baseline \
+    && git config --system --add safe.directory /work/agent \
+    && git config --system --add safe.directory /work/agent/.git
+
+# Unprivileged user for executing the untrusted candidate harness. The sidecar
+# still starts as root (the trusted control plane); only the `harbor run`
+# subprocess drops to this user, so it cannot read the held-out records, the
+# budget ledger, other candidates, or the admin token. `-m` gives it a home for
+# the uv cache and git; useradd creates a same-named primary group.
+RUN useradd -m -u 1002 harness
+
+# Lock the trusted, root-only files the harness must never read: the case lists
+# reveal held-out (validation/test) task membership, and the deployment config
+# carries the reserved finalization inference token. (Local task packages under
+# /opt/task-source, which harbor must read to grade host-side, remain readable
+# and are addressed by the deeper in-container isolation work.)
+RUN chmod 700 /opt/cases && chmod 600 /opt/serve.json
+
+WORKDIR /opt

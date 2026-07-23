@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+if [ ! -d /work/agent/.git ]; then
+  cp -a /opt/agent-seed/. /work/agent/
+fi
+{% if overlay_present %}
+# Inject baked-in workspace overlay (agent definitions, skills, config, ...).
+cp -a /opt/overlay/. /work/agent/
+{% endif %}
+
+find /work/agent -path /work/agent/.vero -prune -o -exec chown agent:agent {} +
+git config --system --add safe.directory /work/agent
+printf '%s\n' '/.vero/' >> /work/agent/.git/info/exclude
+{% for path in overlay_excludes %}
+printf '%s\n' '/{{ path }}/' >> /work/agent/.git/info/exclude
+{% endfor %}
+{% if inference_gateway %}
+# Codex otherwise treats the built-in OpenAI provider as WebSocket-capable.
+# The VeRO gateway intentionally supports the metered HTTP Responses surface.
+mkdir -p /tmp/codex-home
+cat > /tmp/codex-home/config.toml <<'TOML'
+model_provider = "vero_gateway"
+
+[model_providers.vero_gateway]
+name = "VeRO inference gateway"
+base_url = "{{ inference_gateway_url }}/scopes/producer/optimizer/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+TOML
+chown -R agent:agent /tmp/codex-home
+{% endif %}
+{% for path in read_only_paths %}
+if [ -e "/work/agent/{{ path }}" ]; then
+  chown -R root:root "/work/agent/{{ path }}"
+  chmod -R a-w "/work/agent/{{ path }}"
+fi
+{% endfor %}
+
+exec sleep infinity

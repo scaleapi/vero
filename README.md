@@ -1,122 +1,86 @@
-# VeRO: Versioning Rewards and Observations
+# VeRO: a harness for agents to optimize programs, text, and agents
+> The code for the original VeRO paper is archived in [`legacy/`](legacy/).
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-VeRO is an evaluation harness for using coding agents to optimize LLM-based agents and workflows. It treats agent code as a versioned artifact — making changes, evaluating results, and hill-climbing toward better performance using git version control.
+VeRO gives a coding agent something to edit, an evaluation boundary, and durable
+memory of every candidate it tried. The target is anything you can put under Git
+and score — a **program** (a single function up to a whole codebase), **text**
+(a prompt, spec, or config), or an **agent** (its scaffold, tools, and prompts).
+Agents are programs, but not everyone reads "program" that way, so VeRO names
+them explicitly: it was introduced to optimize agents and generalizes the same
+version / evaluate / select loop to any Git-versioned artifact.
 
-> **Paper**: [VeRO: An Evaluation Harness for Agents to Optimize Agents](https://arxiv.org/abs/2602.22480)
-
-## Repository Structure
-
+```mermaid
+flowchart LR
+    S["Strategy<br/>proposes ideas"] --> P["Candidate producers<br/>edit isolated workspaces"]
+    P --> E["Evaluation backends<br/>score versioned reports"]
+    E --> Sel["Selection keeps the<br/>best feasible candidate"]
+    Sel -->|"next round"| S
 ```
-vero/
-├── vero/               # Core library (scale-vero)
-├── vero-agents/        # Agent implementations (benchmarking targets)
-├── vero-benchmarking/  # Benchmarking scripts and analysis
-└── LICENSE
-```
 
-### [vero/](vero/)
+The target and evaluator do not need to be Python. External evaluators and
+candidate producers connect through command protocols; Python benchmarks can
+use the optional, optimizer-independent `scale-vero-tasks` package.
 
-The core optimization framework. Provides:
+Targets may live locally or in an isolated sandbox. VeRO keeps optimization
+state and experiment tracking on the host while running Git worktrees, producer
+commands, builds, and evaluation commands in the target sandbox. The core guide
+includes a no-bind-mount `DockerSandbox` example.
 
-- **Policy** — orchestrates the optimization loop (agent + evaluator + git)
-- **Agents** — VeroAgent (OpenAI Agents SDK) and ClaudeCodeAgent (Claude Agent SDK)
-- **Evaluator** — runs task evaluations in isolated subprocess environments
-- **Tools** — MCP-based tools for agents (bash, file I/O, experiment runner, dataset viewer, etc.)
-- **Traces** — session analysis and LLM-based trace interpretation
+## Repository layout
+
+| Directory | Purpose |
+| --- | --- |
+| [`vero/`](vero/) | The `scale-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
+| [`vero-tasks/`](vero-tasks/) | Narrow Python task types and schema-v1 evaluation runner |
+| [`harness-engineering-bench/`](harness-engineering-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
+
+Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/),
+try the [26-circle packing benchmark](vero/examples/circle-packing/), or read the
+[core guide](vero/README.md). The C example demonstrates the language-neutral
+command protocol without model credentials. Circle packing is a substantive
+coding-agent benchmark with exact geometry checks and inspectable search
+artifacts.
+
+For a full agent-optimization example, the [GAIA benchmark](harness-engineering-bench/gaia/)
+pairs a tool-using GPT-5.4 mini target with Harbor's canonical GAIA verifier and
+an immutable 20% / 40% / 40% development, validation, and test split.
 
 ```bash
-cd vero && uv sync --extra optimize
+cd vero
+uv sync --all-extras
+uv run vero --help
 ```
 
-See [vero/README.md](vero/README.md) for full documentation.
+## Paper reproduction
 
-### [vero-agents/](vero-agents/)
+VeRO was introduced in [*VeRO: A Harness for Agents to Optimize
+Agents*](https://arxiv.org/abs/2602.22480), accepted at ICML 2026. The current
+library generalizes that version/evaluate/select loop from agents to programs.
 
-Agent implementations used as optimization targets:
-
-| Agent | Description |
-|-------|-------------|
-| **generic-agent** | General-purpose agent for MATH, GPQA, GAIA, GSM8K, etc. |
-| **web_search_agent** | Web search agent for SimpleQA, Facts Search |
-| **KIRA** | Terminal task agent for Terminal Bench 2.0 |
-| **tau-bench** | Customer service tool-use agent |
-| **pharma_summarizer** | Document summarization agent |
-
-See [vero-agents/README.md](vero-agents/README.md) for details.
-
-### [vero-benchmarking/](vero-benchmarking/)
-
-Scripts and infrastructure for running optimization experiments:
+The exact paper implementation is frozen separately from the v0.5 redesign:
 
 ```bash
-cd vero-benchmarking && uv sync --all-extras
-
-# Run an optimization experiment
-uv run python scripts/run_benchmark.py --scaffold claude-code-vmf --model sonnet --task math
-
-# Build datasets
-./scripts/build_datasets.sh
+git checkout paper-v1
 ```
 
-See [vero-benchmarking/README.md](vero-benchmarking/README.md) for full documentation.
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/getting-started/installation/)
-- Git
-- Access to an LLM provider (via LiteLLM, OpenAI, Anthropic, etc.)
-
-### Install
-
-```bash
-git clone <repo-url> && cd vero
-
-# Install core library
-cd vero && uv sync --extra optimize
-
-# Install benchmarking tools
-cd ../vero-benchmarking && uv sync --all-extras
-```
-
-### Run Your First Optimization
-
-```python
-from agents import Agent as OAIAgent
-from vero.policy import Policy
-from vero.agents.vero import VeroAgent
-
-policy = Policy(
-    project_path="/path/to/my-agent",
-    dataset="/path/to/my-dataset",
-    agent=VeroAgent(
-        oai_agent=OAIAgent(name="VeroAgent", model="anthropic/claude-sonnet-4-5-20250929"),
-    ),
-    task="main",
-    train_budget=10,
-    max_turns=200,
-)
-
-best = await policy.run()
-print(f"Best commit: {best.commit}, score: {best.score}")
-```
+Use the `paper/v1` branch or `paper-v1` tag for reproduction. Development of
+the generic program optimizer continues on the `v0.5` branch. The frozen ref
+also preserves the paper-era `vero-agents` and `vero-benchmarking` directories;
+their Harbor-native replacement on `v0.5` is `harness-engineering-bench`.
 
 ## Citation
 
 ```bibtex
 @article{ursekar2026vero,
-  title={VeRO: An Evaluation Harness for Agents to Optimize Agents},
+  title={VeRO: A Harness for Agents to Optimize Agents},
   author={Ursekar, Varun and Shanker, Apaar and Chatrath, Veronica and Xue, Yuan (Emily) and Denton, Sam},
   journal={arXiv preprint arXiv:2602.22480},
   year={2026}
 }
 ```
 
-## License
-
-[MIT](LICENSE)
+VeRO is licensed under the [MIT License](LICENSE).
