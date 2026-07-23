@@ -47,7 +47,8 @@ class DeploymentSelection(EvaluationModel):
     limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
     rescore_top_k: int = Field(default=3, ge=1)
     rescore_attempts: int = Field(default=1, ge=1)
-    baseline_floor: bool = True
+    baseline_floor: bool = False
+    baseline_selection_score: float | None = None
     selection_coverage_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
 
     @field_validator("backend_id", "baseline_version")
@@ -306,6 +307,7 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         rescore_top_k=parsed.selection.rescore_top_k,
         rescore_attempts=parsed.selection.rescore_attempts,
         baseline_floor=parsed.selection.baseline_floor,
+        baseline_selection_score=parsed.selection.baseline_selection_score,
         selection_coverage_threshold=parsed.selection.selection_coverage_threshold,
     )
     initialize_harbor_session_manifest(

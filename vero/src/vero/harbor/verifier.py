@@ -46,6 +46,9 @@ class VerificationTarget(EvaluationModel):
     failure_value: float = 0.0
     reward_scale: float = 1.0
     reward_offset: float = 0.0
+    # Pin the seed's reward on this target (post scale/offset) to skip scoring
+    # the fixed seed each run — reproducibility + one fewer eval per run.
+    baseline_reward: float | None = None
     # Keep one attempt by default for adversarial candidates. Retrying an
     # unmeasurable candidate-controlled run creates a one-sided re-roll.
     max_attempts: int = Field(default=1, ge=1)
@@ -64,6 +67,13 @@ class VerificationTarget(EvaluationModel):
             raise ValueError("verification reward values must be finite")
         return value
 
+    @field_validator("baseline_reward")
+    @classmethod
+    def validate_baseline_reward(cls, value: float | None) -> float | None:
+        if value is not None and not math.isfinite(value):
+            raise ValueError("baseline_reward must be finite")
+        return value
+
 
 class VerificationSelection(EvaluationModel):
     """How finalization chooses a candidate before scoring its targets."""
@@ -77,7 +87,11 @@ class VerificationSelection(EvaluationModel):
     limits: EvaluationLimits = Field(default_factory=EvaluationLimits)
     rescore_top_k: int = Field(default=3, ge=1)
     rescore_attempts: int = Field(default=1, ge=1)
-    baseline_floor: bool = True
+    # Off by default: the floor gates a ship on a validation comparison while
+    # the reward is on the (possibly differently-distributed) target.
+    baseline_floor: bool = False
+    # Pin the seed's selection-partition score to skip re-scoring it each run.
+    baseline_selection_score: float | None = None
     selection_coverage_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
@@ -327,6 +341,14 @@ class CanonicalVerifier:
             return candidate.objective.value > baseline.objective.value
         return candidate.objective.value < baseline.objective.value
 
+    def _beats_value(self, candidate: EvaluationRecord, baseline_value: float) -> bool:
+        assert candidate.objective is not None and candidate.objective.value is not None
+        if not candidate.objective.feasible:
+            return False
+        if self.selection.objective.direction == "maximize":
+            return candidate.objective.value > baseline_value
+        return candidate.objective.value < baseline_value
+
     def _pick_last(self) -> Candidate | None:
         """Last-resort fallback: the most recently measured candidate."""
         records = list(self.engine.database.evaluations.values())
@@ -353,9 +375,19 @@ class CanonicalVerifier:
 
         baseline_candidate = self.selection.baseline_candidate
         if self.selection.baseline_floor and baseline_candidate is not None:
-            baseline, _ = await self._rescore_candidate(baseline_candidate)
-            if baseline is not None and not self._strictly_beats(best, baseline):
-                return baseline_candidate
+            pinned = self.selection.baseline_selection_score
+            if pinned is not None:
+                if not self._beats_value(best, pinned):
+                    return baseline_candidate
+            else:
+                baseline, _ = await self._rescore_candidate(baseline_candidate)
+                if baseline is None:
+                    # Fail safe: can't verify the seed → don't ship it unverified.
+                    raise NoCandidateError(
+                        "baseline floor could not measure the seed (infrastructure)"
+                    )
+                if not self._strictly_beats(best, baseline):
+                    return baseline_candidate
         return best.request.candidate
 
     async def _select_candidate(self) -> Candidate:
@@ -425,6 +457,9 @@ class CanonicalVerifier:
                 baseline_rewards = dict(rewards)
             else:
                 for target in self.targets:
+                    if target.baseline_reward is not None:
+                        baseline_rewards[target.reward_key] = target.baseline_reward
+                        continue
                     reward, _, error = await self._score_target(baseline, target)
                     baseline_rewards[target.reward_key] = reward
                     if error is not None:

@@ -145,6 +145,7 @@ def _verifier(
     baseline: Candidate,
     top_k: int = 1,
     score_baseline: bool = True,
+    baseline_floor: bool = False,
 ):
     return CanonicalVerifier(
         engine=engine,
@@ -156,6 +157,7 @@ def _verifier(
             baseline_candidate=baseline,
             rescore_top_k=top_k,
             rescore_attempts=1,
+            baseline_floor=baseline_floor,
         ),
         targets=[
             VerificationTarget(
@@ -194,7 +196,9 @@ async def test_verifier_pools_repeats_then_admin_rescores_and_scores_baseline(tm
             )
         )
 
-    result = await _verifier(tmp_path, engine, baseline=baseline).finalize()
+    result = await _verifier(
+        tmp_path, engine, baseline=baseline, baseline_floor=True
+    ).finalize()
 
     assert result.candidate == steady
     assert result.rewards == {"reward": 0.8}
@@ -259,7 +263,9 @@ async def test_verifier_baseline_floor_prevents_shipping_a_regression(tmp_path):
         _record("selection", candidate, EvaluationSet(name="selection"), 0.9)
     )
 
-    result = await _verifier(tmp_path, engine, baseline=baseline).finalize()
+    result = await _verifier(
+        tmp_path, engine, baseline=baseline, baseline_floor=True
+    ).finalize()
 
     assert result.candidate == baseline
     assert result.rewards == {"reward": 0.5}
@@ -450,3 +456,108 @@ async def test_verifier_coverage_threshold_excludes_undermeasured_candidates(tmp
     assert result.candidate == well
     assert ("thin", "selection") not in engine.calls
     assert ("well", "selection") in engine.calls
+
+
+@pytest.mark.asyncio
+async def test_verifier_uses_pinned_baseline_reward_without_scoring(tmp_path):
+    # A pinned target baseline_reward is used verbatim; the seed is never scored.
+    baseline = _candidate("baseline")
+    cand = _candidate("cand", seconds=1)
+    engine = FakeEngine({("cand", "selection"): 0.8, ("cand", "test"): 0.7})
+    engine.database.add_evaluation(
+        _record("r", cand, EvaluationSet(name="selection"), 0.8)
+    )
+    verifier = CanonicalVerifier(
+        engine=engine,
+        selection=VerificationSelection(
+            mode="auto_best",
+            backend_id="backend",
+            evaluation_set=EvaluationSet(name="selection"),
+            objective=OBJECTIVE,
+            baseline_candidate=baseline,
+            rescore_top_k=1,
+            rescore_attempts=1,
+        ),
+        targets=[
+            VerificationTarget(
+                reward_key="reward",
+                backend_id="backend",
+                evaluation_set=EvaluationSet(name="test"),
+                objective=OBJECTIVE,
+                max_attempts=1,
+                baseline_reward=0.55,
+            )
+        ],
+        admin_volume=tmp_path,
+        score_baseline=True,
+    )
+
+    result = await verifier.finalize()
+
+    assert result.candidate == cand
+    assert result.rewards == {"reward": 0.7}
+    assert result.baseline_rewards == {"reward": 0.55}
+    assert ("baseline", "test") not in engine.calls  # seed never scored
+
+
+@pytest.mark.asyncio
+async def test_verifier_uses_pinned_baseline_selection_score(tmp_path):
+    # With a pinned selection score, the floor compares without re-scoring the seed.
+    baseline = _candidate("baseline")
+    cand = _candidate("cand", seconds=1)
+    engine = FakeEngine({("cand", "selection"): 0.4, ("baseline", "test"): 0.3})
+    engine.database.add_evaluation(
+        _record("r", cand, EvaluationSet(name="selection"), 0.4)
+    )
+    verifier = CanonicalVerifier(
+        engine=engine,
+        selection=VerificationSelection(
+            mode="auto_best",
+            backend_id="backend",
+            evaluation_set=EvaluationSet(name="selection"),
+            objective=OBJECTIVE,
+            baseline_candidate=baseline,
+            rescore_top_k=1,
+            rescore_attempts=1,
+            baseline_floor=True,
+            baseline_selection_score=0.6,
+        ),
+        targets=[
+            VerificationTarget(
+                reward_key="reward",
+                backend_id="backend",
+                evaluation_set=EvaluationSet(name="test"),
+                objective=OBJECTIVE,
+                max_attempts=1,
+            )
+        ],
+        admin_volume=tmp_path,
+        score_baseline=False,
+    )
+
+    result = await verifier.finalize()
+
+    # best (0.4) does not beat the pinned seed (0.6) → floor keeps the seed.
+    assert result.candidate == baseline
+    assert ("baseline", "selection") not in engine.calls  # seed never re-scored
+
+
+@pytest.mark.asyncio
+async def test_verifier_floor_fails_safe_when_seed_unmeasurable(tmp_path):
+    # Floor on, unpinned, seed re-score fails → ship nothing (inconclusive),
+    # not the best candidate unverified.
+    baseline = _candidate("baseline")
+    cand = _candidate("cand", seconds=1)
+    engine = FakeEngine(
+        {("cand", "selection"): 0.9, ("baseline", "selection"): RuntimeError("outage")}
+    )
+    engine.database.add_evaluation(
+        _record("r", cand, EvaluationSet(name="selection"), 0.9)
+    )
+
+    result = await _verifier(
+        tmp_path, engine, baseline=baseline, baseline_floor=True
+    ).finalize()
+
+    assert result.shipped is False
+    assert "baseline floor" in result.errors.get("selection", "")

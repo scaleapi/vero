@@ -41,6 +41,8 @@ class VerificationTargetSpec(EvaluationModel):
     model: str | None = None
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     failure_value: float = 0.0
+    # Pin the seed's reward on this target to skip scoring it each run.
+    baseline_reward: float | None = None
     max_attempts: int = Field(default=1, ge=1)
 
     @field_validator("partition", "reward_key")
@@ -185,7 +187,8 @@ class HarborBuildConfig(EvaluationModel):
         )
     )
     reward_mode: Literal["submit", "auto_best"] = "auto_best"
-    baseline_floor: bool = True
+    baseline_floor: bool = False
+    baseline_selection_score: float | None = None
     score_baseline: bool = True
     rescore_top_k: int = Field(default=3, ge=1)
     rescore_attempts: int = Field(default=1, ge=1)

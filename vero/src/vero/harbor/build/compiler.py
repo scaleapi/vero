@@ -333,6 +333,7 @@ def _deployment_config(
                 "reward_scale": (
                     1.0 if config.objective.direction == "maximize" else -1.0
                 ),
+                "baseline_reward": target.baseline_reward,
                 "max_attempts": target.max_attempts,
             }
         )
@@ -359,6 +360,7 @@ def _deployment_config(
             "rescore_top_k": config.rescore_top_k,
             "rescore_attempts": config.rescore_attempts,
             "baseline_floor": config.baseline_floor,
+            "baseline_selection_score": config.baseline_selection_score,
             "selection_coverage_threshold": config.selection_coverage_threshold,
         },
         "targets": targets,
