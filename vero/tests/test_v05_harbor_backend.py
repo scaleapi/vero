@@ -78,10 +78,10 @@ def _request(selection=None) -> EvaluationRequest:
 def test_backend_accepts_pinned_environment_extra(tmp_path):
     config = _config(
         tmp_path,
-        harbor_requirement="harbor[modal]==0.18.0",
+        harbor_requirement="harbor[modal]==0.20.0",
     )
 
-    assert config.harbor_requirement == "harbor[modal]==0.18.0"
+    assert config.harbor_requirement == "harbor[modal]==0.20.0"
 
 
 def test_environment_default_routes_agent_through_gateway_on_openai(tmp_path):

@@ -126,7 +126,7 @@ name: example/optimize-agent
 agent_repo: ../my-program                       # editable target (a Git repo)
 task_source: example/terminal-benchmark@1.0     # pinned registry tasks
 agent_import_path: my_program.agent:Agent
-harbor_requirement: harbor[modal]==0.18.0
+harbor_requirement: harbor[modal]==0.20.0
 environment_name: modal                         # where each nested eval runs
 secrets: [MODAL_TOKEN_ID, MODAL_TOKEN_SECRET]   # sidecar-only; stripped from the agent
 
@@ -273,7 +273,7 @@ backend = HarborBackend(HarborBackendConfig(
     task_source="org/terminal-benchmark@1.0",
     agent_import_path="my_program.agent:Agent",
     cases_path=str(Path("../harbor-cases.jsonl").resolve()),
-    harbor_requirement="harbor[modal]==0.18.0",
+    harbor_requirement="harbor[modal]==0.20.0",
     evaluation_set_name="terminal-benchmark",
     partition="test",
     passthrough_environment=["ANTHROPIC_API_KEY"],

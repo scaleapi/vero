@@ -334,9 +334,9 @@ def test_build_config_requires_pins_and_valid_partition_references(tmp_path):
     assert (
         _config(
             tmp_path / "modal",
-            harbor_requirement="harbor[modal]==0.18.0",
+            harbor_requirement="harbor[modal]==0.20.0",
         ).harbor_requirement
-        == "harbor[modal]==0.18.0"
+        == "harbor[modal]==0.20.0"
     )
     with pytest.raises(ValidationError, match="pin an exact version"):
         _config(tmp_path / "unpinned", harbor_requirement="harbor>=0.1")
@@ -413,7 +413,7 @@ def test_load_build_config_supports_partition_files_and_validates_manifest(tmp_p
                 f"task_source: {source}",
                 "task_manifest: partitions/manifest.json",
                 "agent_import_path: target.agent:Agent",
-                "harbor_requirement: harbor==0.18.0",
+                "harbor_requirement: harbor==0.20.0",
                 "partition_files:",
                 "  validation: partitions/validation.json",
                 "  test: partitions/test.json",
