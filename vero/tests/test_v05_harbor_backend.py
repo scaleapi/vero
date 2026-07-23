@@ -186,6 +186,7 @@ class FakeSandbox(LocalSandbox):
         self.run_as = None
         self.chown_commands: list[list[str]] = []
         self.chmod_commands: list[list[str]] = []
+        self.probe_commands: list[tuple[list[str], str | None]] = []
 
     async def run(self, command, cwd=None, timeout=30, env=None, run_as=None):
         if isinstance(command, list) and command[:1] == ["chown"]:
@@ -194,6 +195,10 @@ class FakeSandbox(LocalSandbox):
             return CommandResult("", "", 0)
         if isinstance(command, list) and command[:1] == ["chmod"]:
             self.chmod_commands.append(command)
+            return CommandResult("", "", 0)
+        if isinstance(command, list) and command[:1] == ["test"]:
+            # The workspace-reachability probe, run as the dropped user.
+            self.probe_commands.append((command, run_as))
             return CommandResult("", "", 0)
         if not isinstance(command, list) or "--jobs-dir" not in command:
             return await super().run(
@@ -682,6 +687,9 @@ async def test_harbor_backend_runs_harness_as_unprivileged_user(tmp_path):
     # path — otherwise `import <agent>` fails with "No module named ...".
     checkout_parent = str(PurePosixPath(str(tmp_path / "target")).parent)
     assert ["chmod", "o+x", checkout_parent] in sandbox.chmod_commands
+    # And it probes, as the dropped user, that the workspace is actually reachable
+    # before running harbor — so a permission gap fails fast and clearly here.
+    assert (["test", "-r", str(tmp_path / "target")], "harness") in sandbox.probe_commands
 
 
 def test_harbor_config_rejects_harness_isolation_with_upstream_task_services(tmp_path):

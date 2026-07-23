@@ -1199,6 +1199,22 @@ class HarborBackend:
                             f"parent {checkout_parent!r}: "
                             f"{self.sanitize_error(chmod.stderr)}"
                         )
+                    # Fail fast, at the provisioning site, if the dropped user
+                    # still can't reach its workspace (readability requires
+                    # traversing every ancestor). Without this, any future
+                    # permission gap resurfaces as a cryptic "No module named
+                    # <agent>" several retries downstream, not here.
+                    probe = await context.workspace.sandbox.run(
+                        ["test", "-r", str(context.workspace.project_path)],
+                        run_as=self.config.harness_user,
+                    )
+                    if probe.returncode != 0:
+                        raise RuntimeError(
+                            f"harness {self.config.harness_user!r} cannot reach its "
+                            f"workspace {context.workspace.project_path!r} after "
+                            "provisioning; check that every ancestor directory is "
+                            "traversable by the dropped user"
+                        )
                 result = await context.workspace.sandbox.run(
                     command,
                     cwd=context.workspace.project_path,
