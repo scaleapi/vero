@@ -66,8 +66,8 @@ secrets:
   - WANDB_API_KEY
   - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
 
-# off: breaks the eval's uv resolution of gaia_agent; needs an isolation fix.
-harness_user: null
+# candidate harness runs as an unprivileged uid, unable to read held-out state.
+harness_user: harness
 
 wandb:
   project: vero-gaia
