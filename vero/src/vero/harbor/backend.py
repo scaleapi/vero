@@ -45,8 +45,8 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
-from vero.staging import SandboxStagingArea
 from vero.sandbox import CommandResult, Sandbox
+from vero.staging import SandboxStagingArea
 
 logger = logging.getLogger(__name__)
 
@@ -802,6 +802,18 @@ class HarborBackend:
         rewards = (attempt.get("verifier_result") or {}).get("rewards") or {}
         return self._extract_reward(rewards) if rewards else None
 
+    def _attempt_is_infra(self, attempt: dict[str, Any]) -> bool:
+        """Whether a dead attempt died to infrastructure (vs the candidate)."""
+        info = attempt.get("exception_info") or {}
+        if not info:
+            return False
+        signals = [str(info.get("exception_type") or NO_REWARD_SIGNAL)]
+        for detail_key in ("message", "detail", "exception_message"):
+            detail = info.get(detail_key)
+            if isinstance(detail, str) and detail:
+                signals.append(detail)
+        return not policy(classify_case(signals)).is_informative_sample
+
     def _best_attempt(
         self,
         attempts: list[dict[str, Any]],
@@ -935,6 +947,15 @@ class HarborBackend:
                 score = sum(measured) / len(measured)
                 output["attempt_scores"] = measured
                 output["aggregate"] = "mean"
+                # Split the zero-filled dead attempts so an outage-diluted mean
+                # is distinguishable from a genuinely clean low mean: n_dead_infra
+                # are dead-to-infrastructure; n_clean are the rest (scored or a
+                # real candidate failure).
+                n_dead_infra = sum(
+                    1
+                    for attempt, reward in zip(attempts, rewards)
+                    if reward is None and self._attempt_is_infra(attempt)
+                )
                 return (
                     CaseResult(
                         case_id=case.id,
@@ -945,6 +966,8 @@ class HarborBackend:
                             "n_scored": float(
                                 sum(reward is not None for reward in rewards)
                             ),
+                            "n_dead_infra": float(n_dead_infra),
+                            "n_clean": float(len(attempts) - n_dead_infra),
                         },
                         input={"task_name": case.task_name, **case.metadata},
                         output=output,

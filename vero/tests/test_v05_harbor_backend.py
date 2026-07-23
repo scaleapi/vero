@@ -774,6 +774,9 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
         "score": 0.5,
         "n_attempts": 2.0,
         "n_scored": 1.0,
+        # the dead attempt was a TimeoutError -> infra dilution, not clean signal
+        "n_dead_infra": 1.0,
+        "n_clean": 1.0,
     }
 
 
