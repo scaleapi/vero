@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Editable Harbor-native tau3 baseline for VeRO"
 requires-python = ">=3.12"
 dependencies = [
-    "harbor==0.18.0",
+    "harbor==0.20.0",
     "openai>=2.0",
 ]
 

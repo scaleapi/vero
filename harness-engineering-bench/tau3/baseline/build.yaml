@@ -6,7 +6,7 @@ agent_repo: target
 task_source: sierra-research/tau3-bench@sha256:a57304f682894ac061090769af771a3617664f3ff6e5417d4eadf8e30433e4d9
 task_manifest: ../partitions/manifest.json
 agent_import_path: tau3_agent.agent:Tau3Agent
-harbor_requirement: harbor[modal]==0.18.0
+harbor_requirement: harbor[modal]==0.20.0
 
 partition_files:
   development: ../partitions/development.json

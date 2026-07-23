@@ -12,7 +12,7 @@ agent_repo: target
 task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: officeqa_agent.agent:OfficeQaAgent
-harbor_requirement: harbor[modal]==0.18.0
+harbor_requirement: harbor[modal]==0.20.0
 extra_harbor_args: ["--no-force-build"]
 
 partition_files:
