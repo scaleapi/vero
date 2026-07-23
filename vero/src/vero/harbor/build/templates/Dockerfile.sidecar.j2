@@ -32,6 +32,14 @@ RUN git config --system --add safe.directory /opt/agent-baseline \
 # the uv cache and git; useradd creates a same-named primary group.
 RUN useradd -m -u 1002 harness
 
+# Pre-warm the harness user's uv cache from the build (root) cache. `uv run` as
+# the unprivileged harness must resolve the candidate package (and harbor) from
+# cache: a fresh empty cache would need network at eval time and fail to import
+# it ("No module named '<agent>'"). Copy so it is owned by and writable to it.
+RUN mkdir -p /home/harness/.cache \
+    && cp -a "$(uv cache dir)" /home/harness/.cache/uv \
+    && chown -R harness:harness /home/harness/.cache
+
 # Lock the trusted, root-only files the harness must never read: the case lists
 # reveal held-out (validation/test) task membership, and the deployment config
 # carries the reserved finalization inference token. (Local task packages under

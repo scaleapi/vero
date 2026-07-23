@@ -6,8 +6,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 import yaml
+from pydantic import ValidationError
 
 from vero.harbor import (
     AgentAccessSpec,
@@ -21,7 +21,6 @@ from vero.harbor import (
     compile_harbor_task,
     load_harbor_build_config,
 )
-
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 
@@ -496,7 +495,8 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     instruction = (output / "instruction.md").read_text(encoding="utf-8")
     assert "## Objective\n\nImprove the program" in instruction
     assert "--backend harbor-validation" in instruction
-    assert "arbitrary subsets" in instruction
+    # k-anonymity floor (default 5) is disclosed to the agent
+    assert "must include at least 5 cases" in instruction
     assert "Complete task resources" in instruction
     assert ".vero/evaluations/" in instruction
     task_toml = (output / "task.toml").read_text(encoding="utf-8")
@@ -510,6 +510,10 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert set(yaml.safe_load(compose)["services"]) == {"main", "eval-sidecar"}
     sidecar_dockerfile = (output / "environment/sidecar/Dockerfile").read_text()
     assert 'uv pip install --system "harbor==0.1.17"' in sidecar_dockerfile
+    # the unprivileged harness user exists and gets a pre-warmed uv cache, so
+    # `uv run` as harness can resolve the candidate package offline
+    assert "useradd -m -u 1002 harness" in sidecar_dockerfile
+    assert "chown -R harness:harness /home/harness/.cache" in sidecar_dockerfile
     seed = (output / "environment/main/seed.sh").read_text()
     assert "-path /work/agent/.vero -prune" in seed
     assert "'/.vero/' >> /work/agent/.git/info/exclude" in seed
