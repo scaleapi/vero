@@ -23,7 +23,9 @@ class AgentAccessSpec(EvaluationModel):
     partition: str
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     expose_case_resources: bool = False
-    min_aggregate_cases: int = Field(default=1, ge=1)
+    # k-anonymity floor for aggregate subset evals; 5 by default so an omitted
+    # value is safe rather than an unfloored (single-case) leak.
+    min_aggregate_cases: int = Field(default=5, ge=1)
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
 

@@ -698,3 +698,12 @@ async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path, monkeypat
         )
         == ""
     )
+
+
+def test_sidecar_policy_defaults_to_safe_k_anonymity_floor():
+    from vero.harbor.sidecar import SidecarEvaluationPolicy
+
+    policy = SidecarEvaluationPolicy(
+        backend_id="b", evaluation_set_name="s"
+    )
+    assert policy.min_aggregate_cases == 5

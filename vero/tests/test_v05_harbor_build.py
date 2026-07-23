@@ -657,3 +657,8 @@ def test_compiler_uses_published_version_outside_a_source_checkout(
     assert not (output / "environment/vero").exists()
     dockerfile = (output / "environment/Dockerfile").read_text(encoding="utf-8")
     assert "scale-vero[harbor]==0.5.0" in dockerfile
+
+
+def test_agent_access_defaults_to_safe_k_anonymity_floor():
+    # Omitting min_aggregate_cases must yield a real floor (5), not a no-op (1).
+    assert AgentAccessSpec(partition="validation").min_aggregate_cases == 5

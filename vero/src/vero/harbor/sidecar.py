@@ -72,7 +72,10 @@ class SidecarEvaluationPolicy(EvaluationModel):
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     expose_case_resources: bool = False
     agent_evaluable: bool = True
-    min_aggregate_cases: int = Field(default=1, ge=1)
+    # k-anonymity floor: aggregate subset evals must cover >= this many cases so
+    # a single held-out label can't be read off one case at a time. Default 5
+    # (not 1) so a build that omits it is safe rather than unfloored.
+    min_aggregate_cases: int = Field(default=5, ge=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     allowed_parameters: list[str] = Field(default_factory=list)
     limits: EvaluationLimits | None = None
