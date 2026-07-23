@@ -1,0 +1,7 @@
+# Vendored task dirs (246, ~12MB) are fetched locally via scripts/vendor_tasks.sh
+# — not committed (they bloat the repo + slow secret scans). Partitions + config
+# + agent ARE committed; the tasks are reproducibly re-fetched.
+tasks/
+baseline/target/.venv/
+**/__pycache__/
+**/*.pyc

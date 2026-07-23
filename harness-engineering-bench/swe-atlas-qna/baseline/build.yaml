@@ -1,0 +1,78 @@
+name: vero/optimize-swe-atlas-qna-baseline
+description: >-
+  Improve a codebase investigation agent on canonical SWE-Atlas-QnA tasks.
+  The target must inspect /app without modifying it and write a comprehensive,
+  evidence-backed answer to /logs/agent/answer.txt.
+agent_repo: target
+task_source: scale-ai/swe-atlas-qna@sha256:0e26bc0313ae2fc6f912b67b928e648c7f20d17d91f765f702a93042ce5be0e4
+task_manifest: ../partitions/manifest.json
+agent_import_path: atlas_agent.agent:AtlasAgent
+harbor_requirement: harbor[modal]==0.18.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 12
+    total_cases: 100
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 8
+    total_cases: 196
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: swe-atlas-qna
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: auto_best
+baseline_floor: true
+score_baseline: true
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: openai/gpt-5.4-mini-2026-03-17
+environment_name: modal
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+timeout_seconds: 14400
+max_concurrency: 8
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 14400
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini-2026-03-17]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
