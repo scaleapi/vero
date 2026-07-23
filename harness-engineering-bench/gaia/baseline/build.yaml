@@ -6,7 +6,7 @@ agent_repo: target
 task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
 task_manifest: ../partitions/manifest.json
 agent_import_path: gaia_agent.agent:GaiaAgent
-harbor_requirement: harbor[modal]==0.18.0
+harbor_requirement: harbor[modal]==0.20.0
 
 partition_files:
   development: ../partitions/development.json

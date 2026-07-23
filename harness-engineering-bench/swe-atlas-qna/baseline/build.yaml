@@ -7,7 +7,7 @@ agent_repo: target
 task_source: scale-ai/swe-atlas-qna@sha256:0e26bc0313ae2fc6f912b67b928e648c7f20d17d91f765f702a93042ce5be0e4
 task_manifest: ../partitions/manifest.json
 agent_import_path: atlas_agent.agent:AtlasAgent
-harbor_requirement: harbor[modal]==0.18.0
+harbor_requirement: harbor[modal]==0.20.0
 
 partition_files:
   development: ../partitions/development.json
