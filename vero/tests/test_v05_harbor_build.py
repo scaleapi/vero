@@ -25,6 +25,13 @@ from vero.harbor import (
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 
+# harness-engineering-bench is a separate branch/PR in the stacked split, so
+# skip the benchmark-config tests when it isn't checked out here.
+_requires_benchmarks = pytest.mark.skipif(
+    not BENCHMARK_ROOT.exists(),
+    reason="harness-engineering-bench is not present on this branch",
+)
+
 
 def _git(path: Path, *arguments: str) -> str:
     result = subprocess.run(
@@ -37,6 +44,7 @@ def _git(path: Path, *arguments: str) -> str:
     return result.stdout.strip()
 
 
+@_requires_benchmarks
 @pytest.mark.parametrize(
     ("benchmark", "producer_models"),
     [
@@ -50,10 +58,9 @@ def _git(path: Path, *arguments: str) -> str:
 def test_canonical_benchmarks_isolate_upstream_inference_credentials(
     benchmark, producer_models
 ):
-    # gaia is promoted to the top level; other task sets live under candidates/.
-    base = BENCHMARK_ROOT if benchmark == "gaia" else BENCHMARK_ROOT / "candidates"
+    # All benchmarks live at the top level of harness-engineering-bench.
     config = load_harbor_build_config(
-        base / benchmark / "baseline" / "build.yaml"
+        BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
     )
 
     assert config.inference_gateway is not None
@@ -74,6 +81,7 @@ def test_canonical_benchmarks_isolate_upstream_inference_credentials(
     assert config.inference_gateway.evaluation.max_tokens == 100000000
 
 
+@_requires_benchmarks
 def test_build_params_override_run_time_knobs_without_rebuild():
     path = BENCHMARK_ROOT / "gaia" / "baseline" / "build.yaml"
 
