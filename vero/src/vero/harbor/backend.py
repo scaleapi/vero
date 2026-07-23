@@ -14,7 +14,7 @@ import shutil
 import statistics
 import tempfile
 from collections import defaultdict
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -45,6 +45,7 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.harbor.isolation import harness_grant_commands, harness_reachability_probe
 from vero.sandbox import CommandResult, Sandbox
 from vero.staging import SandboxStagingArea
 
@@ -1170,42 +1171,28 @@ class HarborBackend:
                 # Everything trusted (session dir, budgets, other candidates,
                 # admin token) is owned by root and unreadable to it.
                 if self.config.harness_user is not None:
-                    owner = f"{self.config.harness_user}:{self.config.harness_user}"
-                    for path in (context.workspace.project_path, staging.root):
-                        chown = await context.workspace.sandbox.run(
-                            ["chown", "-R", owner, str(path)],
-                            timeout=120,
+                    # Hand the harness user its work dirs and make the checkout
+                    # reachable (the parent that `mktemp -d` left 0700 root); see
+                    # vero.harbor.isolation for the why.
+                    for provision_command in harness_grant_commands(
+                        self.config.harness_user,
+                        chown_paths=[context.workspace.project_path, staging.root],
+                        checkout_root=context.workspace.root,
+                    ):
+                        provision = await context.workspace.sandbox.run(
+                            provision_command, timeout=120
                         )
-                        if chown.returncode != 0:
+                        if provision.returncode != 0:
                             raise RuntimeError(
-                                "failed to hand harness workspace to "
-                                f"{self.config.harness_user!r}: "
-                                f"{self.sanitize_error(chown.stderr)}"
+                                "failed to provision harness workspace "
+                                f"({' '.join(provision_command)}): "
+                                f"{self.sanitize_error(provision.stderr)}"
                             )
-                    # The checkout lives at <mktemp>/repository, and `mktemp -d`
-                    # makes that parent 0700 root. The dropped-uid harness owns
-                    # the repository but can't traverse the parent, so importing
-                    # the editable candidate package (an absolute path under it)
-                    # fails with "No module named <agent>". Grant traversal on
-                    # the parent — it holds only candidate code, no trusted data.
-                    checkout_parent = str(PurePosixPath(context.workspace.root).parent)
-                    chmod = await context.workspace.sandbox.run(
-                        ["chmod", "o+x", checkout_parent],
-                        timeout=30,
-                    )
-                    if chmod.returncode != 0:
-                        raise RuntimeError(
-                            "failed to grant harness traversal on the checkout "
-                            f"parent {checkout_parent!r}: "
-                            f"{self.sanitize_error(chmod.stderr)}"
-                        )
                     # Fail fast, at the provisioning site, if the dropped user
-                    # still can't reach its workspace (readability requires
-                    # traversing every ancestor). Without this, any future
-                    # permission gap resurfaces as a cryptic "No module named
-                    # <agent>" several retries downstream, not here.
+                    # still can't reach its workspace, instead of a cryptic
+                    # "No module named <agent>" several retries downstream.
                     probe = await context.workspace.sandbox.run(
-                        ["test", "-r", str(context.workspace.project_path)],
+                        harness_reachability_probe(context.workspace.project_path),
                         run_as=self.config.harness_user,
                     )
                     if probe.returncode != 0:
