@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -185,11 +185,15 @@ class FakeSandbox(LocalSandbox):
         self.env = None
         self.run_as = None
         self.chown_commands: list[list[str]] = []
+        self.chmod_commands: list[list[str]] = []
 
     async def run(self, command, cwd=None, timeout=30, env=None, run_as=None):
         if isinstance(command, list) and command[:1] == ["chown"]:
             # Record the harness-isolation provisioning without touching real uids.
             self.chown_commands.append(command)
+            return CommandResult("", "", 0)
+        if isinstance(command, list) and command[:1] == ["chmod"]:
+            self.chmod_commands.append(command)
             return CommandResult("", "", 0)
         if not isinstance(command, list) or "--jobs-dir" not in command:
             return await super().run(
@@ -232,7 +236,9 @@ async def _context(tmp_path: Path, sandbox: FakeSandbox) -> EvaluationContext:
     artifact_dir = result_dir / "artifacts"
     artifact_dir.mkdir(parents=True)
     return EvaluationContext(
-        workspace=SimpleNamespace(project_path=str(target), sandbox=sandbox),
+        workspace=SimpleNamespace(
+            project_path=str(target), root=str(target), sandbox=sandbox
+        ),
         session_id="session",
         evaluation_id="evaluation",
         result_dir=result_dir,
@@ -671,6 +677,11 @@ async def test_harbor_backend_runs_harness_as_unprivileged_user(tmp_path):
     assert sandbox.chown_commands, "expected the harness work dirs to be chowned"
     for command in sandbox.chown_commands:
         assert command[:3] == ["chown", "-R", "harness:harness"]
+    # The checkout's mktemp parent (0700 root) is made traversable so the
+    # dropped-uid harness can resolve the editable candidate package's absolute
+    # path — otherwise `import <agent>` fails with "No module named ...".
+    checkout_parent = str(PurePosixPath(str(tmp_path / "target")).parent)
+    assert ["chmod", "o+x", checkout_parent] in sandbox.chmod_commands
 
 
 def test_harbor_config_rejects_harness_isolation_with_upstream_task_services(tmp_path):

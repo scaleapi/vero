@@ -14,7 +14,7 @@ import shutil
 import statistics
 import tempfile
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
@@ -1182,6 +1182,23 @@ class HarborBackend:
                                 f"{self.config.harness_user!r}: "
                                 f"{self.sanitize_error(chown.stderr)}"
                             )
+                    # The checkout lives at <mktemp>/repository, and `mktemp -d`
+                    # makes that parent 0700 root. The dropped-uid harness owns
+                    # the repository but can't traverse the parent, so importing
+                    # the editable candidate package (an absolute path under it)
+                    # fails with "No module named <agent>". Grant traversal on
+                    # the parent — it holds only candidate code, no trusted data.
+                    checkout_parent = str(PurePosixPath(context.workspace.root).parent)
+                    chmod = await context.workspace.sandbox.run(
+                        ["chmod", "o+x", checkout_parent],
+                        timeout=30,
+                    )
+                    if chmod.returncode != 0:
+                        raise RuntimeError(
+                            "failed to grant harness traversal on the checkout "
+                            f"parent {checkout_parent!r}: "
+                            f"{self.sanitize_error(chmod.stderr)}"
+                        )
                 result = await context.workspace.sandbox.run(
                     command,
                     cwd=context.workspace.project_path,
