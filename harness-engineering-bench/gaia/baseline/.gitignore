@@ -1,0 +1,4 @@
+compiled/
+target/.venv/
+target/.pytest_cache/
+
