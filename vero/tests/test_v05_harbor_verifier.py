@@ -561,3 +561,32 @@ async def test_verifier_floor_fails_safe_when_seed_unmeasurable(tmp_path):
 
     assert result.shipped is False
     assert "baseline floor" in result.errors.get("selection", "")
+
+
+@pytest.mark.asyncio
+async def test_verifier_score_baseline_produces_replicated_means(tmp_path):
+    baseline = _candidate("baseline")
+    engine = FakeEngine(
+        {
+            ("baseline", "selection"): [0.5, 0.6],
+            ("baseline", "test"): [0.4, 0.5],
+        }
+    )
+
+    out = await _verifier(tmp_path, engine, baseline=baseline).measure_baseline(
+        replicates=2
+    )
+
+    assert out["candidate_version"] == "baseline"
+    assert out["replicates"] == 2
+    assert out["selection"]["n"] == 2
+    assert out["selection"]["mean"] == 0.55
+    assert out["targets"]["reward"]["n"] == 2
+    assert out["targets"]["reward"]["mean"] == 0.45
+    # 2 selection re-scores + 2 target scores, all admin.
+    assert engine.calls == [
+        ("baseline", "selection"),
+        ("baseline", "selection"),
+        ("baseline", "test"),
+        ("baseline", "test"),
+    ]

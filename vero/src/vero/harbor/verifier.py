@@ -427,6 +427,56 @@ class CanonicalVerifier:
         )
         return reward, record.id, None
 
+    async def measure_baseline(self, *, replicates: int = 1) -> dict[str, JsonValue]:
+        """Admin-score the fixed seed to produce pinnable baseline numbers.
+
+        Runs `replicates` trusted evaluations of the baseline on the selection
+        partition and each target and returns per-key mean/stddev, so a stable
+        value can be pinned (baseline_selection_score / target baseline_reward)
+        instead of re-scoring the seed every run."""
+        if replicates < 1:
+            raise ValueError("replicates must be >= 1")
+        baseline = self.selection.baseline_candidate
+        if baseline is None:
+            raise NoCandidateError("no baseline candidate to score")
+
+        def _aggregate(values: list[float | None]) -> dict[str, JsonValue]:
+            clean = [value for value in values if value is not None]
+            return {
+                "values": values,
+                "n": len(clean),
+                "mean": statistics.fmean(clean) if clean else None,
+                "stddev": statistics.pstdev(clean) if len(clean) > 1 else 0.0,
+            }
+
+        result: dict[str, JsonValue] = {
+            "candidate_version": baseline.version,
+            "replicates": replicates,
+        }
+        if (
+            self.selection.backend_id is not None
+            and self.selection.evaluation_set is not None
+            and self.selection.objective is not None
+        ):
+            selection_values: list[float | None] = []
+            for _ in range(replicates):
+                record, _ = await self._rescore_candidate(baseline)
+                selection_values.append(
+                    record.objective.value
+                    if record is not None and record.objective is not None
+                    else None
+                )
+            result["selection"] = _aggregate(selection_values)
+        targets: dict[str, JsonValue] = {}
+        for target in self.targets:
+            target_values: list[float | None] = []
+            for _ in range(replicates):
+                reward, _, error = await self._score_target(baseline, target)
+                target_values.append(None if error is not None else reward)
+            targets[target.reward_key] = _aggregate(target_values)
+        result["targets"] = targets
+        return result
+
     async def _finalize(self) -> VerificationResult:
         try:
             candidate = await self._select_candidate()

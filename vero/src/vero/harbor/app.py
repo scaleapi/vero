@@ -43,6 +43,12 @@ class SubmitRequest(BaseModel):
     version: str | None = None
 
 
+class ScoreBaselineRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    replicates: int = 1
+
+
 def _error(status_code: int, message: str):
     async def handler(_request, error):
         return JSONResponse(
@@ -146,6 +152,14 @@ def create_app(
     async def finalize(authorization: Annotated[str | None, Header()] = None):
         require_admin(authorization)
         return await verifier.finalize()
+
+    @app.post("/score/baseline")
+    async def score_baseline(
+        body: ScoreBaselineRequest,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        require_admin(authorization)
+        return await verifier.measure_baseline(replicates=body.replicates)
 
     @app.get("/evaluations")
     async def evaluations(

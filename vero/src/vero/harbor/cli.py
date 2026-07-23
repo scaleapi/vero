@@ -625,6 +625,25 @@ def status_command():
     click.echo(json.dumps(_request("GET", "/status"), indent=2))
 
 
+@harbor.command("score-baseline")
+@click.option(
+    "--token-file",
+    required=True,
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+)
+@click.option("--replicates", default=1, show_default=True, type=click.IntRange(min=1))
+def score_baseline_command(token_file, replicates):
+    """Admin-score the fixed seed N times to produce a pinnable baseline number."""
+    token = read_admin_token(token_file)
+    result = _request(
+        "POST",
+        "/score/baseline",
+        payload={"replicates": replicates},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    click.echo(json.dumps(result, indent=2))
+
+
 @harbor.command("finalize")
 @click.option(
     "--token-file",
