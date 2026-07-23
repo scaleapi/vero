@@ -90,7 +90,9 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
                 link = PurePosixPath(member.linkname)
                 if link.is_absolute() or ".." in link.parts:
                     raise ValueError(f"unsafe link in Git archive: {member.linkname!r}")
-        archive.extractall(destination)
+        # filter="data" strips device files / setuid bits and neutralizes unsafe
+        # links, matching extract_harbor_session_archive's defensive posture.
+        archive.extractall(destination, filter="data")
 
 
 def _prepare_baseline_repo(

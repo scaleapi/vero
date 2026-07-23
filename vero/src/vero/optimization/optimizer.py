@@ -415,12 +415,15 @@ class Optimizer:
         max_proposals: int | None = None,
     ) -> OptimizationResult:
         proposal_limit = self.max_proposals if max_proposals is None else max_proposals
+        # Check the session-level limit first: otherwise a negative
+        # self.max_proposals always trips the proposal_limit guard below and its
+        # specific message is unreachable.
+        if self.max_proposals < 0:
+            raise ValueError("max_proposals must be non-negative")
         if proposal_limit < 0 or proposal_limit > self.max_proposals:
             raise ValueError(
                 "run max_proposals must be between zero and the session protocol limit"
             )
-        if self.max_proposals < 0:
-            raise ValueError("max_proposals must be non-negative")
         if self.max_rounds < 1:
             raise ValueError("max_rounds must be positive")
         if self.max_concurrency < 1:
