@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, override
 
 from harbor.agents.base import BaseAgent
@@ -77,7 +78,14 @@ class AtlasAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("SWE-Atlas agent requires a Harbor model")
         self._api_model = self.model_name.removeprefix("openai/")
-        self._client = AsyncOpenAI()
+        # The metered per-evaluation gateway arrives on dedicated variables
+        # (OPENAI_* carries the upstream for the task's rubric judge instead).
+        self._client = AsyncOpenAI(
+            api_key=os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
+            or os.environ.get("OPENAI_API_KEY"),
+            base_url=os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
+            or os.environ.get("OPENAI_BASE_URL"),
+        )
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:
