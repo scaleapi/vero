@@ -484,6 +484,67 @@ def test_load_build_config_supports_partition_files_and_validates_manifest(tmp_p
         load_harbor_build_config(config_path)
 
 
+def test_load_build_config_matches_vendored_local_task_source(tmp_path):
+    # A local (vendored) task_source is resolved to an absolute path by the
+    # loader once the directory exists, while the committed manifest records it
+    # relative to itself; the two must still be recognized as the same source.
+    _target_repo(tmp_path / "target")
+    tasks = tmp_path / "tasks"
+    tasks.mkdir()
+    partitions = tmp_path / "partitions"
+    partitions.mkdir()
+    (partitions / "validation.json").write_text('["task-a"]\n', encoding="utf-8")
+    (partitions / "test.json").write_text('["task-a"]\n', encoding="utf-8")
+    (partitions / "manifest.json").write_text(
+        json.dumps(
+            {
+                "task_source": "../tasks",
+                "tasks": [{"name": "task-a", "ref": "sha256:a"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: org/task",
+                "agent_repo: target",
+                "task_source: tasks",
+                "task_manifest: partitions/manifest.json",
+                "agent_import_path: target.agent:Agent",
+                "harbor_requirement: harbor==0.20.0",
+                "partition_files:",
+                "  validation: partitions/validation.json",
+                "  test: partitions/test.json",
+                "agent_access:",
+                "  - partition: validation",
+                "selection_partition: validation",
+                "targets:",
+                "  - partition: test",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_harbor_build_config(config_path)
+    assert loaded.task_source == str(tasks.resolve())
+
+    # A genuinely different source still fails.
+    (partitions / "manifest.json").write_text(
+        json.dumps(
+            {
+                "task_source": "../elsewhere",
+                "tasks": [{"name": "task-a", "ref": "sha256:a"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError, match="does not match build task_source"):
+        load_harbor_build_config(config_path)
+
+
 def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     config = _config(tmp_path)
     output = compile_harbor_task(

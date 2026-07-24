@@ -452,7 +452,14 @@ class HarborBuildConfig(EvaluationModel):
             if not isinstance(manifest, dict):
                 raise ValueError("task_manifest must be a JSON object")
             manifest_source = manifest.get("task_source")
-            if manifest_source != self.task_source:
+            if manifest_source != self.task_source and not (
+                # A vendored local source is recorded relative to the manifest,
+                # while the loader resolves the build's copy to an absolute
+                # path once the directory exists; compare resolved locations.
+                isinstance(manifest_source, str)
+                and (Path(self.task_manifest).parent / manifest_source).resolve()
+                == Path(self.task_source).resolve()
+            ):
                 raise ValueError(
                     "task_manifest task_source does not match build task_source"
                 )
