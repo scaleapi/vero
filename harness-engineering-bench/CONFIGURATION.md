@@ -54,7 +54,7 @@ benchmark can be checked against the others at a glance.
 | verifier_timeout_seconds | 7200 | 14400 | 28800 | 28800 |
 | harness_user | harness | harness | null ‡ | null ‡ |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) |
-| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | — | `TAU2_*` model pins |
+| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins |
 
 ## Conventions
 
@@ -67,9 +67,10 @@ benchmark can be checked against the others at a glance.
   candidate and the baseline test evaluations.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
 
-† Provisional. These enforced budgets were set without empirical data;
-revisit them against the `wall_seconds` / `mean_case_wall_seconds` metrics
-once runs have produced distributions.
+† Sized from stock-agent probes (codex on the target model, 3 development
+tasks each, full declared timeouts): tau3 trials took 202-211s (900s budget
+≈ 4x headroom) and swe-atlas trials 379-602s (1800s ≈ 3x headroom over the
+slowest). Revisit against `wall_seconds` distributions from real runs.
 
 ‡ Exception to the harness-isolation default: these tasks run LLM services
 (rubric judge, user-simulator/grader) inside their task containers, which
