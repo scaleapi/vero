@@ -376,13 +376,18 @@ class EvaluationEngine:
             failure = EvaluationStore(
                 self.evaluator.evaluations_dir / error.evaluation_id
             ).load()
-            await self._record(failure)
+            # Shield the record + refund like the cancellation handler above: a
+            # cancellation arriving during this cleanup must not interrupt the
+            # refund and leak the reservation's budget.
+            await asyncio.shield(self._record(failure))
             if charged:
-                await self.budget_ledger.refund(
-                    backend_id,
-                    request.evaluation_set,
-                    cost,
-                    principal,
+                await asyncio.shield(
+                    self.budget_ledger.refund(
+                        backend_id,
+                        request.evaluation_set,
+                        cost,
+                        principal,
+                    )
                 )
             raise
         await self._record(record)
@@ -408,11 +413,15 @@ class EvaluationEngine:
         )
         if infrastructure is not None:
             if charged:
-                await self.budget_ledger.refund(
-                    backend_id,
-                    request.evaluation_set,
-                    cost,
-                    principal,
+                # Shield: a cancellation racing this infrastructure-failure
+                # refund must not leak the reservation's budget.
+                await asyncio.shield(
+                    self.budget_ledger.refund(
+                        backend_id,
+                        request.evaluation_set,
+                        cost,
+                        principal,
+                    )
                 )
             raise EvaluationInfrastructureError(record.id, infrastructure.message)
         return record, decision

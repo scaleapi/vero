@@ -620,6 +620,132 @@ async def test_budget_reservation_rolls_back_when_cancelled(
 
 
 @pytest.mark.asyncio
+async def test_reserve_rollback_write_failure_preserves_cancellation(
+    tmp_path: Path,
+    monkeypatch,
+):
+    # If the rollback write itself fails, the run's cancellation must still
+    # propagate (not be replaced by the write's OSError), with the write error
+    # chained for diagnosis.
+    evaluation_set = EvaluationSet(name="performance")
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="command",
+                evaluation_set_key=evaluation_set.budget_key("command"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budget.json",
+    )
+    ledger.save()
+    started = threading.Event()
+    release = threading.Event()
+    real_write = budget_module._atomic_write_json
+    calls = {"n": 0}
+
+    def failing_rollback_write(write_path, value):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # the charge write: block so the reservation can be cancelled here
+            started.set()
+            assert release.wait(timeout=5)
+            real_write(write_path, value)
+        else:
+            # the rollback write fails durably
+            raise OSError("disk gone")
+
+    monkeypatch.setattr(budget_module, "_atomic_write_json", failing_rollback_write)
+    reservation = asyncio.create_task(
+        ledger.reserve("command", evaluation_set, EvaluationCost())
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    reservation.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await reservation
+    assert isinstance(excinfo.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
+async def test_refund_write_failure_preserves_cancellation(tmp_path: Path, monkeypatch):
+    # A cancellation racing the durable refund write must win over the write's
+    # own failure rather than being swallowed.
+    evaluation_set = EvaluationSet(name="performance")
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="command",
+                evaluation_set_key=evaluation_set.budget_key("command"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budget.json",
+    )
+    await ledger.reserve("command", evaluation_set, EvaluationCost(runs=1))
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_failing_write(write_path, value):
+        started.set()
+        assert release.wait(timeout=5)
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(budget_module, "_atomic_write_json", blocking_failing_write)
+    refund = asyncio.create_task(
+        ledger.refund("command", evaluation_set, EvaluationCost(runs=1))
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    refund.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await refund
+    assert isinstance(excinfo.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
+async def test_execution_error_refunds_reservation(tmp_path: Path):
+    # A backend exception (EvaluationExecutionError) must refund the reservation
+    # via the shielded cleanup path, restoring the budget in memory and on disk.
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = StubBackend(error=RuntimeError("boom"))
+    evaluation_set = request().evaluation_set
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="default",
+                evaluation_set_key=evaluation_set.budget_key("default"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budgets.json",
+    )
+    ledger.save()
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=EvaluationDatabase(id="session"),
+        database_path=tmp_path / "database.json",
+        budget_ledger=ledger,
+        authorization_resolver=allow_all_evaluations,
+    )
+
+    with pytest.raises(EvaluationExecutionError):
+        await engine.evaluate_record(backend_id="default", request=request())
+
+    remaining = ledger.get("default", evaluation_set)
+    assert remaining is not None and remaining.remaining_runs == 2
+    assert (
+        BudgetLedger.load(tmp_path / "budgets.json")
+        .get("default", evaluation_set)
+        .remaining_runs
+        == 2
+    )
+
+
+@pytest.mark.asyncio
 async def test_cancelled_evaluation_is_terminal_indexed_and_refunded(tmp_path: Path):
     class BlockingBackend(StubBackend):
         async def evaluate(self, *, context, request):

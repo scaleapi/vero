@@ -128,7 +128,20 @@ class BudgetLedger:
                             await asyncio.shield(rollback)
                         except asyncio.CancelledError:
                             pass
-                    rollback.result()
+                        except Exception:
+                            # The rollback write failed; the task is now done,
+                            # so exit the drain and surface it below.
+                            break
+                    # The originating cancellation must propagate even if the
+                    # rollback write itself failed — swallowing CancelledError
+                    # for an OSError would break structured cancellation and
+                    # hide that the run was cancelled. Chain the write error so
+                    # the durable-state inconsistency stays diagnosable.
+                    write_error = (
+                        None if rollback.cancelled() else rollback.exception()
+                    )
+                    if write_error is not None:
+                        raise cancellation from write_error
                     raise cancellation
                 self._budgets = snapshot
                 return updated
@@ -181,7 +194,17 @@ class BudgetLedger:
                         await asyncio.shield(write)
                     except asyncio.CancelledError as error:
                         cancellation = error
-                write.result()
+                    except Exception:
+                        # The write failed; the task is done, exit the drain.
+                        break
+                try:
+                    write.result()
+                except Exception as error:
+                    # A failed durable refund must not swallow the cancellation
+                    # of the run being torn down; chain the write error.
+                    if cancellation is not None:
+                        raise cancellation from error
+                    raise
                 self._budgets = snapshot
                 if cancellation is not None:
                     raise cancellation
