@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import posixpath
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal, Sequence
 
@@ -16,13 +17,16 @@ from vero.candidate_repository import CandidateRepository
 from vero.evaluation import (
     CaseResourceExporter,
     DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationAcknowledgement,
+    EvaluationBudget,
     EvaluationEngine,
     EvaluationModel,
     EvaluationPlan,
     EvaluationPrincipal,
     EvaluationReceipt,
     EvaluationRecord,
+    EvaluationSet,
     EvaluationSummary,
     project_evaluation,
 )
@@ -31,6 +35,12 @@ from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
 AGENT_CONTEXT_DIRECTORY = ".evals"
+# Top-level names inside the context tree. The `evals` CLI, the skill, and the
+# harbor instruction templates all address these paths by name.
+RESULTS_SUBDIRECTORY = "results"
+TASKS_SUBDIRECTORY = "tasks"
+CANDIDATES_SUBDIRECTORY = "candidates"
+PLAN_FILENAME = "plan.json"
 _DISCLOSURE_RANK = {
     DisclosureLevel.NONE: 0,
     DisclosureLevel.AGGREGATE: 1,
@@ -46,9 +56,24 @@ def context_digest(value: str) -> str:
 
 def evaluation_result_path(evaluation_id: str) -> str:
     return (
-        f"{AGENT_CONTEXT_DIRECTORY}/results/"
+        f"{AGENT_CONTEXT_DIRECTORY}/{RESULTS_SUBDIRECTORY}/"
         f"{context_digest(evaluation_id)}/evaluation.json"
     )
+
+
+@dataclass(frozen=True)
+class ContextPlanEntry:
+    """One evaluation set as the agent may see it, resolved by the caller.
+
+    Callers own policy filtering nuances that differ per topology (which sets
+    exist, budget lookup, budget disclosure); the directory owns rendering.
+    """
+
+    backend_id: str
+    backend: object
+    evaluation_set: EvaluationSet
+    access: EvaluationAccessPolicy
+    budget: EvaluationBudget | None = None
 
 
 def narrower_disclosure(
@@ -231,7 +256,7 @@ it into the program: candidate versions that track `.evals` are rejected.
             ]
         ],
     ) -> None:
-        root = self.path("results")
+        root = self.path(RESULTS_SUBDIRECTORY)
         if await self.sandbox.exists(root):
             await self.sandbox.remove(root, recursive=True)
         await self.sandbox.mkdir(root)
@@ -242,7 +267,7 @@ it into the program: candidate versions that track `.evals` are rejected.
         ):
             digest = context_digest(record.id)
             relative_path = f"{digest}/evaluation.json"
-            evaluation_root = self.path("results", digest)
+            evaluation_root = self.path(RESULTS_SUBDIRECTORY, digest)
             await self.sandbox.mkdir(evaluation_root)
             missing_artifacts: list[str] = []
             if isinstance(projection, EvaluationRecord):
@@ -255,7 +280,9 @@ it into the program: candidate versions that track `.evals` are rejected.
                     strict=True,
                 ):
                     case_digest = context_digest(case_model.case_id)
-                    case_root = self.path("results", digest, "cases", case_digest)
+                    case_root = self.path(
+                        RESULTS_SUBDIRECTORY, digest, "cases", case_digest
+                    )
                     await self.sandbox.mkdir(case_root)
                     execution_trace = case_payload.pop("execution_trace", None)
                     evaluation_trace = case_payload.pop("evaluation_trace", None)
@@ -312,7 +339,7 @@ it into the program: candidate versions that track `.evals` are rejected.
                         continue
                     await self.sandbox.upload(
                         str(source),
-                        self.path("results", digest, "artifacts", artifact_path),
+                        self.path(RESULTS_SUBDIRECTORY, digest, "artifacts", artifact_path),
                     )
                 document = {
                     "schema_version": 1,
@@ -328,7 +355,7 @@ it into the program: candidate versions that track `.evals` are rejected.
                     "result": projection.model_dump(mode="json"),
                 }
             await self.write_json(
-                self.path("results", relative_path),
+                self.path(RESULTS_SUBDIRECTORY, relative_path),
                 document,
             )
             index.append(
@@ -343,8 +370,89 @@ it into the program: candidate versions that track `.evals` are rejected.
                 }
             )
         await self.write_json(
-            self.path("results", "index.json"),
+            self.path(RESULTS_SUBDIRECTORY, "index.json"),
             {"schema_version": 1, "evaluations": index},
+        )
+
+    async def write_case_resources(
+        self,
+        entries: Sequence[ContextPlanEntry],
+    ) -> None:
+        root = self.path(TASKS_SUBDIRECTORY)
+        if await self.sandbox.exists(root):
+            await self.sandbox.remove(root, recursive=True)
+        await self.sandbox.mkdir(root)
+        index: list[dict[str, object]] = []
+        for entry in entries:
+            # expose_case_resources implies agent_visible (model validation).
+            if not (
+                entry.access.expose_case_resources
+                and isinstance(entry.backend, CaseResourceExporter)
+            ):
+                continue
+            digest = context_digest(
+                entry.evaluation_set.budget_key(entry.backend_id)
+            )
+            resource_root = self.path(TASKS_SUBDIRECTORY, digest)
+            await self.sandbox.mkdir(resource_root)
+            await self.write_json(
+                posixpath.join(resource_root, "manifest.json"),
+                {
+                    "schema_version": 1,
+                    "backend_id": entry.backend_id,
+                    "evaluation_set": entry.evaluation_set.model_dump(mode="json"),
+                    "resources_path": "resources",
+                },
+            )
+            resources = posixpath.join(resource_root, "resources")
+            await self.sandbox.mkdir(resources)
+            await entry.backend.export_case_resources(
+                evaluation_set=entry.evaluation_set,
+                destination=resources,
+                sandbox=self.sandbox,
+            )
+            index.append(
+                {
+                    "backend_id": entry.backend_id,
+                    "evaluation_set": entry.evaluation_set.model_dump(mode="json"),
+                    "path": digest,
+                }
+            )
+        await self.write_json(
+            posixpath.join(root, "index.json"),
+            {"schema_version": 1, "case_resources": index},
+        )
+
+    async def write_evaluation_plan(
+        self,
+        entries: Sequence[ContextPlanEntry],
+    ) -> None:
+        evaluations = []
+        for entry in entries:
+            access = entry.access
+            if not access.agent_visible and not access.agent_can_evaluate:
+                continue
+            evaluations.append(
+                {
+                    "name": entry.evaluation_set.name,
+                    "partition": entry.evaluation_set.partition,
+                    "base_selection": entry.evaluation_set.selection.model_dump(
+                        mode="json"
+                    ),
+                    "agent_can_evaluate": access.agent_can_evaluate,
+                    "agent_selection": access.agent_selection.value,
+                    "disclosure": access.disclosure.value,
+                    "expose_case_resources": access.expose_case_resources,
+                    "budget": (
+                        entry.budget.model_dump(mode="json")
+                        if entry.budget is not None
+                        else None
+                    ),
+                }
+            )
+        await self.write_json(
+            self.path(PLAN_FILENAME),
+            {"schema_version": 1, "evaluations": evaluations},
         )
 
 
@@ -421,91 +529,30 @@ class WorkspaceContextManager:
         await self.candidate_repository.materialize_agent_history(
             tuple(self.candidates.values()),
             workspace=self.workspace,
-            destination=self.directory.path("candidates"),
+            destination=self.directory.path(CANDIDATES_SUBDIRECTORY),
         )
 
-    async def _write_case_resources(self) -> None:
-        cases_root = self.directory.path("tasks")
-        await self.workspace.sandbox.mkdir(cases_root)
-        index: list[dict[str, object]] = []
-        backend = self.engine.backends.resolve(self.backend_id)
-        for definition in self.evaluation_plan.evaluations:
-            access = definition.access
-            if not (
-                access.agent_visible
-                and access.expose_case_resources
-                and isinstance(backend, CaseResourceExporter)
-            ):
-                continue
-            evaluation_set = definition.evaluation_set
-            key = evaluation_set.budget_key(self.backend_id)
-            digest = context_digest(key)
-            resource_root = self.directory.path("tasks", digest)
-            await self.workspace.sandbox.mkdir(resource_root)
-            await self.directory.write_json(
-                posixpath.join(resource_root, "manifest.json"),
-                {
-                    "schema_version": 1,
-                    "backend_id": self.backend_id,
-                    "evaluation_set": evaluation_set.model_dump(mode="json"),
-                    "resources_path": "resources",
-                },
-            )
-            resources = posixpath.join(resource_root, "resources")
-            await self.workspace.sandbox.mkdir(resources)
-            await backend.export_case_resources(
-                evaluation_set=evaluation_set,
-                destination=resources,
-                sandbox=self.workspace.sandbox,
-            )
-            index.append(
-                {
-                    "backend_id": self.backend_id,
-                    "evaluation_set": evaluation_set.model_dump(mode="json"),
-                    "path": digest,
-                }
-            )
-        await self.directory.write_json(
-            posixpath.join(cases_root, "index.json"),
-            {"schema_version": 1, "case_resources": index},
-        )
-
-    async def _write_evaluation_plan(self) -> None:
+    def _context_entries(self) -> list[ContextPlanEntry]:
         ledger = self.engine.budget_ledger
-        evaluations = []
-        for definition in self.evaluation_plan.evaluations:
-            access = definition.access
-            if not access.agent_visible and not access.agent_can_evaluate:
-                continue
-            budget = (
-                ledger.get(
-                    self.backend_id,
-                    definition.evaluation_set,
-                    EvaluationPrincipal.AGENT,
-                )
-                if ledger is not None
-                else None
+        backend = self.engine.backends.resolve(self.backend_id)
+        return [
+            ContextPlanEntry(
+                backend_id=self.backend_id,
+                backend=backend,
+                evaluation_set=definition.evaluation_set,
+                access=definition.access,
+                budget=(
+                    ledger.get(
+                        self.backend_id,
+                        definition.evaluation_set,
+                        EvaluationPrincipal.AGENT,
+                    )
+                    if ledger is not None
+                    else None
+                ),
             )
-            evaluations.append(
-                {
-                    "name": definition.evaluation_set.name,
-                    "partition": definition.evaluation_set.partition,
-                    "base_selection": definition.evaluation_set.selection.model_dump(
-                        mode="json"
-                    ),
-                    "agent_can_evaluate": access.agent_can_evaluate,
-                    "agent_selection": access.agent_selection.value,
-                    "disclosure": access.disclosure.value,
-                    "expose_case_resources": access.expose_case_resources,
-                    "budget": (
-                        budget.model_dump(mode="json") if budget is not None else None
-                    ),
-                }
-            )
-        await self.directory.write_json(
-            self.directory.path("plan.json"),
-            {"schema_version": 1, "evaluations": evaluations},
-        )
+            for definition in self.evaluation_plan.evaluations
+        ]
 
     async def initialize(self) -> None:
         async with self._lock:
@@ -516,10 +563,11 @@ class WorkspaceContextManager:
                 proposal_id=self.proposal_id,
                 parent_candidate_id=self.parent.id,
             )
+            entries = self._context_entries()
             await self._write_candidate_history()
             await self.directory.write_evaluations(await self._projections())
-            await self._write_evaluation_plan()
-            await self._write_case_resources()
+            await self.directory.write_evaluation_plan(entries)
+            await self.directory.write_case_resources(entries)
             await self.directory.seal()
 
     async def add_evaluation(
@@ -535,6 +583,6 @@ class WorkspaceContextManager:
             await self.directory.unseal()
             await self._write_candidate_history()
             await self.directory.write_evaluations(await self._projections())
-            await self._write_evaluation_plan()
+            await self.directory.write_evaluation_plan(self._context_entries())
             await self.directory.seal()
             return make_evaluation_receipt(record, effective)

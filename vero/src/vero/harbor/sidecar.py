@@ -15,7 +15,6 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from vero.candidate import Candidate
 from vero.evaluation import (
     AllCases,
-    CaseResourceExporter,
     DisclosureLevel,
     EvaluationAccessPolicy,
     EvaluationAcknowledgement,
@@ -42,8 +41,10 @@ from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.persistence import _atomic_write_json
 from vero.harbor.transport import CandidateTransferError, CandidateTransport
 from vero.runtime.context import (
+    CANDIDATES_SUBDIRECTORY,
     AgentContextDirectory,
     AgentDisclosureLedger,
+    ContextPlanEntry,
     context_digest,
     make_evaluation_receipt,
     narrower_disclosure,
@@ -561,100 +562,33 @@ class EvaluationSidecar:
                 }
             )
         await self._context_directory.write_json(
-            self._context_directory.path("candidates", "index.json"),
+            self._context_directory.path(CANDIDATES_SUBDIRECTORY, "index.json"),
             {"schema_version": 1, "candidates": index},
         )
 
-    async def _write_case_resources(self) -> None:
-        assert self._context_directory is not None
-        root = self._context_directory.path("tasks")
-        sandbox = self._context_directory.sandbox
-        if await sandbox.exists(root):
-            await sandbox.remove(root, recursive=True)
-        await sandbox.mkdir(root)
-        index = []
-        for policy in self._policies.values():
-            backend = self.engine.backends.resolve(policy.backend_id)
-            if (
-                not policy.access.agent_can_evaluate
-                or not policy.access.expose_case_resources
-                or not isinstance(backend, CaseResourceExporter)
-            ):
-                continue
-            evaluation_set = EvaluationSet(
-                name=policy.evaluation_set_name,
-                partition=policy.partition,
-            )
-            digest = context_digest(evaluation_set.budget_key(policy.backend_id))
-            resource_root = self._context_directory.path("tasks", digest)
-            await sandbox.mkdir(resource_root)
-            await self._context_directory.write_json(
-                posixpath.join(resource_root, "manifest.json"),
-                {
-                    "schema_version": 1,
-                    "backend_id": policy.backend_id,
-                    "evaluation_set": evaluation_set.model_dump(mode="json"),
-                    "resources_path": "resources",
-                },
-            )
-            resources = posixpath.join(resource_root, "resources")
-            await sandbox.mkdir(resources)
-            await backend.export_case_resources(
-                evaluation_set=evaluation_set,
-                destination=resources,
-                sandbox=sandbox,
-            )
-            index.append(
-                {
-                    "backend_id": policy.backend_id,
-                    "evaluation_set": evaluation_set.model_dump(mode="json"),
-                    "path": digest,
-                }
-            )
-        await self._context_directory.write_json(
-            self._context_directory.path("tasks", "index.json"),
-            {"schema_version": 1, "case_resources": index},
-        )
-
-    async def _write_evaluation_plan(self) -> None:
-        # Same document WorkspaceContextManager writes; `evals plan` reads it.
-        assert self._context_directory is not None
+    def _context_entries(self) -> list[ContextPlanEntry]:
         ledger = self.engine.budget_ledger
-        evaluations = []
+        entries = []
         for policy in self._policies.values():
-            access = policy.access
-            if not access.agent_visible and not access.agent_can_evaluate:
-                continue
             evaluation_set = EvaluationSet(
                 name=policy.evaluation_set_name,
                 partition=policy.partition,
             )
-            budget = (
-                ledger.get(policy.backend_id, evaluation_set)
-                if ledger is not None
-                else None
-            )
-            evaluations.append(
-                {
-                    "name": evaluation_set.name,
-                    "partition": evaluation_set.partition,
-                    "base_selection": evaluation_set.selection.model_dump(mode="json"),
-                    "agent_can_evaluate": access.agent_can_evaluate,
-                    "agent_selection": access.agent_selection.value,
-                    "disclosure": access.disclosure.value,
-                    "expose_case_resources": access.expose_case_resources,
+            entries.append(
+                ContextPlanEntry(
+                    backend_id=policy.backend_id,
+                    backend=self.engine.backends.resolve(policy.backend_id),
+                    evaluation_set=evaluation_set,
+                    access=policy.access,
                     # Budget is enforced regardless; disclosure is what we gate.
-                    "budget": (
-                        budget.model_dump(mode="json")
-                        if budget is not None and self.disclose_budget
+                    budget=(
+                        ledger.get(policy.backend_id, evaluation_set)
+                        if ledger is not None and self.disclose_budget
                         else None
                     ),
-                }
+                )
             )
-        await self._context_directory.write_json(
-            self._context_directory.path("plan.json"),
-            {"schema_version": 1, "evaluations": evaluations},
-        )
+        return entries
 
     async def initialize_context(self) -> None:
         if self._context_directory is None:
@@ -668,10 +602,11 @@ class EvaluationSidecar:
                 parent_candidate_id=None,
             )
             projections = self._visible_projections()
+            entries = self._context_entries()
             await self._write_candidate_index(projections)
             await self._context_directory.write_evaluations(projections)
-            await self._write_evaluation_plan()
-            await self._write_case_resources()
+            await self._context_directory.write_evaluation_plan(entries)
+            await self._context_directory.write_case_resources(entries)
             self._context_initialized = True
 
     async def _refresh_context(self) -> None:
@@ -684,7 +619,9 @@ class EvaluationSidecar:
             projections = self._visible_projections()
             await self._write_candidate_index(projections)
             await self._context_directory.write_evaluations(projections)
-            await self._write_evaluation_plan()
+            await self._context_directory.write_evaluation_plan(
+                self._context_entries()
+            )
 
     async def evaluate(
         self,
