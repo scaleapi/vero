@@ -8,7 +8,7 @@
 # [task].name, which vero's local task staging requires.
 #
 # Usage:  bash scripts/vendor_tasks.sh
-# Result: harness-engineering-bench/candidates/officeqa/tasks/officeqa-uid*/  (246 tasks)
+# Result: harness-engineering-bench/officeqa/tasks/officeqa-uid*/  (246 tasks)
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"          # harness-engineering-bench/officeqa
