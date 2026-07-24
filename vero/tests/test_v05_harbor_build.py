@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import tomllib
 from pathlib import Path
@@ -791,3 +792,63 @@ def test_compiler_uses_published_version_outside_a_source_checkout(
 def test_agent_access_defaults_to_safe_k_anonymity_floor():
     # Omitting min_aggregate_cases must yield a real floor (5), not a no-op (1).
     assert AgentAccessSpec(partition="validation").min_aggregate_cases == 5
+
+
+def test_run_command_forwards_agent_env_as_harbor_ae(tmp_path, monkeypatch):
+    # `config.agent_env` must be rendered as repeated `--ae KEY=VALUE` on the
+    # optimizer's `harbor run` so it reaches the agent's setup/install exec
+    # (harbor injects --ae into the agent's extra_env / scoped_exec_env). This is
+    # the only supported channel for e.g. UV_TOOL_BIN_DIR on a non-root sandbox;
+    # extra_harbor_args only flows into the eval sub-run, not this command.
+    from click.testing import CliRunner
+
+    from vero.harbor import build as harbor_build
+    from vero.harbor import cli as harbor_cli
+
+    config = _config(
+        tmp_path,
+        agent_env={"UV_TOOL_BIN_DIR": "/home/agent/.local/bin", "FOO": "bar"},
+    )
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("name: placeholder\n", encoding="utf-8")
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(command, *args, **kwargs):
+        captured["command"] = list(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda _name: "/usr/bin/uvx")
+    monkeypatch.setattr(harbor_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        harbor_build, "load_harbor_build_config", lambda *a, **k: config
+    )
+    monkeypatch.setattr(
+        harbor_build, "compile_harbor_task", lambda cfg, out: out
+    )
+
+    result = CliRunner().invoke(
+        harbor_cli.harbor,
+        [
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "codex",
+            "--model",
+            "gpt-5.4",
+            "--environment",
+            "modal",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    command = captured["command"]
+    assert "--ae" in command
+    assert "--ae UV_TOOL_BIN_DIR=/home/agent/.local/bin" in shlex.join(command)
+    assert "--ae FOO=bar" in shlex.join(command)
+    # Deterministic (sorted-by-key) ordering: FOO before UV_TOOL_BIN_DIR.
+    joined = shlex.join(command)
+    assert joined.index("--ae FOO=bar") < joined.index(
+        "--ae UV_TOOL_BIN_DIR="
+    )

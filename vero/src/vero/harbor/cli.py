@@ -430,6 +430,12 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         ]
         if model is not None:
             command.extend(["-m", model])
+        # Forward the build's declared agent env to the optimizer agent's shell.
+        # Harbor's `--ae KEY=VALUE` populates the agent's extra_env, which harbor
+        # injects into the agent's setup/install exec (scoped_exec_env). Sorted
+        # for a deterministic command line.
+        for key in sorted(config.agent_env):
+            command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(

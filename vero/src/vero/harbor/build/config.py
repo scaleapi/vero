@@ -240,6 +240,13 @@ class HarborBuildConfig(EvaluationModel):
     feedback_max_bytes: int = Field(default=3000, ge=0)
     expose_attempt_detail: bool = False
     extra_harbor_args: list[str] = Field(default_factory=list)
+    # Environment variables injected into the optimizer agent's shell (setup/
+    # install and run), rendered as harbor `--ae KEY=VALUE` on the optimizer's
+    # `harbor run`. Distinct from `extra_harbor_args` (which only flows into the
+    # eval sub-run) and `task_environment` (the eval sub-run's env): this reaches
+    # the optimizer agent's own install/setup exec, e.g. UV_TOOL_BIN_DIR so
+    # `uv tool install` targets a writable dir on a non-root sandbox.
+    agent_env: dict[str, str] = Field(default_factory=dict)
 
     timeout_seconds: float = Field(default=1800.0, gt=0)
     case_timeout_seconds: float = Field(default=180.0, gt=0)
