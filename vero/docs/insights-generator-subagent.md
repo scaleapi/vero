@@ -151,8 +151,8 @@ skills_dir = "/skills"
 
 ### The corpus
 
-VeRO already dumps per-case traces into a read-only `.vero` context dir:
-`.vero/evaluations/<digest>/cases/<case_digest>/execution-trace.json` (and
+VeRO already dumps per-case traces into a read-only `.evals` context dir:
+`.evals/results/<digest>/cases/<case_digest>/execution-trace.json` (and
 `evaluation-trace.json`). That **is** the IG corpus. Label traces by the eval
 scores VeRO already has (pass/fail, reward) so the investigator can contrast
 cohorts — comparative analysis is where IG earns its keep.
@@ -198,7 +198,7 @@ proposals. This is a native reproduction of IG's own `patcher` loop
 
 | Path | Why it matters |
 |---|---|
-| `src/vero/runtime/context.py` (~L256–273) | Where per-case `execution-trace.json` / `evaluation-trace.json` are written into the `.vero` context — **the corpus source** |
+| `src/vero/runtime/context.py` (~L256–273) | Where per-case `execution-trace.json` / `evaluation-trace.json` are written into the `.evals` context — **the corpus source** |
 | `src/vero/optimization/optimizer.py` | `Optimizer` (L204); `run` (L409); `_produce_candidate` (L283) — where an IG call would slot between rounds |
 | `src/vero/agents/producer.py` | `AgentCandidateProducer.produce()` — how a coding agent is driven per proposal |
 | `src/vero/agents/claude_code.py` | VeRO's **SDK** Claude agent — **out of scope**, but note L44 enables `Task`; do not confuse with Harbor's agent |
@@ -246,4 +246,4 @@ Path: `enterprise/insights_generator/src/insights_generator/`
 Draft the three agent `.md` files + `SKILL.md` / `findings.json` contract +
 `chunk.sh` / `validate.py`, distilled from IG's actual scout/investigator/
 orchestrator prompts and grounded against a real `execution-trace.json` from the
-`.vero` layout, so the bundle is runnable rather than notional.
+`.evals` layout, so the bundle is runnable rather than notional.

@@ -40,7 +40,7 @@ class EvaluationTools:
         """Evaluate a program, returning authorized feedback and a filesystem path.
 
         Args:
-            evaluation: Name from ``.vero/evaluations.json``.
+            evaluation: Name from ``.evals/plan.json``.
             selection: Optional case IDs or range. Omit to use the base selection.
             candidate_id: Existing candidate to re-evaluate. Omit to save and
                 evaluate the current workspace.
@@ -48,7 +48,7 @@ class EvaluationTools:
 
         Returns:
             A bounded JSON receipt with an authorized summary and the path to the
-            complete permitted feedback under ``.vero/evaluations``.
+            complete permitted feedback under ``.evals/results``.
         """
 
         try:

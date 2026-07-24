@@ -35,7 +35,7 @@ Change `optimizer.model` to any model available through your provider. The best
 nominated candidate is then re-evaluated through the hidden final evaluation.
 Candidate versions remain in the session candidate repository, while evaluation
 artifacts are available in `.vero/session/evaluations/` and to the agent through
-its read-only `.vero` context.
+its read-only `.evals` context.
 
 Evaluation launches through the candidate's locked uv environment. The seed
 program has no third-party dependencies; an optimizer can add reproducible

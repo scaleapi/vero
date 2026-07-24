@@ -32,11 +32,11 @@ Three rules define the method — everything else is mechanics:
 ## The corpus layout
 
 Under the **Harbor** eval backend (the path VeRO actually uses), each candidate's
-evaluation dumps per-case trial records into a read-only `.vero` tree:
+evaluation dumps per-case trial records into a read-only `.evals` tree:
 
 ```
-$CORPUS/                                # e.g. /work/agent/.vero (or a dir you're pointed at)
-  evaluations/<eval_digest>/            # one dir per candidate evaluation
+$CORPUS/                                # e.g. /work/agent/.evals (or a dir you're pointed at)
+  results/<eval_digest>/            # one dir per candidate evaluation
     evaluation.json                     # aggregate record (score, error_rate, candidate id)
     artifacts/harbor/
       stdout.log  stderr.log            # backend logs for the whole eval
@@ -85,7 +85,7 @@ find "$CORPUS/evaluations" -path "*/agent/*.jsonl" | while read -r trace; do
   t=$(dirname "$(dirname "$trace")")            # trial dir = .../<case_id>__<suffix>
   trace_id=$(basename "$t")
   case_id=${trace_id%%__*}
-  eval=$(echo "$t" | sed -E 's#.*/evaluations/([^/]{12})[^/]*/.*#\1#')
+  eval=$(echo "$t" | sed -E 's#.*/results/([^/]{12})[^/]*/.*#\1#')
   reward=$([ -f "$t/verifier/reward.txt" ] && tr -d '[:space:]' < "$t/verifier/reward.txt")
   printf '%s\t%s\t%s\t%s\t%s\n' "$trace_id" "$case_id" "$eval" "${reward:-NA}" "$trace"
 done > index.tsv

@@ -69,7 +69,7 @@ class FakeSidecar:
                     evaluation_id="evaluation",
                     status=EvaluationStatus.SUCCESS,
                 ),
-                result_path=".vero/evaluations/evaluation/evaluation.json",
+                result_path=".evals/results/evaluation/evaluation.json",
             ),
         )
 

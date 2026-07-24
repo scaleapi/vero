@@ -9,9 +9,9 @@ fi
 cp -a /opt/overlay/. /work/agent/
 {% endif %}
 
-find /work/agent -path /work/agent/.vero -prune -o -exec chown agent:agent {} +
+find /work/agent -path /work/agent/.evals -prune -o -exec chown agent:agent {} +
 git config --system --add safe.directory /work/agent
-printf '%s\n' '/.vero/' >> /work/agent/.git/info/exclude
+printf '%s\n' '/.evals/' >> /work/agent/.git/info/exclude
 {% for path in overlay_excludes %}
 printf '%s\n' '/{{ path }}/' >> /work/agent/.git/info/exclude
 {% endfor %}

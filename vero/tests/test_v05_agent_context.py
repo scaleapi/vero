@@ -112,7 +112,7 @@ async def test_agent_context_splits_full_traces_and_honors_disclosure(tmp_path: 
     project.mkdir()
     directory = AgentContextDirectory(
         sandbox=await LocalSandbox.create(root=tmp_path),
-        root=str(project / ".vero"),
+        root=str(project / ".evals"),
         session_dir=session_dir,
     )
     await directory.reset()
@@ -144,7 +144,7 @@ async def test_agent_context_splits_full_traces_and_honors_disclosure(tmp_path: 
     await directory.seal()
 
     try:
-        evaluations = project / ".vero" / "evaluations"
+        evaluations = project / ".evals" / "results"
         full_root = evaluations / context_digest(full.id)
         full_document = json.loads(
             (full_root / "evaluation.json").read_text(encoding="utf-8")
@@ -185,13 +185,13 @@ async def test_agent_context_splits_full_traces_and_honors_disclosure(tmp_path: 
                 "status": "success",
             },
         }
-        mode = stat.S_IMODE((project / ".vero" / "manifest.json").stat().st_mode)
+        mode = stat.S_IMODE((project / ".evals" / "manifest.json").stat().st_mode)
         assert mode & 0o222 == 0
 
         receipt = make_evaluation_receipt(full, DisclosureLevel.FULL)
         assert isinstance(receipt.result, EvaluationSummary)
         assert receipt.result_path == (
-            f".vero/evaluations/{context_digest(full.id)}/evaluation.json"
+            f".evals/results/{context_digest(full.id)}/evaluation.json"
         )
         assert "x" * 100 not in receipt.model_dump_json()
     finally:

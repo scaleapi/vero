@@ -120,7 +120,7 @@ def test_circle_packing_example_evaluates_and_preserves_artifacts(
     shutil.copytree(
         source,
         example,
-        ignore=shutil.ignore_patterns(".git", ".vero", ".venv", "__pycache__"),
+        ignore=shutil.ignore_patterns(".git", ".vero", ".evals", ".venv", "__pycache__"),
     )
     baseline_version = initialize_repository(example / "target")
     monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "uv-cache"))

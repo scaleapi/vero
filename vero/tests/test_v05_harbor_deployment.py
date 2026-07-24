@@ -129,7 +129,7 @@ async def test_standard_deployment_factory_builds_one_canonical_runtime(tmp_path
     }
     assert (tmp_path / "state/agent/manifest.json").is_file()
     assert json.loads(
-        (tmp_path / "state/agent/evaluations/index.json").read_text()
+        (tmp_path / "state/agent/results/index.json").read_text()
     ) == {"schema_version": 1, "evaluations": []}
     report = await generate_experiment_report(
         tmp_path / "state/session",

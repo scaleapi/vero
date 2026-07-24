@@ -61,11 +61,11 @@ optimization data, while the final evaluation remains hidden.
 ## Inspect cases and traces
 
 Complete task resources for the following authorized partitions are mounted
-read-only under `.vero/cases/`: {{ exposed_partitions | join(", ") }}. Start at
-`.vero/cases/index.json`; each listed partition has its own task index,
+read-only under `.evals/tasks/`: {{ exposed_partitions | join(", ") }}. Start at
+`.evals/tasks/index.json`; each listed partition has its own task index,
 attachments, instructions, and task files.
 
-After a full-disclosure evaluation, `.vero/evaluations/` contains one file per
+After a full-disclosure evaluation, `.evals/results/` contains one file per
 case plus the complete Harbor trial records: exact failure results, exception
 tracebacks, trial logs, and target-agent artifacts. Use these files to inspect
 successful as well as failed trajectories without putting long traces into the
@@ -73,10 +73,10 @@ CLI response.
 {% if overlay_present %}
 Your workspace also includes analysis subagents under `.claude/agents/` and a
 corpus-analysis skill under `skills/insights/`. These mine the entire
-`.vero/evaluations/` trace corpus for recurring, cross-case failure patterns that
+`.evals/results/` trace corpus for recurring, cross-case failure patterns that
 are invisible in any single trace. After running at least one full-disclosure
 evaluation, dispatch the `insights-generator` subagent (via the Task tool,
-pointing it at the `.vero` corpus) to get evidence-grounded findings, then let
+pointing it at the `.evals` corpus) to get evidence-grounded findings, then let
 those findings guide your next candidate edit. Re-run it as the corpus grows.
 {% endif %}
 {% endif %}

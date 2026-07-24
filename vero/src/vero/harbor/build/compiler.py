@@ -130,8 +130,8 @@ def _prepare_baseline_repo(
         )
     if rewrite_vero_path:
         _rewrite_vero_path(destination / "pyproject.toml")
-    if (destination / ".vero").exists():
-        raise ValueError("agent baseline contains reserved path '.vero'")
+    if (destination / ".evals").exists():
+        raise ValueError("agent baseline contains reserved path '.evals'")
 
     def git(*arguments: str) -> str:
         result = subprocess.run(

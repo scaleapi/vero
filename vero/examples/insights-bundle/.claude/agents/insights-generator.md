@@ -6,7 +6,7 @@ description: >-
   but the population. Coordinates Scouts (discover hypotheses) and Investigators
   (validate them against the whole corpus) and returns a small set of
   evidence-grounded, actionable findings. Give it the corpus root ($CORPUS,
-  the .vero dir) and, if known, the optimization objective.
+  the .evals dir) and, if known, the optimization objective.
 model: inherit
 tools: Task, Bash, Read, Grep, Glob
 ---

@@ -82,7 +82,7 @@ class OptimizationContext:
 class CandidateProductionContext:
     """Non-sensitive control context supplied to a candidate producer.
 
-    Authorized evaluation details live in the read-only ``.vero`` tree and are
+    Authorized evaluation details live in the read-only ``.evals`` tree and are
     returned through the evaluation gateway; they are intentionally not
     duplicated here as full records.
     """

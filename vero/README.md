@@ -731,16 +731,16 @@ path to the filesystem result. Large case records, traces, and artifacts stay
 out of the tool response. Intermediate checkpoints are real candidates and
 remain eligible for selection, even if the agent later makes the program worse.
 
-Each producer workspace contains a generated, read-only `.vero/` directory:
+Each producer workspace contains a generated, read-only `.evals/` directory:
 
 ```text
-.vero/
+.evals/
 ├── README.md
 ├── manifest.json
-├── evaluations.json # available evaluations, selections, disclosure, budgets
-├── cases/          # only backend-approved case resources
-├── candidates/     # metadata, parent patches, and repository-native refs
-└── evaluations/    # authorized summaries or full case/trace/artifact trees
+├── plan.json    # available evaluations, selections, disclosure, budgets
+├── tasks/       # only backend-approved task resources
+├── candidates/  # metadata, parent patches, and repository-native refs
+└── results/     # authorized summaries or full case/trace/artifact trees
 ```
 
 The agent inspects this with ordinary filesystem and Git commands. Disclosure
@@ -756,7 +756,7 @@ Candidate history uses durable Git refs, so siblings need not be ancestors of th
 current checkout: a proposal sees the candidates from the start of its generation
 plus its own evaluated checkpoints, and parallel siblings appear the next round.
 
-The `.vero/` view is disposable and read-only — Git-excluded, permission-
+The `.evals/` view is disposable and read-only — Git-excluded, permission-
 protected, and rejected if a candidate force-adds it; the durable candidate and
 evaluation stores stay the trusted source. In Harbor the sidecar owns the
 writable volume and the agent mounts it read-only, and case resources (for
@@ -818,7 +818,7 @@ so treat the resulting file as sensitive experiment data.
 - Evaluation secrets are passed through backend configuration and redacted from
   diagnostics; they cannot be embedded in evaluation parameters.
 - Agent-visible cases, histories, and evaluation details are projected into a
-  generated `.vero/` view according to the same authorization boundary.
+  generated `.evals/` view according to the same authorization boundary.
 - Budgets are reserved atomically before backend execution.
 - A built-in coding agent's shell and file actions execute inside a sandbox
   bound to its candidate checkout, so containment is the sandbox boundary rather

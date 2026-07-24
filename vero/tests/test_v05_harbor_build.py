@@ -498,14 +498,14 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     # k-anonymity floor (default 5) is disclosed to the agent
     assert "must include at least 5 cases" in instruction
     assert "Complete task resources" in instruction
-    assert ".vero/evaluations/" in instruction
+    assert ".evals/results/" in instruction
     task_toml = (output / "task.toml").read_text(encoding="utf-8")
     assert 'name = "org/optimize-\\"program\\""' in task_toml
     assert tomllib.loads(task_toml)["task"]["name"] == 'org/optimize-"program"'
     compose = (output / "environment/docker-compose.yaml").read_text()
     assert "vero.harbor.deployment:build_harbor_components" in compose
     assert "admin_state:/state/admin" in compose
-    assert "agent_context:/work/agent/.vero:ro" in compose
+    assert "agent_context:/work/agent/.evals:ro" in compose
     assert "agent_context:/state/agent-context" in compose
     assert set(yaml.safe_load(compose)["services"]) == {"main", "eval-sidecar"}
     sidecar_dockerfile = (output / "environment/sidecar/Dockerfile").read_text()
@@ -515,8 +515,8 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "useradd -m -u 1002 harness" in sidecar_dockerfile
     assert "chown -R harness:harness /home/harness/.cache" in sidecar_dockerfile
     seed = (output / "environment/main/seed.sh").read_text()
-    assert "-path /work/agent/.vero -prune" in seed
-    assert "'/.vero/' >> /work/agent/.git/info/exclude" in seed
+    assert "-path /work/agent/.evals -prune" in seed
+    assert "'/.evals/' >> /work/agent/.git/info/exclude" in seed
     test_script = output / "tests/test.sh"
     assert test_script.stat().st_mode & 0o111
     assert "vero harbor export-session" in test_script.read_text()
@@ -557,9 +557,9 @@ def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
             vero_root=Path(__file__).parents[1],
         )
 
-    (Path(safe.agent_repo) / ".vero").mkdir()
-    (Path(safe.agent_repo) / ".vero" / "context.json").write_text("{}\n")
-    _git(Path(safe.agent_repo), "add", "-f", ".vero/context.json")
+    (Path(safe.agent_repo) / ".evals").mkdir()
+    (Path(safe.agent_repo) / ".evals" / "context.json").write_text("{}\n")
+    _git(Path(safe.agent_repo), "add", "-f", ".evals/context.json")
     _git(Path(safe.agent_repo), "commit", "-q", "-m", "reserved context")
     with pytest.raises(ValueError, match="reserved path"):
         compile_harbor_task(

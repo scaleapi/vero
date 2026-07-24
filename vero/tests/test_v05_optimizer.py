@@ -112,7 +112,7 @@ from pathlib import Path
 workspace = Path(sys.argv[1])
 context = Path(sys.argv[2])
 assert Path(os.environ["VERO_CONTEXT_PATH"]) == context
-evaluations = json.loads((context / "evaluations/index.json").read_text())
+evaluations = json.loads((context / "results/index.json").read_text())
 assert len(evaluations["evaluations"]) == 1
 (workspace / "program.txt").write_text("fast\\n")
 """

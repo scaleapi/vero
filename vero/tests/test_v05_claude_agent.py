@@ -115,5 +115,5 @@ async def test_claude_agent_implements_canonical_coding_agent_contract(
     assert result.metadata["usage"]["input_tokens"] == 10
     assert context.project_path == tmp_path
     assert context.instructions.startswith("Optimize matrix multiplication\n\n")
-    assert "read-only optimization context in `.vero/`" in context.instructions
+    assert "evaluation context has been placed in `.evals/`" in context.instructions
     assert context.base_version == "baseline-version"

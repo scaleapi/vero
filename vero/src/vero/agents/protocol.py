@@ -56,9 +56,9 @@ class AgentContext:
     @property
     def instructions(self) -> str:
         context = (
-            f"VeRO has placed read-only optimization context in "
-            f"`{AGENT_CONTEXT_DIRECTORY}/`. Inspect its README, cases, prior "
-            "candidates, and evaluation feedback when useful. Do not modify or "
+            f"Read-only evaluation context has been placed in "
+            f"`{AGENT_CONTEXT_DIRECTORY}/`. Inspect its README, tasks, prior "
+            "candidates, and evaluation results when useful. Do not modify or "
             "commit that directory."
         )
         if self.proposal.instruction:

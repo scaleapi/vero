@@ -61,7 +61,7 @@ Named volumes carry state between services: `agent_repo`, `agent_context`,
    verifier phase).
 3. It shells out to **inner `harbor run -e modal`**, which builds the images,
    brings up the stack, and injects the optimizer into `main`.
-4. **Optimizer loop**: the agent reads its `.vero` context, edits the candidate
+4. **Optimizer loop**: the agent reads its `.evals` context, edits the candidate
    in `/work/agent`, and calls the sidecar `/eval` to score candidates — on
    **development** (full per-case feedback) and **validation** (aggregate score
    only). It iterates, and may `/submit` a final pick.

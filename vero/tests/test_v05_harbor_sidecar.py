@@ -252,13 +252,13 @@ async def test_sidecar_uses_canonical_disclosure_budget_and_multiple_backends(tm
     assert response.receipt.result.total_cases == 5
     assert transport.calls == ["HEAD"]
     assert response.receipt.result_path == (
-        f".vero/evaluations/{context_digest(response.receipt.evaluation_id)}/"
+        f".evals/results/{context_digest(response.receipt.evaluation_id)}/"
         "evaluation.json"
     )
     assert (
         tmp_path
         / "agent-volume"
-        / "evaluations"
+        / "results"
         / context_digest(response.receipt.evaluation_id)
         / "evaluation.json"
     ).is_file()
@@ -494,7 +494,7 @@ async def test_sidecar_context_survives_restart_without_disclosing_admin_runs(
     )
     await restarted.initialize_context()
 
-    index = json.loads((tmp_path / "agent-volume/evaluations/index.json").read_text())[
+    index = json.loads((tmp_path / "agent-volume/results/index.json").read_text())[
         "evaluations"
     ]
     assert [entry["evaluation_id"] for entry in index] == [

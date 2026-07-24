@@ -198,10 +198,10 @@ async def test_git_repository_rejects_candidates_that_track_agent_context(
     )
     await repository.capture(Candidate.from_version(baseline_version), workspace)
 
-    context = source / ".vero"
+    context = source / ".evals"
     context.mkdir()
     (context / "private.json").write_text('{"secret": true}\n', encoding="utf-8")
-    git(source, "add", "-f", ".vero/private.json")
+    git(source, "add", "-f", ".evals/private.json")
     git(
         source,
         "-c",
@@ -264,7 +264,7 @@ async def test_git_repository_materializes_visible_history_in_opaque_workspace(
         sandbox=OpaqueLocalSandbox(tmp_path),
         name="history",
     ) as checkout:
-        destination = f"{checkout.project_path}/.vero/candidates"
+        destination = f"{checkout.project_path}/.evals/candidates"
         await repository.materialize_agent_history(
             (baseline, first, sibling),
             workspace=checkout,

@@ -3,7 +3,7 @@
 This is **not a Harbor task.** It is a bundle you *inject* into an existing
 optimizer run (e.g. the GAIA build under `harness-engineering-bench/gaia/`) so the main
 solver/optimizer agent can call it — mid-run, as a subagent — to mine its own
-accumulated `.vero` trace corpus for patterns and feed the findings into the next
+accumulated `.evals` trace corpus for patterns and feed the findings into the next
 candidate proposal.
 
 It reproduces Scale's internal **Insights Generator** *methodology* — not its
@@ -32,8 +32,8 @@ trajectories, so the whole investigation is recorded.
 ## How it plugs into a run
 
 The optimizer works in `/work/agent`; its `vero harbor eval` calls write the
-trace corpus to `/work/agent/.vero/evaluations/**`. Point the bundle there with
-`CORPUS=/work/agent/.vero`. Two seams inject the bundle into the environment:
+trace corpus to `/work/agent/.evals/results/**`. Point the bundle there with
+`CORPUS=/work/agent/.evals`. Two seams inject the bundle into the environment:
 
 1. **Subagents** — Claude Code has no dedicated Harbor seam for `.claude/agents/`.
    Seed them via the environment `Dockerfile`/`seed.sh` into the project dir the
@@ -66,7 +66,7 @@ which model the optimizer may call.)
 
 ```
 optimize round N:
-  optimizer proposes/edits candidate → `vero harbor eval` → traces land in .vero
+  optimizer proposes/edits candidate → `vero harbor eval` → traces land in .evals
   optimizer (or a between-rounds step) invokes the `insights-generator` subagent:
       orchestrator → scouts (discover) → investigators (validate) → findings.json
   optimizer reads the top findings → informs the round N+1 edit

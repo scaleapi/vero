@@ -24,7 +24,7 @@ from vero.workspace import GitWorkspace, Workspace
 
 
 _OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-_AGENT_CONTEXT_DIRECTORY = ".vero"
+_AGENT_CONTEXT_DIRECTORY = ".evals"
 
 
 class _GitRepositoryConfig(BaseModel):

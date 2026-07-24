@@ -147,7 +147,7 @@ class CommandCandidateProducer:
             )
             values = {
                 "workspace": workspace.project_path,
-                "context": posixpath.join(workspace.project_path, ".vero"),
+                "context": posixpath.join(workspace.project_path, ".evals"),
                 "producer": producer_root,
                 "round": str(context.round),
                 "instruction": proposal.instruction or "",

@@ -75,7 +75,7 @@ approximately 2.635, but make measurable progress from the supplied baseline
 before pursuing sophisticated refinements.
 
 Use the development evaluation repeatedly and inspect its read-only JSON and
-SVG artifacts in .vero. Preserve run_packing() and its return contract. You may
+SVG artifacts in .evals. Preserve run_packing() and its return contract. You may
 rewrite the algorithm completely. If you need third-party Python packages, add
 and lock them with `uv add`; evaluation uses the checked-in uv.lock with
 `--frozen`. Never weaken, bypass, or reproduce the trusted evaluator.

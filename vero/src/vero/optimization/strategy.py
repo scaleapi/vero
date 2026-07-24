@@ -79,7 +79,7 @@ class EvolutionaryStrategy:
 
     Only mutation (parent + instruction) is implemented; crossover (combining two
     parents) is a follow-on — it needs the producer/instruction to reference a
-    second candidate's contents, exposed through the read-only ``.vero`` tree.
+    second candidate's contents, exposed through the read-only ``.evals`` tree.
 
     ``evaluation_set`` should name the selection set when multiple sets are
     visible, so fitness is ranked on one consistent metric; left ``None`` it
@@ -206,7 +206,7 @@ class DarwinGodelStrategy:
     nodes remain reachable as *stepping stones* (many innovations traverse them).
 
     The intended pairing is a self-application producer: each offspring is the
-    parent's own harness modifying itself (analyze its ``.vero`` trace corpus,
+    parent's own harness modifying itself (analyze its ``.evals`` trace corpus,
     implement one improvement), which is the self-referential loop the original
     Gödel Machine wanted but validated empirically rather than by proof.
 

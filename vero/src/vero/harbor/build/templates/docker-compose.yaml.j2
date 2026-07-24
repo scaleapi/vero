@@ -18,7 +18,7 @@ services:
 {% endif %}
     volumes:
       - agent_repo:/work/agent
-      - agent_context:/work/agent/.vero:ro
+      - agent_context:/work/agent/.evals:ro
       - token_state:/state/token:ro
     depends_on:
       eval-sidecar:

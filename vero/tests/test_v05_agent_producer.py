@@ -81,7 +81,7 @@ class CheckpointingCodingAgent:
     async def run(self, *, context, prompt, max_turns, on_event=None):
         assert prompt == "Make the program faster"
         assert max_turns == 5
-        context_root = Path(context.workspace.project_path) / ".vero"
+        context_root = Path(context.workspace.project_path) / ".evals"
         assert not await context.workspace.is_dirty()
         manifest = json.loads((context_root / "manifest.json").read_text())
         assert manifest["parent_candidate_id"] == context.parent.id
@@ -92,20 +92,20 @@ class CheckpointingCodingAgent:
             candidate["candidate_id"] for candidate in candidate_index["candidates"]
         }
         evaluation_index = json.loads(
-            (context_root / "evaluations" / "index.json").read_text()
+            (context_root / "results" / "index.json").read_text()
         )
         self.initial_evaluation_count = len(evaluation_index["evaluations"])
-        cases_index = json.loads((context_root / "cases" / "index.json").read_text())
+        cases_index = json.loads((context_root / "tasks" / "index.json").read_text())
         resource_path = cases_index["case_resources"][0]["path"]
         resource_index = json.loads(
             (
-                context_root / "cases" / resource_path / "resources" / "index.json"
+                context_root / "tasks" / resource_path / "resources" / "index.json"
             ).read_text()
         )
         self.case_resource = json.loads(
             (
                 context_root
-                / "cases"
+                / "tasks"
                 / resource_path
                 / "resources"
                 / resource_index["resources"][0]["path"]
@@ -121,7 +121,7 @@ class CheckpointingCodingAgent:
         self.feedback = feedback
         assert (Path(context.workspace.project_path) / feedback.result_path).is_file()
         refreshed = json.loads(
-            (context_root / "evaluations" / "index.json").read_text()
+            (context_root / "results" / "index.json").read_text()
         )
         assert len(refreshed["evaluations"]) == self.initial_evaluation_count + 1
 
@@ -311,7 +311,7 @@ report_path.write_text(json.dumps({
 
     assert agent.feedback is not None
     assert agent.feedback.result.objective.value == 1.0
-    assert agent.feedback.result_path.startswith(".vero/evaluations/")
+    assert agent.feedback.result_path.startswith(".evals/results/")
     assert agent.initial_candidate_ids == {baseline_version}
     assert agent.initial_evaluation_count == 1
     assert agent.case_resource == [{"id": "case-1", "size": 128}]
