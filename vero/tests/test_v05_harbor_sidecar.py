@@ -507,6 +507,47 @@ async def test_sidecar_context_survives_restart_without_disclosing_admin_runs(
 
 
 @pytest.mark.asyncio
+async def test_sidecar_context_writes_plan_and_tasks(tmp_path):
+    sidecar, _, _ = _sidecar(tmp_path)
+    await sidecar.initialize_context()
+
+    volume = tmp_path / "agent-volume"
+    # Case resources live under tasks/ (the documented name), not cases/.
+    tasks_index = json.loads((volume / "tasks/index.json").read_text())
+    assert tasks_index["case_resources"] == []
+    assert not (volume / "cases").exists()
+
+    plan = json.loads((volume / "plan.json").read_text())
+    by_name = {entry["name"]: entry for entry in plan["evaluations"]}
+    assert set(by_name) == {"benchmark", "public"}
+    assert by_name["benchmark"]["disclosure"] == "aggregate"
+    assert by_name["benchmark"]["budget"]["remaining_runs"] == 3
+    assert by_name["benchmark"]["budget"]["remaining_cases"] == 20
+
+    # Each evaluation refreshes the plan with the depleted budget.
+    await sidecar.evaluate(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(
+                name="benchmark",
+                partition="validation",
+                selection=CaseIds(ids=[f"case-{i}" for i in range(5)]),
+            ),
+        )
+    )
+    plan = json.loads((volume / "plan.json").read_text())
+    by_name = {entry["name"]: entry for entry in plan["evaluations"]}
+    assert by_name["benchmark"]["budget"]["remaining_runs"] == 2
+    assert by_name["benchmark"]["budget"]["remaining_cases"] == 15
+
+    # Budget-blind mode withholds the budget column, nothing else.
+    blind, _, _ = _sidecar(tmp_path, disclose_budget=False)
+    await blind.initialize_context()
+    plan = json.loads((volume / "plan.json").read_text())
+    assert all(entry["budget"] is None for entry in plan["evaluations"])
+
+
+@pytest.mark.asyncio
 async def test_sidecar_fails_closed_before_transfer_or_budget(tmp_path):
     sidecar, transport, ledger = _sidecar(tmp_path)
     too_small = SidecarEvaluationRequest(
