@@ -44,8 +44,8 @@ objective:
   selector:
     metric: score
   direction: maximize
-reward_mode: auto_best
-baseline_floor: true
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: true  # only guards the no-submission fallback path
 score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
