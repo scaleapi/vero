@@ -4,6 +4,7 @@ import json
 import re
 
 import pytest
+
 from vero.tools.planning import TodoList, TodoStatus
 
 

@@ -30,7 +30,6 @@ from vero.evaluation.persistence import _atomic_write_json
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
-
 AGENT_CONTEXT_DIRECTORY = ".evals"
 _DISCLOSURE_RANK = {
     DisclosureLevel.NONE: 0,

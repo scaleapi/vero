@@ -16,11 +16,11 @@ scores about 0.96; the best known result is ~2.635.
 3. Score the current commit on the validation set:
 
    ```bash
-   vero harbor eval --backend cmd --evaluation-set circle-packing \
+   evals run --backend cmd --evaluation-set circle-packing \
      --partition validation --start 0 --stop 1
    ```
 
-4. Use `vero harbor status` to see remaining evaluation budget.
+4. Use `evals status` to see remaining evaluation budget.
 
 The trusted sidecar owns scoring, budget, and final candidate selection. Only
 `sum_radii` (with a `valid == 1` constraint) counts. Iterate: try an

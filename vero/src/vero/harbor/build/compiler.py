@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import io
 import json
 import logging
@@ -20,7 +21,7 @@ from vero.evaluation import (
     EvaluationSet,
     RetryPolicy,
 )
-from vero.harbor.build.config import HarborBuildConfig
+from vero.harbor.build.config import HarborBuildConfig, WorkspaceOverlaySpec
 from vero.harbor.inference import generate_inference_token, token_digest
 
 logger = logging.getLogger(__name__)
@@ -475,11 +476,19 @@ def compile_harbor_task(
     # General filesystem overlay: bake arbitrary host files/dirs into the agent
     # workspace at build time. A source dir's *contents* land under dest; a source
     # file lands as dest/<name>. dest="." is the workspace root.
-    overlay_present = bool(config.workspace_overlays)
+    overlays = list(config.workspace_overlays)
+    if config.include_evals_skill:
+        # vero's own packaged skill; resolved from the installed package so the
+        # baked copy always matches the vero (and `evals` CLI) in the image.
+        skill_source = importlib.resources.files("vero") / "skills" / "evals"
+        overlays.append(
+            WorkspaceOverlaySpec(source=str(skill_source), dest="skills/evals")
+        )
+    overlay_present = bool(overlays)
     overlay_excludes: list[str] = []
     if overlay_present:
         overlay_root = environment_dir / "overlay"
-        for spec in config.workspace_overlays:
+        for spec in overlays:
             source = Path(spec.source)
             target = overlay_root if spec.dest == "." else overlay_root / spec.dest
             if source.is_dir():

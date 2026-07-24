@@ -15,6 +15,7 @@ from uuid import uuid4
 import click
 
 from vero.candidate_repository import GitCandidateRepository
+from vero.config import load_config
 from vero.evaluation import (
     AllCases,
     BudgetLedger,
@@ -46,7 +47,6 @@ from vero.runtime import (
     WandbEventSink,
     create_local_optimization_session,
 )
-from vero.config import load_config
 
 
 def _default_home() -> Path:
@@ -1016,7 +1016,7 @@ def session_clear(session_dir: Path, yes: bool) -> None:
     click.echo(f"Deleted {session_dir}")
 
 
-from vero.harbor.cli import harbor as harbor_command
+from vero.harbor.cli import harbor as harbor_command  # noqa: E402  (registered after `main` is defined)
 
 main.add_command(harbor_command)
 

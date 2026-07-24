@@ -14,8 +14,8 @@ from __future__ import annotations
 import asyncio
 import os
 import posixpath
-import signal
 import shutil
+import signal
 import tempfile
 import uuid
 from abc import ABC, abstractmethod

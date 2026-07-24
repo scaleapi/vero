@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from typing import Mapping, Protocol, Sequence, runtime_checkable
 
+from vero.candidate import Candidate
 from vero.evaluation import (
-    EvaluationBudget,
     CaseSelection,
+    EvaluationBudget,
     EvaluationReceipt,
     EvaluationRecord,
     ObjectiveSpec,
 )
-from vero.candidate import Candidate
 from vero.optimization.models import (
     CandidateChange,
     CandidateProductionContext,

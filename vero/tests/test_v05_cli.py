@@ -9,8 +9,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 import vero
-from vero.cli import main
 from vero.candidate import Candidate
+from vero.cli import main
 
 
 def test_root_package_exposes_only_canonical_program_api():

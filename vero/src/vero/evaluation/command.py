@@ -28,8 +28,8 @@ from vero.evaluation.models import (
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
-from vero.staging import SandboxStagingArea
 from vero.sandbox import Sandbox
+from vero.staging import SandboxStagingArea
 
 _PLACEHOLDERS = {"workspace", "harness", "request", "report", "artifacts"}
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")

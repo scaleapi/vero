@@ -212,11 +212,24 @@ def test_compiler_omits_wandb_when_unset(tmp_path):
 
 
 def test_compiler_omits_overlay_when_unset(tmp_path):
-    output = compile_harbor_task(_config(tmp_path), tmp_path / "compiled")
+    output = compile_harbor_task(
+        _config(tmp_path, include_evals_skill=False), tmp_path / "compiled"
+    )
     env = output / "environment"
     assert not (env / "overlay").exists()
     assert "COPY overlay" not in (env / "Dockerfile").read_text()
     assert "/opt/overlay" not in (env / "main" / "seed.sh").read_text()
+
+
+def test_compiler_bakes_evals_skill_by_default(tmp_path):
+    output = compile_harbor_task(_config(tmp_path), tmp_path / "compiled")
+    env = output / "environment"
+    skill = env / "overlay" / "skills" / "evals" / "SKILL.md"
+    assert skill.is_file()
+    assert "evals run" in skill.read_text(encoding="utf-8")
+    assert "'/skills/' >> /work/agent/.git/info/exclude" in (
+        env / "main" / "seed.sh"
+    ).read_text(encoding="utf-8")
 
 
 def test_compiler_budget_disclosure_toggle(tmp_path):
@@ -474,7 +487,7 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "use_evaluation_copies" not in serve
     instruction = (output / "instruction.md").read_text()
     assert "--detach" in instruction
-    assert "vero harbor eval-status JOB_ID" in instruction
+    assert "evals status JOB_ID" in instruction
     assert "randomness remains" in instruction
     for partition, backend in serve["backends"].items():
         partition_name = partition.removeprefix("harbor-")

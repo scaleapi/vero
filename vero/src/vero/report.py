@@ -18,7 +18,6 @@ from vero.harbor.verifier import VerificationResult
 from vero.runtime.events import RuntimeEvent
 from vero.runtime.session import SessionManifest
 
-
 _MAX_EMBEDDED_ARTIFACT_BYTES = 5_000_000
 _MAX_EMBEDDED_ARTIFACTS_BYTES = 50_000_000
 _MAX_DIFF_CHARACTERS = 500_000

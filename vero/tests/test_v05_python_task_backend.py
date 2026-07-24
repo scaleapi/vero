@@ -13,11 +13,11 @@ from vero.evaluation import (
     CaseRange,
     EvaluationPlan,
     EvaluationSet,
+    MetricSelector,
+    ObjectiveSpec,
     PythonTaskBackend,
     PythonTaskBackendConfig,
     PythonTaskEvaluationConfig,
-    MetricSelector,
-    ObjectiveSpec,
 )
 from vero.optimization import (
     CommandCandidateProducer,

@@ -31,7 +31,7 @@ trajectories, so the whole investigation is recorded.
 
 ## How it plugs into a run
 
-The optimizer works in `/work/agent`; its `vero harbor eval` calls write the
+The optimizer works in `/work/agent`; its `evals run` calls write the
 trace corpus to `/work/agent/.evals/results/**`. Point the bundle there with
 `CORPUS=/work/agent/.evals`. Two seams inject the bundle into the environment:
 
@@ -66,7 +66,7 @@ which model the optimizer may call.)
 
 ```
 optimize round N:
-  optimizer proposes/edits candidate → `vero harbor eval` → traces land in .evals
+  optimizer proposes/edits candidate → `evals run` → traces land in .evals
   optimizer (or a between-rounds step) invokes the `insights-generator` subagent:
       orchestrator → scouts (discover) → investigators (validate) → findings.json
   optimizer reads the top findings → informs the round N+1 edit

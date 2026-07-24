@@ -8,11 +8,11 @@ from typing import Protocol, runtime_checkable
 
 from vero.evaluation.models import (
     BackendProvenance,
+    CaseResult,
     EvaluationCost,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
-    CaseResult,
 )
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace

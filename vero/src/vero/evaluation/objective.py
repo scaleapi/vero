@@ -23,7 +23,6 @@ from vero.evaluation.models import (
     ObjectiveSpec,
 )
 
-
 _OPERATORS = {
     ConstraintOperator.EQ: operator.eq,
     ConstraintOperator.NE: operator.ne,

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from vero.sandbox import CommandResult, FileStat, LocalSandbox, Sandbox
 import vero.sandbox as sandbox_module
+from vero.sandbox import CommandResult, FileStat, LocalSandbox, Sandbox
 
 
 @pytest.fixture

@@ -39,8 +39,8 @@ from vero.optimization.models import (
     OptimizationResult,
 )
 from vero.optimization.protocols import (
-    CandidateProducer,
     CandidateEvaluationGateway,
+    CandidateProducer,
     GenerationBackend,
     OptimizationStrategy,
     SelectionPolicy,

@@ -22,16 +22,16 @@ from vero.evaluation import (
     EvaluationStatus,
 )
 from vero.harbor.app import create_app
+from vero.harbor.auth import (
+    check_admin_token,
+    read_admin_token,
+    write_admin_token,
+)
 from vero.harbor.cli import (
     _compiled_run_environment,
     _load_agent_trace,
     _load_env_file,
     harbor,
-)
-from vero.harbor.auth import (
-    check_admin_token,
-    read_admin_token,
-    write_admin_token,
 )
 from vero.harbor.sidecar import (
     EvaluationAccessError,

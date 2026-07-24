@@ -17,7 +17,7 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 3. Evaluate the current commit on the selection set:
 
    ```bash
-   vero harbor eval \
+   evals run \
      --backend {{ selection_backend }} \
      --evaluation-set {{ evaluation_set_name }} \
      --partition {{ selection_partition }} \
@@ -25,15 +25,16 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    ```
 
    Record the returned `job_id`. Continue inspecting or editing while it runs,
-   then use `vero harbor eval-status JOB_ID` and
-   `vero harbor eval-result JOB_ID` to retrieve its durable result. Track every
-   outstanding job and do not claim an improvement before its comparison
-   baseline has completed.
+   then use `evals status JOB_ID` and `evals result JOB_ID` to retrieve its
+   durable result. Track every outstanding job and do not claim an improvement
+   before its comparison baseline has completed.
 
-4. Use `vero harbor status` to inspect evaluation jobs and allowed evaluation
+4. Use `evals status` to inspect evaluation jobs and allowed evaluation
    sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
+   Navigate finished results with `evals list`, `evals diff`, `evals cases`,
+   and `evals trace` (see `evals --help` and `skills/evals/SKILL.md`).
 {% if submit_enabled %}
-5. When finished, nominate the chosen commit with `vero harbor submit`.
+5. When finished, nominate the chosen commit with `evals submit`.
 {% else %}
 5. VeRO automatically pools your measurements, re-scores a shortlist with the
    trusted evaluator, and selects the best candidate. The unmodified baseline is

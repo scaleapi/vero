@@ -7,7 +7,7 @@ that edits `packing.py` to pack 26 non-overlapping circles in the unit square
 
 ```
  harbor run  ──►  main service (coding agent edits /work/agent/packing.py)
-                        │  vero harbor eval  (self-score during the run)
+                        │  evals run  (self-score during the run)
                         ▼
                   eval-sidecar  ──►  CommandBackend → harness/evaluate.py
                   (trusted: scoring, budget, disclosure, final selection)
@@ -36,7 +36,7 @@ with `vero harbor serve --factory circle_factory:build` (see
 | `environment/sidecar/circle_factory.py` | Wires the `CommandBackend`, sidecar policies, objective, verifier |
 | `environment/sidecar/harness/evaluate.py` | The scorer (`sum_radii`, `valid`, clearances) |
 | `environment/agent-baseline/` | Trusted baseline the sidecar scores against |
-| `solution/solve.sh` | Reference: self-score via `vero harbor eval` |
+| `solution/solve.sh` | Reference: self-score via `evals run` |
 | `tests/test.sh` | Verifier: `vero harbor finalize` → `/logs/verifier/reward.json` |
 
 The objective is `sum_radii` (maximize) subject to `valid == 1`; the baseline

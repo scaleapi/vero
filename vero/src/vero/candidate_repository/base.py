@@ -10,7 +10,6 @@ from vero.candidate import Candidate
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
-
 WorkspaceT = TypeVar("WorkspaceT", bound=Workspace)
 
 

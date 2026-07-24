@@ -15,8 +15,8 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.harbor import (
-    SidecarEvaluationPolicy,
     HarborBackendConfig,
+    SidecarEvaluationPolicy,
     VerificationTarget,
     build_harbor_components,
 )

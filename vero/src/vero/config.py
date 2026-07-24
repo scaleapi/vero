@@ -14,8 +14,8 @@ from uuid import uuid4
 from pydantic import Field, JsonValue, model_validator
 
 from vero.evaluation import (
-    AllCases,
     AgentSelectionMode,
+    AllCases,
     CaseIds,
     CaseRange,
     CommandBackend,

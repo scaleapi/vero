@@ -108,7 +108,7 @@ flowchart LR
     A["Optimizer container<br/>agent edits the candidate<br/>+ calls the CLI"]
     S["Eval sidecar (trusted)<br/>owns cases, scoring,<br/>budgets, finalization"]
     G["Inference gateway (trusted)<br/>holds the upstream key,<br/>issues scoped tokens"]
-    A -->|"vero harbor eval"| S
+    A -->|"evals run"| S
     A -->|"scoped model calls"| G
     G --> U["Provider / litellm proxy"]
 ```
@@ -186,8 +186,8 @@ build.yaml --output task` compiles without running, for inspection.
 > Harbor constructs the agent; a raw `harbor run` would let the agent adapter
 > read the upstream key from its own host process first.
 
-Inside the container the agent evaluates candidates with `vero harbor eval
---detach`, then `eval-status` / `eval-result` / `status` (via `VERO_EVAL_URL`).
+Inside the container the agent evaluates candidates with `evals run
+--detach`, then `evals status JOB` / `evals result JOB` / `evals status` (via `VERO_EVAL_URL`).
 Detached evaluations are **durable jobs** — the candidate version is captured
 before the command returns, so ending the agent process can't lose or race a
 running measurement.

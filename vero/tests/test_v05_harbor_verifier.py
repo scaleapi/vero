@@ -28,7 +28,6 @@ from vero.harbor import (
     VerificationTarget,
 )
 
-
 OBJECTIVE = ObjectiveSpec(
     selector=MetricSelector(metric="score"),
     direction="maximize",

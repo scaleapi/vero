@@ -22,15 +22,15 @@ from vero.runtime.factory import (
     create_optimization_session,
 )
 from vero.runtime.session import (
-    OptimizationSession,
     OptimizationComponentSpec,
     OptimizationRunSpec,
+    OptimizationSession,
     SessionFailure,
     SessionManifest,
     SessionStatus,
 )
-from vero.staging import SandboxStagingArea
 from vero.runtime.wandb import WandbEventSink
+from vero.staging import SandboxStagingArea
 
 __all__ = [
     "ArtifactStore",

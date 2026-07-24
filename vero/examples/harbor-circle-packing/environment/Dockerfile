@@ -1,6 +1,6 @@
 # Main service: the optimizer workbench a coding agent works in.
 # Holds the editable target program plus the VeRO CLI so the agent can call
-# `vero harbor eval` / `vero harbor status` against the trusted sidecar.
+# `evals run` / `evals status` against the trusted sidecar.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm
 
 RUN apt-get update \

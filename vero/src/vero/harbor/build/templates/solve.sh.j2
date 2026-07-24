@@ -7,11 +7,11 @@ git config user.email optimizer@example.test
 echo "# optimizer candidate" >> README.md 2>/dev/null || echo "candidate" > NOTES.md
 git add -A
 git commit -m "optimizer candidate"
-vero harbor eval \
+evals run \
   --backend {{ selection_backend }} \
   --evaluation-set {{ evaluation_set_name }} \
   --partition {{ selection_partition }}
 {% if submit_enabled %}
-vero harbor submit
+evals submit
 {% endif %}
-vero harbor status
+evals status

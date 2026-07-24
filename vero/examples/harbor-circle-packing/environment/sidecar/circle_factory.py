@@ -29,7 +29,11 @@ from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.serve import SidecarComponents
 from vero.harbor.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
 from vero.harbor.transport import GitCandidateTransport
-from vero.harbor.verifier import CanonicalVerifier, VerificationSelection, VerificationTarget
+from vero.harbor.verifier import (
+    CanonicalVerifier,
+    VerificationSelection,
+    VerificationTarget,
+)
 from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace
 

@@ -238,6 +238,9 @@ class HarborBuildConfig(EvaluationModel):
     wandb: WandbSpec | None = None
     read_only_paths: list[str] = Field(default_factory=list)
     workspace_overlays: list[WorkspaceOverlaySpec] = Field(default_factory=list)
+    # Bake vero's packaged `evals` skill (skills/evals/SKILL.md) into the
+    # optimizer workspace so any coding agent learns the CLI + .evals layout.
+    include_evals_skill: bool = True
     instruct_multifidelity: bool = True
     instruct_exhaust_budget: bool = True
     # Master switch for budget *disclosure* to the optimizer (not enforcement).
