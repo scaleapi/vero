@@ -662,6 +662,10 @@ class HarborBackend:
             else:
                 environment["OPENAI_API_KEY"] = gateway_token
                 environment["OPENAI_BASE_URL"] = gateway_url
+            # Task packages that template `${OPENAI_API_BASE}` (litellm-style
+            # name, e.g. swe-atlas-qna's rubric judge) get the same endpoint.
+            if "OPENAI_BASE_URL" in environment:
+                environment["OPENAI_API_BASE"] = environment["OPENAI_BASE_URL"]
         return environment
 
     def _source_args(self, task_source: str, *, local: bool) -> list[str]:

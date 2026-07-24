@@ -96,6 +96,8 @@ def test_environment_default_routes_agent_through_gateway_on_openai(tmp_path):
     assert env["OPENAI_BASE_URL"] == (
         "http://inference-gateway:8001/scopes/evaluation/eval-1/v1"
     )
+    # litellm-style alias used by task verifier env templates
+    assert env["OPENAI_API_BASE"] == env["OPENAI_BASE_URL"]
     assert "VERO_AGENT_INFERENCE_API_KEY" not in env
 
 
@@ -115,6 +117,7 @@ def test_environment_routes_task_services_to_upstream(tmp_path, monkeypatch):
     # task-owned eval services reach the real upstream via OPENAI_*
     assert env["OPENAI_API_KEY"] == "upstream-key"
     assert env["OPENAI_BASE_URL"] == "https://upstream/v1"
+    assert env["OPENAI_API_BASE"] == "https://upstream/v1"
     # the candidate agent keeps the metered gateway on dedicated vars
     assert env["VERO_AGENT_INFERENCE_API_KEY"] == "gw-token"
     assert env["VERO_AGENT_INFERENCE_BASE_URL"] == (
