@@ -13,7 +13,6 @@ task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: officeqa_agent.agent:OfficeQaAgent
 harbor_requirement: harbor[modal]==0.20.0
-extra_harbor_args: ["--no-force-build"]
 
 partition_files:
   development: ../partitions/development.json
@@ -53,8 +52,9 @@ rescore_attempts: 1
 
 model: openai/gpt-5.4-mini-2026-03-17
 environment_name: modal
-# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
-extra_harbor_args: ["--ek", "app_name=harness-engineering-bench"]
+# --no-force-build pulls the prebuilt officeqa-corpus image (see task_source
+# note above); the --ek groups inner sandboxes under one dedicated Modal app.
+extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-engineering-bench"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
