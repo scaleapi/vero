@@ -559,6 +559,7 @@ def compile_harbor_task(
                 {
                     "directory": INFERENCE_REQUEST_LOG_DIR,
                     "body_bytes": config.inference_gateway.request_log_body_bytes,
+                    "attribution": config.inference_gateway.request_log_attribution,
                 }
                 if config.inference_gateway.log_requests
                 else None

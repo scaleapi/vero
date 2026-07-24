@@ -497,20 +497,39 @@ class EvaluationSidecar:
                 f"{policy.access.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
+    _BUDGET_METRIC_PREFIXES = ("inference_", "agent_reported_")
+
     def _redact_budget_metrics(self, record: EvaluationRecord) -> EvaluationRecord:
-        """Budget-blind mode: the inference_* cost metrics are budget signal
-        and must not reach the agent (enforcement is unchanged)."""
+        """Budget-blind mode: cost metrics — gateway-metered ``inference_*``
+        and self-declared ``agent_reported_*``, report- and case-level — are
+        budget signal and must not reach the agent (enforcement unchanged)."""
         if self.disclose_budget:
             return record
-        metrics = {
-            key: value
-            for key, value in record.report.metrics.items()
-            if not key.startswith("inference_")
-        }
-        if len(metrics) == len(record.report.metrics):
+
+        def keep(metrics: dict[str, float]) -> dict[str, float]:
+            return {
+                key: value
+                for key, value in metrics.items()
+                if not key.startswith(self._BUDGET_METRIC_PREFIXES)
+            }
+
+        metrics = keep(record.report.metrics)
+        cases = [
+            case.model_copy(update={"metrics": kept})
+            if len(kept := keep(case.metrics)) != len(case.metrics)
+            else case
+            for case in record.report.cases
+        ]
+        if len(metrics) == len(record.report.metrics) and all(
+            kept is original for kept, original in zip(cases, record.report.cases)
+        ):
             return record
         return record.model_copy(
-            update={"report": record.report.model_copy(update={"metrics": metrics})}
+            update={
+                "report": record.report.model_copy(
+                    update={"metrics": metrics, "cases": cases}
+                )
+            }
         )
 
     def _visible_projections(

@@ -518,3 +518,173 @@ def test_gateway_request_log_rotation_boundary(tmp_path):
         len(path.read_text().splitlines()) for path in files
     )
     assert total == 6
+
+
+def _attributed_config(tmp_path, **kwargs):
+    from vero.harbor.inference import InferenceRequestLogConfig
+
+    return _config(tmp_path, **kwargs).model_copy(
+        update={
+            "request_log": InferenceRequestLogConfig(
+                directory=str(tmp_path / "requests"),
+                body_bytes=1024,
+                attribution=True,
+            )
+        }
+    )
+
+
+def test_gateway_attribution_threads_stateful_and_stateless_requests(tmp_path):
+    calls = {"n": 0}
+
+    def upstream(request: httpx.Request):
+        calls["n"] += 1
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            payload = (
+                f'event: response.created\ndata: {{"type":"response.created",'
+                f'"response":{{"id":"resp_stream{calls["n"]}"}}}}\n\n'
+                'event: response.completed\ndata: {"type":"response.completed",'
+                '"response":{"usage":{"input_tokens":1,"output_tokens":1,'
+                '"total_tokens":2}}}\n\n'
+            )
+            return httpx.Response(
+                200, content=payload, headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(
+            200,
+            json={"id": f"resp_{calls['n']}", "usage": {"input_tokens": 1}},
+        )
+
+    app = create_inference_gateway_app(
+        config=_attributed_config(tmp_path, max_requests=None, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer scoped-token"}
+        # responses API: root turn, then a stateful follow-up with no prompt
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers=headers,
+            json={"model": "gpt-test", "input": "Solve task 42: find the answer"},
+        )
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers=headers,
+            json={"model": "gpt-test", "previous_response_id": "resp_1", "input": []},
+        )
+        # a streamed root and a follow-up chained onto its SSE-delivered id
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers=headers,
+            json={"model": "gpt-test", "input": "Another task entirely", "stream": True},
+        )
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers=headers,
+            json={
+                "model": "gpt-test",
+                "previous_response_id": "resp_stream3",
+                "input": [],
+            },
+        )
+        # anthropic-messages shape: giant system prompt, threading keys off the
+        # first user message; the second call resends history (stateless)
+        system = "x" * 30000
+        client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers=headers,
+            json={
+                "model": "gpt-test",
+                "system": system,
+                "messages": [
+                    {"role": "user", "content": "Solve task 42: find the answer"},
+                ],
+            },
+        )
+        client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers=headers,
+            json={
+                "model": "gpt-test",
+                "system": system,
+                "messages": [
+                    {"role": "user", "content": "Solve task 42: find the answer"},
+                    {"role": "assistant", "content": [{"type": "text", "text": "hm"}]},
+                    {"role": "user", "content": "continue"},
+                ],
+            },
+        )
+
+    records = _log_records(tmp_path)
+    assert len(records) == 6
+    threads = [record.get("thread_id") for record in records]
+    assert all(threads)
+    # stateful follow-ups inherit their root's thread
+    assert threads[1] == threads[0]
+    assert threads[3] == threads[2]
+    assert threads[2] != threads[0]
+    # stateless resends group by first-user-message digest — and the messages
+    # conversation shares its root text with the first responses thread
+    assert threads[4] == threads[5] == threads[0]
+    assert records[0]["root_snippet"].startswith("Solve task 42")
+    assert records[0]["thread_root_digest"] == records[4]["thread_root_digest"]
+    # chained records carry the thread but no root fields
+    assert "root_snippet" not in records[1]
+
+
+def test_gateway_attribution_never_breaks_proxying(tmp_path):
+    app = create_inference_gateway_app(
+        config=_attributed_config(tmp_path, max_requests=None, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"id": 7, "usage": {}})
+        ),
+    )
+    hostile_bodies = [
+        {"model": "gpt-test", "input": {"nested": {"weird": True}}},
+        {"model": "gpt-test", "messages": [{"role": "user", "content": [1, None]}]},
+        {"model": "gpt-test", "messages": "not-a-list", "previous_response_id": 9},
+        {"model": "gpt-test", "input": [{"role": "user", "content": {"a": "b"}}]},
+    ]
+    with TestClient(app) as client:
+        for body in hostile_bodies:
+            response = client.post(
+                "/scopes/producer/optimizer/v1/responses",
+                headers={"Authorization": "Bearer scoped-token"},
+                json=body,
+            )
+            assert response.status_code == 200
+    assert len(_log_records(tmp_path)) == len(hostile_bodies)
+
+
+def test_gateway_attribution_disabled_by_default_and_memory_bounded(tmp_path):
+    from vero.harbor.inference import _RequestAttributor
+
+    # default config: no attributor, no thread fields in records
+    app = create_inference_gateway_app(
+        config=_logged_config(tmp_path, max_requests=None, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"usage": {}})
+        ),
+    )
+    assert app.state.request_attributor is None
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hello"},
+        )
+    (record,) = _log_records(tmp_path)
+    assert "thread_id" not in record
+
+    # FIFO caps hold under churn
+    attributor = _RequestAttributor()
+    attributor._CAP = 10
+    for index in range(50):
+        fields = attributor.stamp_request({"input": f"root {index}"})
+        attributor.register_response(fields, f'{{"id":"resp_{index}"}}'.encode())
+    assert len(attributor._root_threads) <= 10
+    assert len(attributor._response_threads) <= 10
+    assert attributor.errors == 0

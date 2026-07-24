@@ -985,6 +985,31 @@ class HarborBackend:
         ]
         return max(durations) if durations else None
 
+    @staticmethod
+    def _agent_reported_tokens(attempts: list[dict[str, Any]]) -> dict[str, float]:
+        """Sum the agent-self-reported token counts across a case's attempts.
+
+        Harbor agents record their own usage in ``agent_result`` (stock
+        adapters and the baseline agents alike). Self-declared, so telemetry
+        grade — the gateway's per-evaluation ``inference_*`` metrics remain
+        the trusted envelope.
+        """
+        names = {
+            "n_input_tokens": "agent_reported_input_tokens",
+            "n_cache_tokens": "agent_reported_cached_input_tokens",
+            "n_output_tokens": "agent_reported_output_tokens",
+        }
+        totals: dict[str, float] = {}
+        for attempt in attempts:
+            result = attempt.get("agent_result")
+            if not isinstance(result, dict):
+                continue
+            for source, metric in names.items():
+                value = result.get(source)
+                if isinstance(value, (int, float)) and math.isfinite(float(value)):
+                    totals[metric] = totals.get(metric, 0.0) + float(value)
+        return totals
+
     def _case_result(
         self,
         case: HarborCase,
@@ -994,6 +1019,7 @@ class HarborBackend:
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
         wall_seconds = self._case_wall_seconds(attempts)
+        reported_tokens = self._agent_reported_tokens(attempts)
         attempt_detail = [
             {
                 "reward": self._attempt_reward(attempt),
@@ -1046,6 +1072,7 @@ class HarborBackend:
                                 if wall_seconds is not None
                                 else {}
                             ),
+                            **reported_tokens,
                         },
                         input={"task_name": case.task_name, **case.metadata},
                         output=output,
@@ -1077,6 +1104,7 @@ class HarborBackend:
             numeric_rewards["score"] = score
             if wall_seconds is not None:
                 numeric_rewards["wall_seconds"] = wall_seconds
+            numeric_rewards.update(reported_tokens)
             return (
                 CaseResult(
                     case_id=case.id,
@@ -1476,6 +1504,16 @@ class HarborBackend:
             for case in case_results
             if isinstance((wall := case.metrics.get("wall_seconds")), (int, float))
         ]
+        reported_totals: dict[str, float] = {}
+        for case in case_results:
+            for key, value in case.metrics.items():
+                if key.startswith("agent_reported_") and isinstance(
+                    value, (int, float)
+                ):
+                    total_key = key.replace("agent_reported_", "agent_reported_total_")
+                    reported_totals[total_key] = (
+                        reported_totals.get(total_key, 0.0) + float(value)
+                    )
         report = EvaluationReport(
             status=EvaluationStatus.SUCCESS,
             metrics={
@@ -1498,6 +1536,7 @@ class HarborBackend:
                     if case_walls
                     else {}
                 ),
+                **reported_totals,
                 **self._inference_usage_metrics(context.evaluation_id),
             },
             cases=case_results,

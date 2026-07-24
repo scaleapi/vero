@@ -509,6 +509,11 @@ async def test_harbor_backend_reports_latency_and_inference_telemetry(tmp_path):
                     "verifier_result": {"rewards": {"reward": 1.0}},
                     "started_at": "2026-01-01T00:00:00Z",
                     "finished_at": "2026-01-01T00:01:30Z",
+                    "agent_result": {
+                        "n_input_tokens": 1000,
+                        "n_cache_tokens": 600,
+                        "n_output_tokens": 50,
+                    },
                 }
             ],
             "example/beta": [
@@ -516,6 +521,11 @@ async def test_harbor_backend_reports_latency_and_inference_telemetry(tmp_path):
                     "verifier_result": {"rewards": {"reward": 0.0}},
                     "started_at": "2026-01-01T00:00:00Z",
                     "finished_at": "2026-01-01T00:00:30Z",
+                    "agent_result": {
+                        "n_input_tokens": 200,
+                        "n_cache_tokens": 0,
+                        "n_output_tokens": 25,
+                    },
                 }
             ],
         },
@@ -540,6 +550,14 @@ async def test_harbor_backend_reports_latency_and_inference_telemetry(tmp_path):
     assert report.metrics["inference_cached_input_tokens"] == 400.0
     assert report.metrics["inference_output_tokens"] == 300.0
     assert report.metrics["inference_total_tokens"] == 1400.0
+    # agent-self-reported usage: per case and summed at report level, under a
+    # prefix distinct from the trusted gateway-metered inference_* metrics
+    assert by_id["case-a"].metrics["agent_reported_input_tokens"] == 1000.0
+    assert by_id["case-a"].metrics["agent_reported_cached_input_tokens"] == 600.0
+    assert by_id["case-b"].metrics["agent_reported_output_tokens"] == 25.0
+    assert report.metrics["agent_reported_total_input_tokens"] == 1200.0
+    assert report.metrics["agent_reported_total_cached_input_tokens"] == 600.0
+    assert report.metrics["agent_reported_total_output_tokens"] == 75.0
     # accuracy remains the primary metric, untouched by telemetry
     assert report.metrics["score"] == 0.5
 

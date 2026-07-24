@@ -509,12 +509,26 @@ async def test_sidecar_context_survives_restart_without_disclosing_admin_runs(
 class CostReportingBackend(StubBackend):
     async def evaluate(self, *, context, request):
         report = await super().evaluate(context=context, request=request)
+        cases = [
+            case.model_copy(
+                update={
+                    "metrics": {
+                        **case.metrics,
+                        "agent_reported_input_tokens": 111.0,
+                        "wall_seconds": 7.0,
+                    }
+                }
+            )
+            for case in report.cases
+        ]
         return report.model_copy(
             update={
+                "cases": cases,
                 "metrics": {
                     **report.metrics,
                     "inference_total_tokens": 12345.0,
                     "inference_cached_input_tokens": 678.0,
+                    "agent_reported_total_input_tokens": 555.0,
                     "mean_case_wall_seconds": 42.0,
                 }
             }
@@ -556,11 +570,42 @@ async def test_budget_blind_sidecar_redacts_inference_metrics(tmp_path):
     )
     context_metrics = document["result"]["metrics"]
     assert "inference_total_tokens" not in context_metrics
+    assert "agent_reported_total_input_tokens" not in context_metrics
     assert context_metrics["mean_case_wall_seconds"] == 42.0
 
-    # the trusted record is untouched
+    # the trusted record is untouched, including per-case cost metrics
     record = blind.engine.database.get_evaluation(response.receipt.evaluation_id)
     assert record.report.metrics["inference_total_tokens"] == 12345.0
+    assert record.report.metrics["agent_reported_total_input_tokens"] == 555.0
+    assert record.report.cases[0].metrics["agent_reported_input_tokens"] == 111.0
+
+    # full disclosure in budget-blind mode: per-case cost metrics are redacted
+    # from the agent-visible case files too, while wall_seconds stays
+    full = await blind.evaluate(
+        SidecarEvaluationRequest(
+            backend_id="secondary",
+            evaluation_set=EvaluationSet(name="public"),
+        )
+    )
+    full_doc = json.loads(
+        (
+            tmp_path
+            / "agent-volume/results"
+            / context_digest(full.receipt.evaluation_id)
+            / "evaluation.json"
+        ).read_text()
+    )
+    case_file = full_doc["result"]["case_files"][0]["path"]
+    case_doc = json.loads(
+        (
+            tmp_path
+            / "agent-volume/results"
+            / context_digest(full.receipt.evaluation_id)
+            / case_file
+        ).read_text()
+    )
+    assert "agent_reported_input_tokens" not in case_doc["result"]["metrics"]
+    assert case_doc["result"]["metrics"]["wall_seconds"] == 7.0
 
     # with budget disclosure on, the same metrics flow to the agent
     disclosed, _, _ = _sidecar(tmp_path / "disclosed", disclose_budget=True)

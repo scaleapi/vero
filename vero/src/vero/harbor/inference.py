@@ -7,8 +7,10 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import time
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -75,6 +77,9 @@ class InferenceRequestLogConfig(EvaluationModel):
     directory: str = "/state/inference/requests"
     body_bytes: int = Field(default=16384, ge=0)
     rotate_bytes: int = Field(default=64 * 1024 * 1024, ge=1_048_576)
+    # Experimental: stamp each record with a provider-agnostic conversation
+    # thread (see _RequestAttributor) for post-hoc per-trial accounting.
+    attribution: bool = False
 
     @field_validator("directory")
     @classmethod
@@ -463,6 +468,121 @@ class InferenceRequestLog:
             handle.write(data)
 
 
+class _RequestAttributor:
+    """Experimental provider-agnostic conversation threading for the request
+    log (``request_log.attribution``).
+
+    Stamps each record with a ``thread_id`` so post-hoc analysis can group a
+    trial's requests without content matching: stateful chains (the responses
+    API's ``previous_response_id``) inherit their parent's thread, and
+    stateless full-history surfaces (chat completions, Anthropic Messages)
+    group by a digest of the conversation's first user message.
+
+    Best-effort by construction — every public method swallows all exceptions
+    and returns empty results, so it can never affect proxying. Memory is
+    bounded by two capped FIFO maps; CPU is bounded because the request body
+    is the dict the proxy already parsed and response scanning is one regex
+    over an at-most-8KB head.
+    """
+
+    _CAP = 100_000
+    _SNIPPET_CHARS = 200
+    _DIGEST_CHARS = 2048
+    _RESPONSE_ID_PATTERN = re.compile(rb'"id"\s*:\s*"(resp_[A-Za-z0-9_-]+)"')
+
+    def __init__(self):
+        self._response_threads: OrderedDict[str, str] = OrderedDict()
+        self._root_threads: OrderedDict[str, str] = OrderedDict()
+        self.errors = 0
+
+    @staticmethod
+    def _content_text(content: Any) -> str:
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    text = block.get("text") or block.get("content")
+                    if isinstance(text, str):
+                        parts.append(text)
+            return "\n".join(parts)
+        return ""
+
+    @classmethod
+    def _first_user_text(cls, value: dict[str, Any]) -> str | None:
+        """The conversation root: the first user turn, skipping system and
+        developer content (which is harness-constant, not trial-specific)."""
+        items = value.get("messages")
+        if not isinstance(items, list):
+            items = value.get("input")
+        if isinstance(items, str):
+            return items or None
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if isinstance(item, dict) and item.get("role") == "user":
+                text = cls._content_text(item.get("content"))
+                if text:
+                    return text
+        return None
+
+    def _remember(self, store: OrderedDict[str, str], key: str, value: str) -> None:
+        store[key] = value
+        while len(store) > self._CAP:
+            store.popitem(last=False)
+
+    def stamp_request(self, value: Any) -> dict[str, str]:
+        try:
+            if not isinstance(value, dict):
+                return {}
+            previous = value.get("previous_response_id")
+            if isinstance(previous, str) and previous in self._response_threads:
+                return {"thread_id": self._response_threads[previous]}
+            text = self._first_user_text(value)
+            if not text:
+                if isinstance(previous, str) and previous:
+                    # Chained onto a response we never saw (e.g. a gateway
+                    # restart): still give the tail of the chain one thread.
+                    thread = secrets.token_hex(8)
+                    self._remember(self._response_threads, previous, thread)
+                    return {"thread_id": thread}
+                return {}
+            normalized = "".join(
+                character for character in text.lower() if character.isalnum()
+            )[: self._DIGEST_CHARS]
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            thread = self._root_threads.get(digest)
+            if thread is None:
+                thread = secrets.token_hex(8)
+                self._remember(self._root_threads, digest, thread)
+            return {
+                "thread_id": thread,
+                "thread_root_digest": digest,
+                "root_snippet": text[: self._SNIPPET_CHARS],
+            }
+        except Exception:
+            self.errors += 1
+            return {}
+
+    def register_response(
+        self, fields: dict[str, str] | None, head: bytes
+    ) -> None:
+        try:
+            thread = (fields or {}).get("thread_id")
+            if not thread or not head:
+                return
+            match = self._RESPONSE_ID_PATTERN.search(head[:8192])
+            if match is not None:
+                self._remember(
+                    self._response_threads, match.group(1).decode("ascii"), thread
+                )
+        except Exception:
+            self.errors += 1
+
+
 _REQUEST_HEADERS = {
     "accept",
     "content-type",
@@ -519,6 +639,11 @@ def create_inference_gateway_app(
         if config.request_log is not None
         else None
     )
+    attributor = (
+        _RequestAttributor()
+        if request_log is not None and config.request_log.attribution
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -533,6 +658,7 @@ def create_inference_gateway_app(
     app = FastAPI(title="VeRO inference gateway", version="1", lifespan=lifespan)
     app.state.usage_store = store
     app.state.request_log = request_log
+    app.state.request_attributor = attributor
 
     @app.get("/health")
     async def health():
@@ -595,6 +721,9 @@ def create_inference_gateway_app(
             return _provider_error(400, "request body must be JSON", "invalid_request")
 
         started = time.monotonic()
+        thread_fields = (
+            attributor.stamp_request(value) if attributor is not None else {}
+        )
 
         async def log_request(
             *,
@@ -623,6 +752,7 @@ def create_inference_gateway_app(
                 upstream_error=upstream_error,
                 request=request_log.body(body),
                 response=response,
+                **thread_fields,
             )
         # Per-scope allow-list: producer (optimizer) and evaluation (target) have
         # separate tokens + allowed_models, so the target is normally confined to
@@ -710,6 +840,12 @@ def create_inference_gateway_app(
                             cached_input_tokens=observed.tokens[3],
                             upstream_error=failed,
                         )
+                        if attributor is not None and captured is not None:
+                            # The response id sits in the first SSE event, so
+                            # the captured head is enough to link the chain.
+                            attributor.register_response(
+                                thread_fields, bytes(captured.head)
+                            )
                         await log_request(
                             status=upstream.status_code,
                             stream=True,
@@ -771,6 +907,8 @@ def create_inference_gateway_app(
                 upstream_error=upstream.status_code >= 400,
             )
         )
+        if attributor is not None:
+            attributor.register_response(thread_fields, content[:8192])
         await log_request(
             status=upstream.status_code,
             tokens=tokens,

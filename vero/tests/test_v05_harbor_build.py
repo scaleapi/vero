@@ -333,12 +333,32 @@ def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path)
         != backend["inference_gateway_token"]
     )
     # Per-request logging is on by default: the gateway captures every
-    # request/response on its state volume and the sidecar mirrors it.
+    # request/response on its state volume and the sidecar mirrors it. The
+    # experimental thread-attribution stamping stays off unless opted into.
     assert gateway["request_log"] == {
         "directory": "/state/inference/requests",
         "body_bytes": 16384,
+        "attribution": False,
     }
     assert serve["inference_request_log_dir"] == "/state/inference/requests"
+
+
+def test_compiler_emits_request_log_attribution_when_enabled(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+            request_log_attribution=True,
+        ),
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    gateway = json.loads(
+        (output / "environment/gateway/config.json").read_text(encoding="utf-8")
+    )
+    assert gateway["request_log"]["attribution"] is True
 
 
 def test_compiler_omits_request_log_when_disabled(tmp_path):

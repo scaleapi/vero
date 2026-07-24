@@ -107,6 +107,9 @@ class InferenceGatewaySpec(EvaluationModel):
     # archive.
     log_requests: bool = True
     request_log_body_bytes: int = Field(default=16384, ge=0)
+    # Experimental: stamp request-log records with provider-agnostic
+    # conversation threads for post-hoc per-trial accounting. Off by default.
+    request_log_attribution: bool = False
 
     @field_validator("upstream_api_key_env", "upstream_base_url_env")
     @classmethod
