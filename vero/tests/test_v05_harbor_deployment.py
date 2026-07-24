@@ -9,6 +9,7 @@ import pytest
 
 from vero.evaluation import (
     DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationBudget,
     EvaluationSet,
     MetricSelector,
@@ -88,7 +89,9 @@ async def test_standard_deployment_factory_builds_one_canonical_runtime(tmp_path
                 evaluation_set_name="benchmark",
                 partition="validation",
                 objective=objective,
-                disclosure=DisclosureLevel.AGGREGATE,
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.AGGREGATE
+                ),
             ).model_dump(mode="json")
         ],
         "budgets": [budget.model_dump(mode="json")],

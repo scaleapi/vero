@@ -13,6 +13,7 @@ import vero.evaluation.budget as budget_module
 from vero.candidate import Candidate
 from vero.evaluation import (
     AgentSelectionMode,
+    AllCases,
     BackendProvenance,
     BackendRegistry,
     BudgetLedger,
@@ -902,3 +903,72 @@ async def test_engine_selects_backend_persists_and_projects(tmp_path: Path):
     assert summary.metrics == {"value": 2.0}
     assert len(database.evaluations) == 1
     assert database_path.exists()
+@pytest.mark.asyncio
+async def test_engine_enforces_aggregate_k_anonymity_floor(tmp_path: Path):
+    """The floor is a core-engine property, not a sidecar courtesy."""
+    canonical = EvaluationSet(name="validation", selection=CaseRange(stop=10))
+    plan = EvaluationPlan(
+        evaluations=[
+            EvaluationDefinition(
+                evaluation_set=canonical,
+                # min_aggregate_cases omitted: resolves to the safe floor (5).
+                access=EvaluationAccessPolicy(disclosure=DisclosureLevel.AGGREGATE),
+            )
+        ],
+        selection_evaluation="validation",
+    )
+
+    def engine_with(cost: EvaluationCost) -> EvaluationEngine:
+        return EvaluationEngine(
+            evaluator=evaluator(tmp_path, StubWorkspace(tmp_path / "repo")),
+            backends=BackendRegistry({"default": StubBackend(cost=cost)}),
+            database=EvaluationDatabase(id="session"),
+            authorization_resolver=authorize_evaluation_plan(plan),
+        )
+
+    def request_with(selection) -> EvaluationRequest:
+        return request().model_copy(
+            update={
+                "evaluation_set": canonical.model_copy(
+                    update={"selection": selection}
+                )
+            }
+        )
+
+    # 1) An agent-chosen 2-case aggregate subset is refused by the engine.
+    with pytest.raises(EvaluationDeniedError, match="at least 5 cases"):
+        await engine_with(EvaluationCost(cases=2)).evaluate(
+            backend_id="default",
+            request=request_with(CaseRange(stop=2)),
+            principal=EvaluationPrincipal.AGENT,
+        )
+
+    # 2) A subset without exact case costs cannot be floored: refused.
+    with pytest.raises(EvaluationDeniedError, match="exact case costs"):
+        await engine_with(EvaluationCost(cases=None)).evaluate(
+            backend_id="default",
+            request=request_with(CaseRange(stop=2)),
+            principal=EvaluationPrincipal.AGENT,
+        )
+
+    # 3) A subset at the floor passes.
+    await engine_with(EvaluationCost(cases=5)).evaluate(
+        backend_id="default",
+        request=request_with(CaseRange(stop=5)),
+        principal=EvaluationPrincipal.AGENT,
+    )
+
+    # 4) The complete selection is exempt: its aggregate is the intended
+    #    disclosure, however small the set.
+    await engine_with(EvaluationCost(cases=2)).evaluate(
+        backend_id="default",
+        request=request_with(AllCases()),
+        principal=EvaluationPrincipal.AGENT,
+    )
+
+    # 5) Trusted principals are never floored.
+    await engine_with(EvaluationCost(cases=2)).evaluate(
+        backend_id="default",
+        request=request_with(CaseRange(stop=2)),
+        principal=EvaluationPrincipal.ADMIN,
+    )

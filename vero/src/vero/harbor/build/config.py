@@ -13,6 +13,7 @@ from pydantic import ConfigDict, Field, JsonValue, field_validator, model_valida
 
 from vero.evaluation import (
     DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationModel,
     MetricSelector,
     ObjectiveSpec,
@@ -35,6 +36,14 @@ class AgentAccessSpec(EvaluationModel):
         if not value.strip():
             raise ValueError("agent access partition must not be empty")
         return value
+
+    def to_access_policy(self) -> EvaluationAccessPolicy:
+        """The single typed translation from build spec to runtime policy."""
+        return EvaluationAccessPolicy(
+            disclosure=self.disclosure,
+            expose_case_resources=self.expose_case_resources,
+            min_aggregate_cases=self.min_aggregate_cases,
+        )
 
 
 class VerificationTargetSpec(EvaluationModel):

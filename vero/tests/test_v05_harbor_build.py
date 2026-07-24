@@ -467,8 +467,10 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
         (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
     )
     assert set(serve["backends"]) == {"harbor-validation", "harbor-test"}
-    assert serve["access_policies"][0]["disclosure"] == "aggregate"
-    assert serve["access_policies"][0]["expose_case_resources"] is True
+    access = serve["access_policies"][0]["access"]
+    assert access["disclosure"] == "aggregate"
+    assert access["expose_case_resources"] is True
+    assert access["min_aggregate_cases"] == 5  # safe floor survives compilation
     assert serve["budgets"][0]["total_runs"] == 5
     assert serve["selection"]["backend_id"] == "harbor-validation"
     assert serve["targets"][0]["backend_id"] == "harbor-test"

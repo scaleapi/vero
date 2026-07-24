@@ -17,6 +17,7 @@ from vero.evaluation import (
     AllCases,
     CaseResourceExporter,
     DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationAcknowledgement,
     EvaluationAuthorization,
     EvaluationBudget,
@@ -69,13 +70,10 @@ class SidecarEvaluationPolicy(EvaluationModel):
     evaluation_set_name: str
     partition: str | None = None
     objective: ObjectiveSpec | None = None
-    disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
-    expose_case_resources: bool = False
-    agent_evaluable: bool = True
-    # k-anonymity floor: aggregate subset evals must cover >= this many cases so
-    # a single held-out label can't be read off one case at a time. Default 5
-    # (not 1) so a build that omits it is safe rather than unfloored.
-    min_aggregate_cases: int = Field(default=5, ge=1)
+    # The runtime access truth, compiled by AgentAccessSpec.to_access_policy()
+    # (disclosure, case-resource exposure, and the k-anonymity floor for
+    # aggregate subsets all live here, not as parallel flat fields).
+    access: EvaluationAccessPolicy
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     allowed_parameters: list[str] = Field(default_factory=list)
     limits: EvaluationLimits | None = None
@@ -471,7 +469,7 @@ class EvaluationSidecar:
     ) -> SidecarEvaluationPolicy:
         key = (backend_id, evaluation_set.name, evaluation_set.partition)
         policy = self._policies.get(key)
-        if policy is None or not policy.agent_evaluable:
+        if policy is None or not policy.access.agent_can_evaluate:
             raise EvaluationAccessError(
                 "the requested backend and evaluation set are not agent-evaluable"
             )
@@ -482,7 +480,7 @@ class EvaluationSidecar:
         policy: SidecarEvaluationPolicy,
         evaluation_set: EvaluationSet,
     ) -> None:
-        if policy.disclosure != DisclosureLevel.AGGREGATE:
+        if policy.access.disclosure != DisclosureLevel.AGGREGATE:
             return
         if isinstance(evaluation_set.selection, AllCases):
             return
@@ -492,10 +490,10 @@ class EvaluationSidecar:
             raise EvaluationAccessError(
                 "aggregate subset evaluation requires a backend with exact case costs"
             )
-        if cost.cases < policy.min_aggregate_cases:
+        if cost.cases < policy.access.min_aggregate_cases:
             raise EvaluationAccessError(
                 f"aggregate subset evaluations must cover at least "
-                f"{policy.min_aggregate_cases} cases; requested {cost.cases}"
+                f"{policy.access.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
     def _visible_projections(
@@ -513,11 +511,11 @@ class EvaluationSidecar:
                     record.request.evaluation_set.partition,
                 )
             )
-            if policy is None or not policy.agent_evaluable:
+            if policy is None or not policy.access.agent_can_evaluate:
                 continue
             disclosure = narrower_disclosure(
                 entry.maximum_disclosure,
-                policy.disclosure,
+                policy.access.disclosure,
             )
             projections.append(
                 (record, disclosure, project_evaluation(record, disclosure))
@@ -578,8 +576,8 @@ class EvaluationSidecar:
         for policy in self._policies.values():
             backend = self.engine.backends.resolve(policy.backend_id)
             if (
-                not policy.agent_evaluable
-                or not policy.expose_case_resources
+                not policy.access.agent_can_evaluate
+                or not policy.access.expose_case_resources
                 or not isinstance(backend, CaseResourceExporter)
             ):
                 continue
@@ -708,14 +706,15 @@ class EvaluationSidecar:
                 authorization=EvaluationAuthorization(
                     may_evaluate=True,
                     meter_budget=True,
-                    disclosure=policy.disclosure,
-                    expose_case_resources=policy.expose_case_resources,
+                    disclosure=policy.access.disclosure,
+                    expose_case_resources=policy.access.expose_case_resources,
+                    min_aggregate_cases=policy.access.min_aggregate_cases or 1,
                 ),
             )
         except (EvaluationExecutionError, EvaluationCancelledError) as error:
             record = self.engine.database.get_evaluation(error.evaluation_id)
             if record is not None:
-                await self._disclosures.remember(record.id, policy.disclosure)
+                await self._disclosures.remember(record.id, policy.access.disclosure)
                 await asyncio.shield(self._refresh_context())
             raise
         evaluation_id = (
@@ -726,8 +725,8 @@ class EvaluationSidecar:
             raise RuntimeError(
                 f"evaluation engine did not index completed evaluation {evaluation_id!r}"
             )
-        maximum = await self._disclosures.remember(record.id, policy.disclosure)
-        disclosure = narrower_disclosure(maximum, policy.disclosure)
+        maximum = await self._disclosures.remember(record.id, policy.access.disclosure)
+        disclosure = narrower_disclosure(maximum, policy.access.disclosure)
         await self._refresh_context()
         return SidecarEvaluationResult(
             disclosure=disclosure,
@@ -750,7 +749,7 @@ class EvaluationSidecar:
     def status(self) -> SidecarStatus:
         access: list[EvaluationAccessStatus] = []
         for policy in self._policies.values():
-            if not policy.agent_evaluable:
+            if not policy.access.agent_can_evaluate:
                 continue
             evaluation_set = EvaluationSet(
                 name=policy.evaluation_set_name,
@@ -766,9 +765,9 @@ class EvaluationSidecar:
                     backend_id=policy.backend_id,
                     evaluation_set_name=policy.evaluation_set_name,
                     partition=policy.partition,
-                    disclosure=policy.disclosure,
-                    expose_case_resources=policy.expose_case_resources,
-                    min_aggregate_cases=policy.min_aggregate_cases,
+                    disclosure=policy.access.disclosure,
+                    expose_case_resources=policy.access.expose_case_resources,
+                    min_aggregate_cases=policy.access.min_aggregate_cases,
                     allowed_parameters=list(policy.allowed_parameters),
                     limits=policy.limits,
                     # Budget is enforced regardless; disclosure is what we gate.

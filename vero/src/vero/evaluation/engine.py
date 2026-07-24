@@ -24,6 +24,8 @@ from vero.evaluation.exceptions import (
 )
 from vero.evaluation.models import (
     AgentSelectionMode,
+    AllCases,
+    DisclosureLevel,
     EvaluationAcknowledgement,
     EvaluationAuthorization,
     EvaluationPlan,
@@ -104,6 +106,7 @@ def authorize_evaluation_plan(plan: EvaluationPlan) -> AuthorizationResolver:
             meter_budget=definition.agent_budget is not None,
             disclosure=access.disclosure,
             expose_case_resources=access.expose_case_resources,
+            min_aggregate_cases=access.min_aggregate_cases or 1,
             reason=(
                 None
                 if access.agent_can_evaluate
@@ -319,6 +322,24 @@ class EvaluationEngine:
             cost = await backend.resolve_cost(request.evaluation_set)
         except ValueError as error:
             raise EvaluationRequestError(str(error)) from error
+        # k-anonymity floor: an aggregate-disclosed subset must cover enough
+        # cases that a hidden per-case result can't be read off one at a time.
+        # The complete set is exempt — its aggregate is the intended disclosure.
+        if (
+            decision.disclosure == DisclosureLevel.AGGREGATE
+            and decision.min_aggregate_cases > 1
+            and not isinstance(request.evaluation_set.selection, AllCases)
+        ):
+            if cost.cases is None:
+                raise EvaluationDeniedError(
+                    "aggregate subset evaluation requires a backend with "
+                    "exact case costs"
+                )
+            if cost.cases < decision.min_aggregate_cases:
+                raise EvaluationDeniedError(
+                    f"aggregate subset evaluations must cover at least "
+                    f"{decision.min_aggregate_cases} cases; requested {cost.cases}"
+                )
         charged = decision.meter_budget and self.budget_ledger is not None
         if charged:
             await self.budget_ledger.reserve(

@@ -20,6 +20,7 @@ from vero.evaluation import (
     CaseResult,
     CaseStatus,
     DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationAuthorization,
     EvaluationBudget,
     EvaluationCost,
@@ -208,8 +209,10 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False, disclo
                 backend_id="primary",
                 evaluation_set_name="benchmark",
                 partition="validation",
-                disclosure=DisclosureLevel.AGGREGATE,
-                min_aggregate_cases=5,
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.AGGREGATE,
+                    min_aggregate_cases=5,
+                ),
                 objective=ObjectiveSpec(
                     selector=MetricSelector(metric="score"),
                     direction="maximize",
@@ -219,7 +222,7 @@ def _sidecar(tmp_path: Path, *, submit_enabled=False, fixed_limits=False, disclo
             SidecarEvaluationPolicy(
                 backend_id="secondary",
                 evaluation_set_name="public",
-                disclosure=DisclosureLevel.FULL,
+                access=EvaluationAccessPolicy(disclosure=DisclosureLevel.FULL),
             ),
         ],
         agent_volume=tmp_path / "agent-volume",
@@ -700,10 +703,9 @@ async def test_git_candidate_transport_fetches_to_stable_ref(tmp_path, monkeypat
     )
 
 
-def test_sidecar_policy_defaults_to_safe_k_anonymity_floor():
-    from vero.harbor.sidecar import SidecarEvaluationPolicy
-
-    policy = SidecarEvaluationPolicy(
-        backend_id="b", evaluation_set_name="s"
-    )
-    assert policy.min_aggregate_cases == 5
+def test_access_policy_defaults_to_safe_k_anonymity_floor():
+    # The floor now lives on the core policy: omitted resolves to 5 under
+    # aggregate disclosure and 1 otherwise.
+    aggregate = EvaluationAccessPolicy(disclosure=DisclosureLevel.AGGREGATE)
+    assert aggregate.min_aggregate_cases == 5
+    assert EvaluationAccessPolicy().min_aggregate_cases == 1

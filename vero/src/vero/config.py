@@ -99,6 +99,8 @@ class EvaluationConfig(EvaluationModel):
     agent_selection: AgentSelectionMode = AgentSelectionMode.ARBITRARY
     disclosure: DisclosureLevel = DisclosureLevel.FULL
     expose_case_resources: bool = False
+    # Omitted resolves to 5 under aggregate disclosure, 1 otherwise.
+    min_aggregate_cases: int | None = Field(default=None, ge=1)
     agent_budget: BudgetConfig | None = None
     system_budget: BudgetConfig | None = None
 
@@ -137,6 +139,7 @@ class EvaluationConfig(EvaluationModel):
                 agent_selection=self.agent_selection,
                 disclosure=self.disclosure,
                 expose_case_resources=self.expose_case_resources,
+                min_aggregate_cases=self.min_aggregate_cases,
             ),
             agent_budget=(
                 self.agent_budget.to_model(

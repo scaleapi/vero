@@ -633,6 +633,9 @@ class EvaluationAuthorization(EvaluationModel):
     meter_budget: bool = True
     disclosure: DisclosureLevel = DisclosureLevel.FULL
     expose_case_resources: bool = False
+    # Enforced by the engine for agent-chosen aggregate subsets; 1 = no floor
+    # (trusted principals).
+    min_aggregate_cases: int = Field(default=1, ge=1)
     reason: str | None = None
 
     @property
@@ -689,6 +692,11 @@ class EvaluationAccessPolicy(EvaluationModel):
     agent_selection: AgentSelectionMode = AgentSelectionMode.ARBITRARY
     disclosure: DisclosureLevel = DisclosureLevel.FULL
     expose_case_resources: bool = False
+    # k-anonymity floor: agent-chosen aggregate subsets must cover at least
+    # this many cases, so a hidden per-case result can't be read off one case
+    # at a time. Omitted resolves to 5 under AGGREGATE disclosure (safe rather
+    # than unfloored) and 1 otherwise; set explicitly to override.
+    min_aggregate_cases: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_visibility(self) -> EvaluationAccessPolicy:
@@ -696,6 +704,9 @@ class EvaluationAccessPolicy(EvaluationModel):
             raise ValueError("agent-evaluable evaluations must be agent-visible")
         if self.expose_case_resources and not self.agent_visible:
             raise ValueError("agent-invisible evaluations cannot expose case resources")
+        if self.min_aggregate_cases is None:
+            floor = 5 if self.disclosure == DisclosureLevel.AGGREGATE else 1
+            object.__setattr__(self, "min_aggregate_cases", floor)
         return self
 
 
