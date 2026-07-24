@@ -17,14 +17,14 @@ agent_access:
   - partition: development
     disclosure: full
     expose_case_resources: true
-    total_runs: 12
-    total_cases: 120
+    total_runs: 100
+    total_cases: 300
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
     min_aggregate_cases: 5
-    total_runs: 8
-    total_cases: 300
+    total_runs: 100
+    total_cases: 600
 
 selection_partition: validation
 targets:
@@ -38,14 +38,14 @@ objective:
   selector:
     metric: score
   direction: maximize
-reward_mode: auto_best
-baseline_floor: true
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
 score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
 
 model: openai/gpt-5.4-mini-2026-03-17
-environment_name: modal
+environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
@@ -58,9 +58,13 @@ feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
 timeout_seconds: 14400
+# Tasks declare a 3600s agent timeout; 900s is the enforced per-case budget.
+# Provisional - revisit against empirical wall_seconds once runs report it.
+case_timeout_seconds: 900
+task_agent_timeout_seconds: 3600
 max_concurrency: 8
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 14400
+verifier_timeout_seconds: 28800  # 2x timeout_seconds: finalization runs candidate + baseline test evals
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET

@@ -18,11 +18,13 @@ agent_access:
   - partition: development
     disclosure: full
     expose_case_resources: true
+    total_runs: 100
     total_cases: 132
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
     min_aggregate_cases: 5
+    total_runs: 100
     total_cases: 264
 
 selection_partition: validation
@@ -54,7 +56,7 @@ infrastructure_max_attempts: 3
 infrastructure_retry_delay_seconds: 5
 aggregate_attempts: best
 feedback_transcripts: true
-feedback_max_bytes: 12000
+feedback_max_bytes: 16000
 expose_attempt_detail: false
 timeout_seconds: 3600
 case_timeout_seconds: 180
