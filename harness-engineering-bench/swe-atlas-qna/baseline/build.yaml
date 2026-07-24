@@ -86,3 +86,12 @@ inference_gateway:
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
+# The rubric judge runs inside the Modal task container and cannot reach the
+# compose-internal gateway; it gets the real upstream on OPENAI_* while the
+# candidate agent keeps the metered gateway on VERO_AGENT_INFERENCE_*.
+task_services_use_upstream: true
+# ACCEPTED EXPOSURE (non-adversarial optimizer): with isolation off, candidate
+# harness code shares the sidecar uid, so it could read the upstream key and
+# the held-out session state. Runs using this config get a post-run leakage
+# audit of every candidate version. Proper fix: per-role egress isolation.
+harness_user: null
