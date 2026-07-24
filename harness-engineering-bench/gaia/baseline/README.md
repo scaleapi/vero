@@ -34,7 +34,7 @@ program. A separate inference-gateway container holds it. The outer coding
 agent uses a producer-scoped token for `gpt-5.4` or `gpt-5.5`; GAIA candidates use an
 evaluation-scoped token restricted to `gpt-5.4-mini-2026-03-17`. Their request
 and token budgets are recorded separately and are visible through
-`vero harbor status`.
+`evals status`.
 
 Run the outer optimization through VeRO so it can give Harbor's coding-agent
 adapter the scoped credential while forwarding the upstream credential only to
@@ -70,10 +70,10 @@ run it locally against Modal eval backends.
 
 The coding agent edits only `target/`; inner evaluations run the candidate
 against the pinned GAIA tasks on Modal. Complete development tasks and
-attachments are mounted read-only under `.vero/cases/`. After each development
+attachments are mounted read-only under `.evals/tasks/`. After each development
 evaluation, complete Harbor trial records for every case—including exact
 failures and target-agent logs—are available under
-`.vero/evaluations/`. Validation remains aggregate-only, and test remains
+`.evals/results/`. Validation remains aggregate-only, and test remains
 verifier-only.
 
 Before Modal teardown, the shared verifier exports the complete VeRO session
