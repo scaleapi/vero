@@ -202,6 +202,10 @@ async def test_verifier_pools_repeats_then_admin_rescores_and_scores_baseline(tm
     assert result.candidate == steady
     assert result.rewards == {"reward": 0.8}
     assert result.baseline_rewards == {"reward": 0.5}
+    # the scoring evaluations' full report metrics ride along in the durable
+    # result (accuracy plus cost/latency telemetry when the backend emits it)
+    assert result.reward_metrics == {"reward": {"score": 0.8}}
+    assert result.baseline_reward_metrics == {"reward": {"score": 0.5}}
     assert engine.calls == [
         ("steady", "selection"),
         ("baseline", "selection"),

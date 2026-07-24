@@ -94,9 +94,59 @@ def test_gateway_replaces_credentials_enforces_scope_and_persists_usage(tmp_path
         "requests": 1,
         "upstream_errors": 0,
         "input_tokens": 11,
+        "cached_input_tokens": 0,
         "output_tokens": 7,
         "total_tokens": 18,
     }
+
+
+def test_gateway_records_cached_input_tokens(tmp_path):
+    def upstream(request: httpx.Request):
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            payload = (
+                'event: response.completed\ndata: {"type":"response.completed",'
+                '"response":{"usage":{"input_tokens":40,"output_tokens":4,'
+                '"total_tokens":44,"input_tokens_details":{"cached_tokens":32}}}}\n\n'
+            )
+            return httpx.Response(
+                200, content=payload, headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 5,
+                    "total_tokens": 25,
+                    "prompt_tokens_details": {"cached_tokens": 16},
+                }
+            },
+        )
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=None, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/chat/completions",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "messages": []},
+        )
+        client.post(
+            "/scopes/producer/eval-1/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi", "stream": True},
+        )
+
+    persisted = json.loads((tmp_path / "usage.json").read_text())
+    scope = persisted["scopes"]["producer"]
+    # both the chat (prompt_tokens_details) and responses (input_tokens_details)
+    # shapes are recognized, per-attribution and in the scope total
+    assert scope["cached_input_tokens"] == 48
+    assert scope["attributions"]["optimizer"]["cached_input_tokens"] == 16
+    assert scope["attributions"]["eval-1"]["cached_input_tokens"] == 32
 
 
 def test_gateway_records_usage_without_enforcing_omitted_limits(tmp_path):

@@ -466,6 +466,85 @@ async def test_harbor_backend_exposes_complete_successful_trial_records(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_harbor_backend_reports_latency_and_inference_telemetry(tmp_path):
+    usage_path = tmp_path / "usage.json"
+    usage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scopes": {
+                    "evaluation": {
+                        "requests": 99,
+                        "attributions": {
+                            "evaluation": {
+                                "requests": 12,
+                                "input_tokens": 1000,
+                                "cached_input_tokens": 400,
+                                "output_tokens": 250,
+                                "total_tokens": 1250,
+                            },
+                            "other-eval": {"requests": 5, "total_tokens": 9999},
+                        },
+                    },
+                    "finalization": {
+                        "attributions": {
+                            "evaluation": {
+                                "requests": 2,
+                                "input_tokens": 100,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 50,
+                                "total_tokens": 150,
+                            }
+                        }
+                    },
+                },
+            }
+        )
+    )
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:01:30Z",
+                }
+            ],
+            "example/beta": [
+                {
+                    "verifier_result": {"rewards": {"reward": 0.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:30Z",
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(
+        _config(tmp_path, inference_usage_path=str(usage_path))
+    )
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a", "case-b"])),
+    )
+
+    by_id = {case.case_id: case for case in report.cases}
+    assert by_id["case-a"].metrics["wall_seconds"] == 90.0
+    assert by_id["case-b"].metrics["wall_seconds"] == 30.0
+    assert report.metrics["mean_case_wall_seconds"] == 60.0
+    assert report.metrics["max_case_wall_seconds"] == 90.0
+    # this evaluation's attribution only, summed across gateway scopes
+    assert report.metrics["inference_requests"] == 14.0
+    assert report.metrics["inference_input_tokens"] == 1100.0
+    assert report.metrics["inference_cached_input_tokens"] == 400.0
+    assert report.metrics["inference_output_tokens"] == 300.0
+    assert report.metrics["inference_total_tokens"] == 1400.0
+    # accuracy remains the primary metric, untouched by telemetry
+    assert report.metrics["score"] == 0.5
+
+
+@pytest.mark.asyncio
 async def test_harbor_backend_exposes_exact_failed_trial_result(tmp_path):
     detail = "Invalid schema for function 'transcribe_audio': Missing 'language'."
     sandbox = FakeSandbox(

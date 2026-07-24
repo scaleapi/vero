@@ -135,6 +135,8 @@ class InferenceAttributionUsage(EvaluationModel):
     requests: int = Field(default=0, ge=0)
     upstream_errors: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
+    # Provider-reported cache reads; a subset of input_tokens, not additive.
+    cached_input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
 
@@ -241,6 +243,7 @@ class InferenceUsageStore:
         input_tokens: int = 0,
         output_tokens: int = 0,
         total_tokens: int = 0,
+        cached_input_tokens: int = 0,
         upstream_error: bool = False,
     ) -> None:
         try:
@@ -250,6 +253,8 @@ class InferenceUsageStore:
                 update = {
                     "upstream_errors": usage.upstream_errors + int(upstream_error),
                     "input_tokens": usage.input_tokens + input_tokens,
+                    "cached_input_tokens": usage.cached_input_tokens
+                    + cached_input_tokens,
                     "output_tokens": usage.output_tokens + output_tokens,
                     "total_tokens": usage.total_tokens + total_tokens,
                     "active_requests": max(0, usage.active_requests - 1),
@@ -261,6 +266,10 @@ class InferenceUsageStore:
                                 + int(upstream_error),
                                 "input_tokens": attribution_usage.input_tokens
                                 + input_tokens,
+                                "cached_input_tokens": (
+                                    attribution_usage.cached_input_tokens
+                                    + cached_input_tokens
+                                ),
                                 "output_tokens": attribution_usage.output_tokens
                                 + output_tokens,
                                 "total_tokens": attribution_usage.total_tokens
@@ -312,27 +321,33 @@ def _bearer_token(authorization: str | None) -> str | None:
     return authorization[len(prefix) :]
 
 
-def _usage(value: Any) -> tuple[int, int, int]:
+def _usage(value: Any) -> tuple[int, int, int, int]:
     if not isinstance(value, dict):
-        return (0, 0, 0)
+        return (0, 0, 0, 0)
     usage = value.get("usage")
     if not isinstance(usage, dict):
         response = value.get("response")
         usage = response.get("usage") if isinstance(response, dict) else None
     if not isinstance(usage, dict):
-        return (0, 0, 0)
+        return (0, 0, 0, 0)
     input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
     output_tokens = int(
         usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
     )
     total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
-    return (input_tokens, output_tokens, total_tokens)
+    # Responses API nests cache reads under input_tokens_details; chat
+    # completions under prompt_tokens_details.
+    details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
+    cached_tokens = (
+        int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
+    )
+    return (input_tokens, output_tokens, total_tokens, cached_tokens)
 
 
 class _StreamingUsage:
     def __init__(self):
         self.buffer = b""
-        self.tokens = (0, 0, 0)
+        self.tokens = (0, 0, 0, 0)
 
     def feed(self, chunk: bytes) -> None:
         self.buffer += chunk
@@ -348,7 +363,7 @@ class _StreamingUsage:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             tokens = _usage(value)
-            if tokens != (0, 0, 0):
+            if tokens != (0, 0, 0, 0):
                 self.tokens = tokens
 
 
@@ -586,7 +601,7 @@ def create_inference_gateway_app(
             status: int,
             error: str | None = None,
             stream: bool = False,
-            tokens: tuple[int, int, int] = (0, 0, 0),
+            tokens: tuple[int, int, int, int] = (0, 0, 0, 0),
             response: dict[str, Any] | None = None,
             upstream_error: bool = False,
         ) -> None:
@@ -604,6 +619,7 @@ def create_inference_gateway_app(
                 input_tokens=tokens[0],
                 output_tokens=tokens[1],
                 total_tokens=tokens[2],
+                cached_input_tokens=tokens[3],
                 upstream_error=upstream_error,
                 request=request_log.body(body),
                 response=response,
@@ -691,6 +707,7 @@ def create_inference_gateway_app(
                             input_tokens=observed.tokens[0],
                             output_tokens=observed.tokens[1],
                             total_tokens=observed.tokens[2],
+                            cached_input_tokens=observed.tokens[3],
                             upstream_error=failed,
                         )
                         await log_request(
@@ -735,7 +752,7 @@ def create_inference_gateway_app(
             try:
                 tokens = _usage(json.loads(content))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                tokens = (0, 0, 0)
+                tokens = (0, 0, 0, 0)
         except BaseException:
             await asyncio.shield(
                 store.complete(scope_name, attribution, upstream_error=True)
@@ -750,6 +767,7 @@ def create_inference_gateway_app(
                 input_tokens=tokens[0],
                 output_tokens=tokens[1],
                 total_tokens=tokens[2],
+                cached_input_tokens=tokens[3],
                 upstream_error=upstream.status_code >= 400,
             )
         )

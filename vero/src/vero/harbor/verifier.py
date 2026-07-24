@@ -124,6 +124,12 @@ class VerificationResult(EvaluationModel):
     rewards: dict[str, float]
     evaluation_ids: dict[str, str] = Field(default_factory=dict)
     baseline_rewards: dict[str, float] = Field(default_factory=dict)
+    #: Per reward key: the scoring evaluation's full report metrics (accuracy
+    #: plus cost/latency telemetry such as inference_*_tokens and
+    #: mean_case_wall_seconds). Informational — the reward itself remains the
+    #: objective value alone.
+    reward_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    baseline_reward_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
     errors: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("rewards", "baseline_rewards")
@@ -409,7 +415,7 @@ class CanonicalVerifier:
         self,
         candidate: Candidate,
         target: VerificationTarget,
-    ) -> tuple[float, str | None, str | None]:
+    ) -> tuple[float, str | None, dict[str, float], str | None]:
         record, error = await self._evaluate(
             candidate=candidate,
             backend_id=target.backend_id,
@@ -420,12 +426,12 @@ class CanonicalVerifier:
             max_attempts=target.max_attempts,
         )
         if record is None:
-            return target.failure_value, None, error
+            return target.failure_value, None, {}, error
         assert record.objective is not None and record.objective.value is not None
         reward = (
             target.reward_scale * float(record.objective.value) + target.reward_offset
         )
-        return reward, record.id, None
+        return reward, record.id, dict(record.report.metrics), None
 
     async def measure_baseline(self, *, replicates: int = 1) -> dict[str, JsonValue]:
         """Admin-score the fixed seed to produce pinnable baseline numbers.
@@ -471,7 +477,7 @@ class CanonicalVerifier:
         for target in self.targets:
             target_values: list[float | None] = []
             for _ in range(replicates):
-                reward, _, error = await self._score_target(baseline, target)
+                reward, _, _, error = await self._score_target(baseline, target)
                 target_values.append(None if error is not None else reward)
             targets[target.reward_key] = _aggregate(target_values)
         result["targets"] = targets
@@ -491,27 +497,38 @@ class CanonicalVerifier:
 
         rewards: dict[str, float] = {}
         evaluation_ids: dict[str, str] = {}
+        reward_metrics: dict[str, dict[str, float]] = {}
         errors: dict[str, str] = {}
         for target in self.targets:
-            reward, evaluation_id, error = await self._score_target(candidate, target)
+            reward, evaluation_id, metrics, error = await self._score_target(
+                candidate, target
+            )
             rewards[target.reward_key] = reward
             if evaluation_id is not None:
                 evaluation_ids[target.reward_key] = evaluation_id
+            if metrics:
+                reward_metrics[target.reward_key] = metrics
             if error is not None:
                 errors[target.reward_key] = error
 
         baseline_rewards: dict[str, float] = {}
+        baseline_reward_metrics: dict[str, dict[str, float]] = {}
         baseline = self.selection.baseline_candidate
         if self.score_baseline and baseline is not None:
             if baseline.version == candidate.version:
                 baseline_rewards = dict(rewards)
+                baseline_reward_metrics = dict(reward_metrics)
             else:
                 for target in self.targets:
                     if target.baseline_reward is not None:
                         baseline_rewards[target.reward_key] = target.baseline_reward
                         continue
-                    reward, _, error = await self._score_target(baseline, target)
+                    reward, _, metrics, error = await self._score_target(
+                        baseline, target
+                    )
                     baseline_rewards[target.reward_key] = reward
+                    if metrics:
+                        baseline_reward_metrics[target.reward_key] = metrics
                     if error is not None:
                         errors[f"baseline:{target.reward_key}"] = error
 
@@ -520,6 +537,8 @@ class CanonicalVerifier:
             rewards=rewards,
             evaluation_ids=evaluation_ids,
             baseline_rewards=baseline_rewards,
+            reward_metrics=reward_metrics,
+            baseline_reward_metrics=baseline_reward_metrics,
             errors=errors,
         )
 

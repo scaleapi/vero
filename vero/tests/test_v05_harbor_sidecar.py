@@ -506,6 +506,80 @@ async def test_sidecar_context_survives_restart_without_disclosing_admin_runs(
     assert admin.id not in json.dumps(index)
 
 
+class CostReportingBackend(StubBackend):
+    async def evaluate(self, *, context, request):
+        report = await super().evaluate(context=context, request=request)
+        return report.model_copy(
+            update={
+                "metrics": {
+                    **report.metrics,
+                    "inference_total_tokens": 12345.0,
+                    "inference_cached_input_tokens": 678.0,
+                    "mean_case_wall_seconds": 42.0,
+                }
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_budget_blind_sidecar_redacts_inference_metrics(tmp_path):
+    # Cost telemetry is budget signal: in budget-blind mode the agent's receipt
+    # and context must not carry inference_* metrics; latency stays visible and
+    # the admin record keeps everything.
+    blind, _, _ = _sidecar(tmp_path, disclose_budget=False)
+    blind.engine.backends = BackendRegistry(
+        {"primary": CostReportingBackend(), "secondary": CostReportingBackend()}
+    )
+    response = await blind.evaluate(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(
+                name="benchmark",
+                partition="validation",
+                selection=CaseIds(ids=[f"case-{i}" for i in range(5)]),
+            ),
+        )
+    )
+
+    receipt_metrics = response.receipt.result.metrics
+    assert "inference_total_tokens" not in receipt_metrics
+    assert "inference_cached_input_tokens" not in receipt_metrics
+    assert receipt_metrics["mean_case_wall_seconds"] == 42.0
+
+    document = json.loads(
+        (
+            tmp_path
+            / "agent-volume/results"
+            / context_digest(response.receipt.evaluation_id)
+            / "evaluation.json"
+        ).read_text()
+    )
+    context_metrics = document["result"]["metrics"]
+    assert "inference_total_tokens" not in context_metrics
+    assert context_metrics["mean_case_wall_seconds"] == 42.0
+
+    # the trusted record is untouched
+    record = blind.engine.database.get_evaluation(response.receipt.evaluation_id)
+    assert record.report.metrics["inference_total_tokens"] == 12345.0
+
+    # with budget disclosure on, the same metrics flow to the agent
+    disclosed, _, _ = _sidecar(tmp_path / "disclosed", disclose_budget=True)
+    disclosed.engine.backends = BackendRegistry(
+        {"primary": CostReportingBackend(), "secondary": CostReportingBackend()}
+    )
+    open_response = await disclosed.evaluate(
+        SidecarEvaluationRequest(
+            backend_id="primary",
+            evaluation_set=EvaluationSet(
+                name="benchmark",
+                partition="validation",
+                selection=CaseIds(ids=[f"case-{i}" for i in range(5)]),
+            ),
+        )
+    )
+    assert open_response.receipt.result.metrics["inference_total_tokens"] == 12345.0
+
+
 @pytest.mark.asyncio
 async def test_sidecar_context_writes_plan_and_tasks(tmp_path):
     sidecar, _, _ = _sidecar(tmp_path)

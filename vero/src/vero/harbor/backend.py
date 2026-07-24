@@ -14,6 +14,7 @@ import shutil
 import statistics
 import tempfile
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -150,6 +151,10 @@ class HarborBackendConfig(EvaluationModel):
     # the compiled sidecar sets this to isolate.
     harness_user: str | None = None
     case_resources_cache_path: str | None = None
+    # The gateway's durable usage ledger; when set, each evaluation's report
+    # carries its own inference token totals as metrics (attribution keyed by
+    # evaluation id).
+    inference_usage_path: str | None = None
     extra_args: list[str] = Field(default_factory=list)
 
     @field_validator("cases_path", "case_resources_cache_path")
@@ -918,6 +923,68 @@ class HarborBackend:
                 )
         return artifacts
 
+    def _inference_usage_metrics(self, evaluation_id: str) -> dict[str, float]:
+        """This evaluation's gateway token totals, from the durable ledger.
+
+        Attribution is keyed by evaluation id (search and finalization scopes
+        alike). Best-effort: telemetry must never fail an evaluation.
+        """
+        if self.config.inference_usage_path is None:
+            return {}
+        try:
+            ledger = json.loads(
+                Path(self.config.inference_usage_path).read_text(encoding="utf-8")
+            )
+            scopes = ledger.get("scopes")
+            if not isinstance(scopes, dict):
+                return {}
+            totals = {
+                "requests": 0,
+                "input_tokens": 0,
+                "cached_input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            }
+            found = False
+            for scope in scopes.values():
+                attribution = (scope.get("attributions") or {}).get(evaluation_id)
+                if not isinstance(attribution, dict):
+                    continue
+                found = True
+                for key in totals:
+                    value = attribution.get(key)
+                    if isinstance(value, (int, float)):
+                        totals[key] += int(value)
+            if not found:
+                return {}
+            return {f"inference_{key}": float(value) for key, value in totals.items()}
+        except (OSError, ValueError):
+            logger.warning("inference usage metrics unavailable", exc_info=True)
+            return {}
+
+    @staticmethod
+    def _attempt_wall_seconds(attempt: dict[str, Any]) -> float | None:
+        started = attempt.get("started_at")
+        finished = attempt.get("finished_at")
+        if not isinstance(started, str) or not isinstance(finished, str):
+            return None
+        try:
+            delta = datetime.fromisoformat(
+                finished.replace("Z", "+00:00")
+            ) - datetime.fromisoformat(started.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        seconds = delta.total_seconds()
+        return seconds if seconds >= 0 else None
+
+    def _case_wall_seconds(self, attempts: list[dict[str, Any]]) -> float | None:
+        durations = [
+            seconds
+            for attempt in attempts
+            if (seconds := self._attempt_wall_seconds(attempt)) is not None
+        ]
+        return max(durations) if durations else None
+
     def _case_result(
         self,
         case: HarborCase,
@@ -926,6 +993,7 @@ class HarborBackend:
         artifact_root: Path,
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
+        wall_seconds = self._case_wall_seconds(attempts)
         attempt_detail = [
             {
                 "reward": self._attempt_reward(attempt),
@@ -973,6 +1041,11 @@ class HarborBackend:
                             ),
                             "n_dead_infra": float(n_dead_infra),
                             "n_clean": float(len(attempts) - n_dead_infra),
+                            **(
+                                {"wall_seconds": wall_seconds}
+                                if wall_seconds is not None
+                                else {}
+                            ),
                         },
                         input={"task_name": case.task_name, **case.metadata},
                         output=output,
@@ -1002,6 +1075,8 @@ class HarborBackend:
                 if isinstance(value, (int, float)) and math.isfinite(float(value))
             }
             numeric_rewards["score"] = score
+            if wall_seconds is not None:
+                numeric_rewards["wall_seconds"] = wall_seconds
             return (
                 CaseResult(
                     case_id=case.id,
@@ -1396,6 +1471,11 @@ class HarborBackend:
             )
             return sanitize_evaluation_report(report, self._secrets())
 
+        case_walls = [
+            wall
+            for case in case_results
+            if isinstance((wall := case.metrics.get("wall_seconds")), (int, float))
+        ]
         report = EvaluationReport(
             status=EvaluationStatus.SUCCESS,
             metrics={
@@ -1408,6 +1488,17 @@ class HarborBackend:
                     if len(informative_scores) > 1
                     else 0.0
                 ),
+                # Cost/latency telemetry: reported alongside accuracy, never
+                # part of the score.
+                **(
+                    {
+                        "mean_case_wall_seconds": sum(case_walls) / len(case_walls),
+                        "max_case_wall_seconds": max(case_walls),
+                    }
+                    if case_walls
+                    else {}
+                ),
+                **self._inference_usage_metrics(context.evaluation_id),
             },
             cases=case_results,
             diagnostics=diagnostics,

@@ -497,6 +497,22 @@ class EvaluationSidecar:
                 f"{policy.access.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
+    def _redact_budget_metrics(self, record: EvaluationRecord) -> EvaluationRecord:
+        """Budget-blind mode: the inference_* cost metrics are budget signal
+        and must not reach the agent (enforcement is unchanged)."""
+        if self.disclose_budget:
+            return record
+        metrics = {
+            key: value
+            for key, value in record.report.metrics.items()
+            if not key.startswith("inference_")
+        }
+        if len(metrics) == len(record.report.metrics):
+            return record
+        return record.model_copy(
+            update={"report": record.report.model_copy(update={"metrics": metrics})}
+        )
+
     def _visible_projections(
         self,
     ) -> list[tuple[EvaluationRecord, DisclosureLevel, EvaluationProjection]]:
@@ -505,6 +521,7 @@ class EvaluationSidecar:
             record = self.engine.database.get_evaluation(evaluation_id)
             if record is None:
                 continue
+            record = self._redact_budget_metrics(record)
             policy = self._policies.get(
                 (
                     record.backend_id,
@@ -530,7 +547,7 @@ class EvaluationSidecar:
         ],
     ) -> None:
         assert self._context_directory is not None
-        root = self._context_directory.path("candidates")
+        root = self._context_directory.path(CANDIDATES_SUBDIRECTORY)
         sandbox = self._context_directory.sandbox
         if await sandbox.exists(root):
             await sandbox.remove(root, recursive=True)
@@ -709,7 +726,9 @@ class EvaluationSidecar:
         await self._refresh_context()
         return SidecarEvaluationResult(
             disclosure=disclosure,
-            receipt=make_evaluation_receipt(record, disclosure),
+            receipt=make_evaluation_receipt(
+                self._redact_budget_metrics(record), disclosure
+            ),
         )
 
     async def submit(self, version: str | None = None) -> Submission:

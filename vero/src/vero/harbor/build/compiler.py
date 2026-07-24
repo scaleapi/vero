@@ -269,6 +269,9 @@ def _deployment_config(
                 else None
             ),
             "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
+            "inference_usage_path": (
+                INFERENCE_STATE if config.inference_gateway is not None else None
+            ),
             "extra_args": config.extra_harbor_args,
         }
 
