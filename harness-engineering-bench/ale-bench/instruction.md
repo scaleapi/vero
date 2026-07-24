@@ -15,11 +15,11 @@ the statement specifies.
 3. Score the current commit on the validation set (public seeds):
 
    ```bash
-   vero harbor eval --backend cmd --evaluation-set ale-bench \
+   evals run --backend cmd --evaluation-set ale-bench \
      --partition validation --start 0 --stop 1
    ```
-   Then `vero harbor eval-status JOB_ID` / `vero harbor eval-result JOB_ID`.
-4. Use `vero harbor status` to see evaluation access. VeRO pools your measurements,
+   Then `evals status JOB_ID` / `evals result JOB_ID`.
+4. Use `evals status` to see evaluation access. VeRO pools your measurements,
    re-scores the best on the held-out private seeds, and ships the best candidate
    (the unmodified baseline is a floor, so a regression is never shipped).
 
