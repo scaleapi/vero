@@ -114,7 +114,11 @@ class HarborBackendConfig(EvaluationModel):
     retry_wait_multiplier: float = Field(default=2.0, ge=1.0)
     retry_min_wait_seconds: float = Field(default=4.0, ge=0.0)
     retry_max_wait_seconds: float = Field(default=60.0, ge=0.0)
-    infrastructure_max_attempts: int = Field(default=3, ge=1)
+    # Whole-sub-run infrastructure retry. Default 1 (no retry): retry > 1 only
+    # applies to trusted finalization evaluations (see HarborBackend.evaluate),
+    # never to competitive agent search, where re-running for best coverage is
+    # a best-of-N amplifier a candidate can trigger.
+    infrastructure_max_attempts: int = Field(default=1, ge=1)
     infrastructure_retry_delay_seconds: float = Field(default=5.0, ge=0)
     reward_key: str | None = None
     # Average attempts by default rather than taking the best: best-of-n is an
@@ -812,8 +816,14 @@ class HarborBackend:
         rewards = (attempt.get("verifier_result") or {}).get("rewards") or {}
         return self._extract_reward(rewards) if rewards else None
 
-    def _attempt_is_infra(self, attempt: dict[str, Any]) -> bool:
-        """Whether a dead attempt died to infrastructure (vs the candidate)."""
+    def _attempt_is_infra(self, attempt: dict[str, Any], *, trusted: bool) -> bool:
+        """Whether a dead attempt died to infrastructure (vs the candidate).
+
+        For a competitive (agent) evaluation a candidate-controlled trial's own
+        transient-infra exception is not trusted as infrastructure — the
+        candidate could emit a timeout/connection error to have its dead attempt
+        excluded from the mean. Only trusted evaluations honor that signal.
+        """
         info = attempt.get("exception_info") or {}
         if not info:
             return False
@@ -822,7 +832,10 @@ class HarborBackend:
             detail = info.get(detail_key)
             if isinstance(detail, str) and detail:
                 signals.append(detail)
-        return not policy(classify_case(signals)).is_informative_sample
+        category = classify_case(signals)
+        if not trusted and category == ErrorCategory.TRANSIENT_INFRA:
+            return False
+        return not policy(category).is_informative_sample
 
     def _best_attempt(
         self,
@@ -1016,6 +1029,7 @@ class HarborBackend:
         attempts: list[dict[str, Any]],
         *,
         artifact_root: Path,
+        trusted: bool = False,
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
         wall_seconds = self._case_wall_seconds(attempts)
@@ -1053,7 +1067,8 @@ class HarborBackend:
                 n_dead_infra = sum(
                     1
                     for attempt, reward in zip(attempts, rewards)
-                    if reward is None and self._attempt_is_infra(attempt)
+                    if reward is None
+                    and self._attempt_is_infra(attempt, trusted=trusted)
                 )
                 return (
                     CaseResult(
@@ -1143,10 +1158,23 @@ class HarborBackend:
 
         if not attempts:
             # Harbor produced no trial for this task at all: infrastructure
-            # dropped the case (see the coverage gate), not the candidate.
+            # dropped the case (see the coverage gate), not the candidate. This
+            # coverage gap is harness-produced and stays excluded even for
+            # competitive evaluations.
             category = ErrorCategory.TRANSIENT_INFRA
         else:
             category = classify_case(signals)
+            if not trusted and category == ErrorCategory.TRANSIENT_INFRA:
+                # A trial ran and died with a transient-looking exception. For
+                # competitive (agent) selection we cannot trust a candidate-
+                # controlled process's own exception text to mean
+                # "infrastructure": excluding it would drop the case from its
+                # own denominator and let a candidate inflate its mean by
+                # emitting a timeout/connection error on hard cases. Score it at
+                # the failure value instead. Genuine infrastructure is caught
+                # out of band (coverage gaps above; gateway-ledger budget/auth,
+                # which remain terminating) and via trusted-only retry.
+                category = ErrorCategory.TASK_FAILURE
         category_policy = policy(category)
         output["dead_exception_types"] = exception_counts
         output["error_category"] = category.value
@@ -1241,7 +1269,15 @@ class HarborBackend:
         attempts: list[tuple[CommandResult, str, str]] = []
         groups: dict[str, list[dict[str, Any]]] = {}
         jobs_dir = capture_dir / "jobs"
-        for attempt in range(1, self.config.infrastructure_max_attempts + 1):
+        # Whole-sub-run infrastructure retry is a trusted-only affordance: for a
+        # competitive (agent) evaluation, re-running the sub-run and keeping the
+        # best coverage is a best-of-N amplifier over a candidate that can
+        # itself trigger the retry. Trusted finalization re-scores, run by the
+        # operator on a controlled environment, keep the configured retries.
+        max_infra_attempts = (
+            self.config.infrastructure_max_attempts if context.finalization else 1
+        )
+        for attempt in range(1, max_infra_attempts + 1):
             attempt_jobs_dir = (
                 jobs_dir if attempt == 1 else capture_dir / f"retry-{attempt}" / "jobs"
             )
@@ -1331,7 +1367,7 @@ class HarborBackend:
             if requested_tasks <= set(groups):
                 jobs_dir = attempt_jobs_dir
                 break
-            if attempt < self.config.infrastructure_max_attempts:
+            if attempt < max_infra_attempts:
                 await asyncio.sleep(
                     self.config.infrastructure_retry_delay_seconds * attempt
                 )
@@ -1385,6 +1421,7 @@ class HarborBackend:
                 case,
                 groups.get(case.expected_result_task_name, []),
                 artifact_root=context.artifact_dir,
+                trusted=context.finalization,
             )
             case_results.append(case_result)
             scores.append(score)

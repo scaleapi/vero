@@ -237,9 +237,11 @@ class FakeSandbox(LocalSandbox):
         return self.result
 
 
-async def _context(tmp_path: Path, sandbox: FakeSandbox) -> EvaluationContext:
+async def _context(
+    tmp_path: Path, sandbox: FakeSandbox, *, finalization: bool = False
+) -> EvaluationContext:
     target = tmp_path / "target"
-    target.mkdir(exist_ok=True)
+    target.mkdir(parents=True, exist_ok=True)
     result_dir = tmp_path / "result"
     artifact_dir = result_dir / "artifacts"
     artifact_dir.mkdir(parents=True)
@@ -252,6 +254,7 @@ async def _context(tmp_path: Path, sandbox: FakeSandbox) -> EvaluationContext:
         result_dir=result_dir,
         artifact_dir=artifact_dir,
         case_store=CaseCheckpointStore(result_dir / "cases"),
+        finalization=finalization,
     )
 
 
@@ -663,38 +666,56 @@ async def test_harbor_backend_scores_agent_crash_as_informative_task_failure(tmp
 
 
 @pytest.mark.asyncio
-async def test_harbor_backend_excludes_transient_infrastructure_from_aggregate(
+async def test_harbor_backend_excludes_transient_infrastructure_only_when_trusted(
     tmp_path,
 ):
-    sandbox = FakeSandbox(
-        tmp_path,
-        {
-            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
-            "example/beta": [
-                {
-                    "verifier_result": None,
-                    "exception_info": {"exception_type": "openai.RateLimitError"},
-                }
-            ],
-        },
-    )
+    # A within-trial transient-infra exception is trusted as infrastructure only
+    # for finalization (admin) evaluations. For a competitive agent evaluation
+    # it is scored at the failure value, so a candidate cannot inflate its mean
+    # by emitting a timeout/connection error on a hard case.
+    def _sandbox():
+        return FakeSandbox(
+            tmp_path,
+            {
+                "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
+                "example/beta": [
+                    {
+                        "verifier_result": None,
+                        "exception_info": {"exception_type": "openai.RateLimitError"},
+                    }
+                ],
+            },
+        )
+
     backend = HarborBackend(_config(tmp_path))
 
-    report = await backend.evaluate(
-        context=await _context(tmp_path, sandbox),
+    # Agent (untrusted) evaluation: the rate-limited case is a scored failure.
+    agent_report = await backend.evaluate(
+        context=await _context(tmp_path / "agent", _sandbox()),
         request=_request(CaseRange(stop=2)),
     )
+    assert agent_report.metrics["score"] == 0.5
+    assert agent_report.metrics["error_rate"] == 0.0
+    assert [case.status for case in agent_report.cases] == [
+        CaseStatus.SUCCESS,
+        CaseStatus.SUCCESS,
+    ]
+    assert agent_report.cases[1].output["error_category"] == "task_failure"
 
-    # The rate-limited case is infrastructure: excluded from the mean (which is
-    # the sole successful case, 1.0) and reported as the error rate.
-    assert report.metrics["score"] == 1.0
-    assert report.metrics["error_rate"] == 0.5
-    assert [case.status for case in report.cases] == [
+    # Trusted finalization: infrastructure is excluded from the mean and
+    # reported as the error rate, as before.
+    trusted_report = await backend.evaluate(
+        context=await _context(tmp_path / "trusted", _sandbox(), finalization=True),
+        request=_request(CaseRange(stop=2)),
+    )
+    assert trusted_report.metrics["score"] == 1.0
+    assert trusted_report.metrics["error_rate"] == 0.5
+    assert [case.status for case in trusted_report.cases] == [
         CaseStatus.SUCCESS,
         CaseStatus.ERROR,
     ]
-    assert report.cases[1].output["error_category"] == "transient_infra"
-    assert report.cases[1].errors[0].code == "transient_infrastructure"
+    assert trusted_report.cases[1].output["error_category"] == "transient_infra"
+    assert trusted_report.cases[1].errors[0].code == "transient_infrastructure"
 
 
 @pytest.mark.asyncio
@@ -761,6 +782,37 @@ async def test_harbor_backend_treats_missing_coverage_as_infrastructure(tmp_path
         diagnostic.code == "harbor_incomplete_coverage"
         for diagnostic in report.diagnostics
     )
+
+
+@pytest.mark.asyncio
+async def test_infrastructure_retry_is_trusted_only(tmp_path):
+    # With incomplete coverage (beta never produced), a competitive evaluation
+    # must not re-run the sub-run (no best-of-N amplifier a candidate can
+    # trigger); a trusted finalization re-scores with the configured retries.
+    def _sandbox():
+        return FakeSandbox(
+            tmp_path,
+            {"example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}]},
+        )
+
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            infrastructure_max_attempts=3,
+            infrastructure_retry_delay_seconds=0,
+        )
+    )
+
+    agent_ctx = await _context(tmp_path / "agent", _sandbox())
+    await backend.evaluate(context=agent_ctx, request=_request(CaseRange(stop=2)))
+    assert not (agent_ctx.artifact_dir / "harbor" / "retry-2").exists()
+
+    trusted_ctx = await _context(
+        tmp_path / "trusted", _sandbox(), finalization=True
+    )
+    await backend.evaluate(context=trusted_ctx, request=_request(CaseRange(stop=2)))
+    assert (trusted_ctx.artifact_dir / "harbor" / "retry-2").exists()
+    assert (trusted_ctx.artifact_dir / "harbor" / "retry-3").exists()
 
 
 @pytest.mark.asyncio
@@ -893,9 +945,11 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
         "score": 0.5,
         "n_attempts": 2.0,
         "n_scored": 1.0,
-        # the dead attempt was a TimeoutError -> infra dilution, not clean signal
-        "n_dead_infra": 1.0,
-        "n_clean": 1.0,
+        # This is a competitive (untrusted) evaluation, so the dead attempt's own
+        # TimeoutError is not trusted as infrastructure — it counts as a clean
+        # zero-filled failure, not infra dilution.
+        "n_dead_infra": 0.0,
+        "n_clean": 2.0,
     }
 
 
