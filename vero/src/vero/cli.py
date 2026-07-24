@@ -1016,7 +1016,8 @@ def session_clear(session_dir: Path, yes: bool) -> None:
     click.echo(f"Deleted {session_dir}")
 
 
-from vero.harbor.cli import harbor as harbor_command  # noqa: E402  (registered after `main` is defined)
+# harbor subcommand registered here, after `main` is defined
+from vero.harbor.cli import harbor as harbor_command  # noqa: E402, I001
 
 main.add_command(harbor_command)
 
