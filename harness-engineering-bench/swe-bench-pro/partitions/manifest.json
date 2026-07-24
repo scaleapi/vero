@@ -1,0 +1,23 @@
+{
+  "_stub": true,
+  "_todo": "STUB manifest. Regenerate with scripts/partition_swe_bench_pro.py once the real task_source is pinned (see ../../README.md). The empty partition files and the placeholder task_source in baseline/build.yaml must both be replaced before this benchmark can run.",
+  "schema_version": 1,
+  "task_source": "scale-ai/swe-bench-pro@sha256:REPLACE_WITH_REAL_DIGEST",
+  "dataset_name": "scale-ai/swe-bench-pro",
+  "dataset_version": "REPLACE_WITH_REAL_DIGEST",
+  "seed": "vero-swe-bench-pro-v1",
+  "ratios": {
+    "development": 0.2,
+    "validation": 0.4,
+    "test": 0.4
+  },
+  "stratified_by": ["repository"],
+  "partition_counts": {
+    "development": 0,
+    "validation": 0,
+    "test": 0
+  },
+  "partition_digest": "sha256:REPLACE_AFTER_REGENERATION",
+  "stratum_counts": {},
+  "tasks": []
+}
