@@ -8,17 +8,21 @@ import inspect
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 from vero.harbor.auth import generate_admin_token, write_admin_token
 from vero.harbor.sidecar import EvaluationSidecar
 from vero.harbor.verifier import CanonicalVerifier
+
+if TYPE_CHECKING:
+    from vero.runtime.wandb import InferenceTelemetryPoller
 
 
 @dataclass(frozen=True)
 class SidecarComponents:
     sidecar: EvaluationSidecar
     verifier: CanonicalVerifier
+    telemetry: "InferenceTelemetryPoller | None" = None
 
 
 SidecarFactory = Callable[
@@ -76,6 +80,7 @@ async def build_app(
         sidecar=components.sidecar,
         verifier=components.verifier,
         admin_token=token,
+        telemetry=components.telemetry,
     )
 
 

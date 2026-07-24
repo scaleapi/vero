@@ -41,6 +41,7 @@ SESSION_DIR = "/state/admin/session"
 TOKEN_PATH = "/state/token/admin.token"
 SESSION_ID = "trial"
 INFERENCE_STATE = "/state/inference/usage.json"
+INFERENCE_REQUEST_LOG_DIR = "/state/inference/requests"
 INFERENCE_GATEWAY_URL = "http://inference-gateway:8001"
 UPSTREAM_API_KEY_ENV = "VERO_INFERENCE_UPSTREAM_API_KEY"
 UPSTREAM_BASE_URL_ENV = "VERO_INFERENCE_UPSTREAM_BASE_URL"
@@ -378,6 +379,12 @@ def _deployment_config(
         "inference_usage_path": (
             INFERENCE_STATE if config.inference_gateway is not None else None
         ),
+        "inference_request_log_dir": (
+            INFERENCE_REQUEST_LOG_DIR
+            if config.inference_gateway is not None
+            and config.inference_gateway.log_requests
+            else None
+        ),
         "inference_limits": (
             {
                 "producer": config.inference_gateway.producer.model_dump(mode="json"),
@@ -545,6 +552,14 @@ def compile_harbor_task(
                 config.inference_gateway.default_upstream_base_url
             ),
             "state_path": INFERENCE_STATE,
+            "request_log": (
+                {
+                    "directory": INFERENCE_REQUEST_LOG_DIR,
+                    "body_bytes": config.inference_gateway.request_log_body_bytes,
+                }
+                if config.inference_gateway.log_requests
+                else None
+            ),
             "scopes": {
                 "producer": {
                     "token_sha256": token_digest(producer_inference_token),

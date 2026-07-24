@@ -296,3 +296,109 @@ def test_sidecar_wandb_sink_logs_full_trace_including_per_case_artifacts(
         "harbor/jobs/trial-0/result.json",
         "harbor/jobs/trial-0/agent/trajectory.json",
     }
+
+
+def _gateway_state(tmp_path: Path, requests: int = 3) -> tuple[Path, Path]:
+    usage_path = tmp_path / "inference" / "usage.json"
+    requests_dir = tmp_path / "inference" / "requests"
+    requests_dir.mkdir(parents=True, exist_ok=True)
+    usage_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "scopes": {
+                    "producer": {
+                        "requests": requests,
+                        "upstream_errors": 0,
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 15,
+                        "active_requests": 1,
+                        "attributions": {},
+                    }
+                },
+            }
+        )
+    )
+    return usage_path, requests_dir
+
+
+def test_sidecar_wandb_mirrors_gateway_usage_and_request_logs(tmp_path: Path):
+    from vero.runtime.wandb import InferenceTelemetryPoller
+
+    client = FakeWandb()
+    sink = SidecarWandbSink(
+        project="v", session_id="s", session_dir=tmp_path / "session", client=client
+    )
+    usage_path, requests_dir = _gateway_state(tmp_path)
+    (requests_dir / "requests-00001.jsonl").write_text('{"a":1}\n')
+    (requests_dir / "requests-00002.jsonl").write_text('{"a":2}\n')
+
+    poller = InferenceTelemetryPoller(
+        sink=sink,
+        usage_path=usage_path,
+        request_log_dir=requests_dir,
+        interval_seconds=5,
+    )
+    poller.poll_once()
+
+    payload, step = client.run.logged[0]
+    assert step == 0
+    assert payload["inference/producer/requests"] == 3
+    assert payload["inference/producer/total_tokens"] == 15
+    assert payload["inference/producer/active_requests"] == 1
+    # Only the rotated file ships; the highest-numbered one is still growing.
+    assert len(client.run.artifacts) == 1
+    assert client.run.artifacts[0].type == "inference_request_log"
+    assert [name for _, name in client.run.artifacts[0].files] == [
+        "requests-00001.jsonl"
+    ]
+
+    # Unchanged gateway state: no duplicate series point, no new artifact.
+    poller.poll_once()
+    assert len(client.run.logged) == 1
+    assert len(client.run.artifacts) == 1
+
+    # Usage moved -> a new point; eval records share the same step counter.
+    _gateway_state(tmp_path, requests=4)
+    poller.poll_once()
+    assert client.run.logged[1][1] == 1
+    sink(_evaluation_record())
+    assert client.run.logged[2][1] == 2
+
+    # The final flush ships the active file too.
+    poller.poll_once(final=True)
+    assert [name for _, name in client.run.artifacts[-1].files] == [
+        "requests-00001.jsonl",
+        "requests-00002.jsonl",
+    ]
+
+    # A restarted sink remembers what shipped and does not re-upload.
+    restarted = FakeWandb()
+    resumed = SidecarWandbSink(
+        project="v", session_id="s", session_dir=tmp_path / "session", client=restarted
+    )
+    resumed.ship_request_logs(requests_dir, final=True)
+    assert restarted.run.artifacts == []
+
+
+def test_sidecar_wandb_telemetry_is_best_effort(tmp_path: Path):
+    from vero.runtime.wandb import InferenceTelemetryPoller
+
+    client = FakeWandb()
+    sink = SidecarWandbSink(
+        project="v", session_id="s", session_dir=tmp_path / "session", client=client
+    )
+    usage_path = tmp_path / "inference" / "usage.json"
+    usage_path.parent.mkdir(parents=True)
+    usage_path.write_text("{corrupt")
+
+    poller = InferenceTelemetryPoller(
+        sink=sink,
+        usage_path=usage_path,
+        request_log_dir=tmp_path / "inference" / "missing",
+        interval_seconds=5,
+    )
+    poller.poll_once()  # must not raise
+    assert client.run.logged == []
+    assert client.run.artifacts == []

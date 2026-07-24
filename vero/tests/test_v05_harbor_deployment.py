@@ -193,3 +193,78 @@ async def test_standard_deployment_fails_closed_on_corrupt_budget_state(tmp_path
 
     with pytest.raises(ValueError, match="invalid durable budget ledger"):
         await build_harbor_components(config)
+
+
+@pytest.mark.asyncio
+async def test_deployment_finalize_hook_archives_gateway_state(tmp_path):
+    # Even without W&B configured, finalize must copy the gateway's usage
+    # ledger and request log into the session so /session/export carries them.
+    trusted = tmp_path / "trusted"
+    agent = tmp_path / "agent"
+    _repo(trusted, "VALUE = 1\n")
+    _repo(agent, "VALUE = 1\n")
+    cases = tmp_path / "cases.json"
+    cases.write_text('[{"id":"task","task_name":"org/task"}]')
+    usage_path = tmp_path / "state/inference/usage.json"
+    usage_path.parent.mkdir(parents=True)
+    usage_path.write_text('{"schema_version": 1, "scopes": {}}')
+    requests_dir = tmp_path / "state/inference/requests"
+    requests_dir.mkdir()
+    (requests_dir / "requests-00001.jsonl").write_text('{"scope":"producer"}\n')
+    evaluation_set = EvaluationSet(name="benchmark")
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="maximize",
+    )
+    session_dir = tmp_path / "state/session"
+    config = {
+        "repo_path": str(trusted),
+        "agent_repo_path": str(agent),
+        "session_dir": str(session_dir),
+        "backends": {
+            "backend": {
+                "task_source": "org/benchmark@1.0",
+                "agent_import_path": "program:Agent",
+                "cases_path": str(cases),
+                "harbor_requirement": "harbor==0.1.17",
+                "uv_executable": sys.executable,
+            }
+        },
+        "access_policies": [],
+        "budgets": [],
+        "selection": {
+            "mode": "auto_best",
+            "backend_id": "backend",
+            "evaluation_set": evaluation_set.model_dump(mode="json"),
+            "objective": objective.model_dump(mode="json"),
+            "baseline_version": "HEAD",
+        },
+        "targets": [
+            {
+                "reward_key": "reward",
+                "backend_id": "backend",
+                "evaluation_set": evaluation_set.model_dump(mode="json"),
+                "objective": objective.model_dump(mode="json"),
+            }
+        ],
+        "admin_volume": str(tmp_path / "state/admin"),
+        "inference_usage_path": str(usage_path),
+        "inference_request_log_dir": str(requests_dir),
+    }
+
+    components = await build_harbor_components(config)
+    # No W&B -> no poller, but the finalize hook is still installed.
+    assert components.telemetry is None
+    assert components.verifier._on_finalized is not None
+
+    class Result:
+        shipped = True
+        rewards = {}
+
+    components.verifier._on_finalized(Result())
+
+    exported = session_dir / "artifacts/inference"
+    assert (exported / "usage.json").read_text().startswith('{"schema_version"')
+    assert (
+        exported / "requests/requests-00001.jsonl"
+    ).read_text() == '{"scope":"producer"}\n'

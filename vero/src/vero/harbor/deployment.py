@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
@@ -88,6 +89,9 @@ class SidecarWandbConfig(EvaluationModel):
     # stdout/stderr, agent trajectory) to W&B as a per-evaluation artifact.
     # Off by default: it uploads files and can be large.
     log_traces: bool = False
+    # How often the sidecar mirrors the gateway's usage ledger and request log
+    # into the run (when the gateway state paths are configured below).
+    telemetry_interval_seconds: float = Field(default=30.0, gt=0)
 
 
 class HarborDeploymentConfig(EvaluationModel):
@@ -105,6 +109,7 @@ class HarborDeploymentConfig(EvaluationModel):
     agent_volume: str | None = None
     admin_volume: str
     inference_usage_path: str | None = None
+    inference_request_log_dir: str | None = None
     inference_limits: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
     submit_enabled: bool = False
     disclose_budget: bool = True
@@ -125,7 +130,7 @@ class HarborDeploymentConfig(EvaluationModel):
             raise ValueError("deployment paths must be absolute")
         return value
 
-    @field_validator("inference_usage_path")
+    @field_validator("inference_usage_path", "inference_request_log_dir")
     @classmethod
     def validate_optional_file_path(cls, value: str | None) -> str | None:
         if value is not None:
@@ -164,6 +169,11 @@ class HarborDeploymentConfig(EvaluationModel):
             *(
                 (("inference_usage_path", self.inference_usage_path),)
                 if self.inference_usage_path is not None
+                else ()
+            ),
+            *(
+                (("inference_request_log_dir", self.inference_request_log_dir),)
+                if self.inference_request_log_dir is not None
                 else ()
             ),
         ):
@@ -276,8 +286,53 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
             )
             wandb_sink = None
 
-    def _finish_wandb(result: object) -> None:
-        # Close the W&B run at finalize (the session's end) with a summary.
+    usage_path = (
+        Path(parsed.inference_usage_path)
+        if parsed.inference_usage_path is not None
+        else None
+    )
+    request_log_dir = (
+        Path(parsed.inference_request_log_dir)
+        if parsed.inference_request_log_dir is not None
+        else None
+    )
+    telemetry = None
+    if wandb_sink is not None and (
+        usage_path is not None or request_log_dir is not None
+    ):
+        from vero.runtime.wandb import InferenceTelemetryPoller
+
+        telemetry = InferenceTelemetryPoller(
+            sink=wandb_sink,
+            usage_path=usage_path,
+            request_log_dir=request_log_dir,
+            interval_seconds=parsed.wandb.telemetry_interval_seconds,
+        )
+
+    def _export_inference_state() -> None:
+        # Preserve the gateway's usage ledger and request log with the session,
+        # so /session/export (and the archived run record) carries every
+        # request-response the gateway saw.
+        destination = session_dir / "artifacts" / "inference"
+        try:
+            if usage_path is not None and usage_path.is_file():
+                destination.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(usage_path, destination / usage_path.name)
+            if request_log_dir is not None and request_log_dir.is_dir():
+                shutil.copytree(
+                    request_log_dir,
+                    destination / "requests",
+                    dirs_exist_ok=True,
+                )
+        except OSError:
+            logger.warning("inference state export failed", exc_info=True)
+
+    def _finalize_session_telemetry(result: object) -> None:
+        # Session's end: archive gateway state, flush telemetry (including the
+        # still-active request log file), and close the W&B run with a summary.
+        _export_inference_state()
+        if telemetry is not None:
+            telemetry.poll_once(final=True)
         if wandb_sink is None:
             return
         rewards = getattr(result, "rewards", {}) or {}
@@ -347,6 +402,6 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         admin_volume=Path(parsed.admin_volume),
         score_baseline=parsed.score_baseline,
         evaluation_drain_timeout_seconds=parsed.evaluation_drain_timeout_seconds,
-        on_finalized=_finish_wandb if wandb_sink is not None else None,
+        on_finalized=_finalize_session_telemetry,
     )
-    return SidecarComponents(sidecar=sidecar, verifier=verifier)
+    return SidecarComponents(sidecar=sidecar, verifier=verifier, telemetry=telemetry)

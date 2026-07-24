@@ -332,6 +332,35 @@ def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path)
         backend["inference_gateway_finalization_token"]
         != backend["inference_gateway_token"]
     )
+    # Per-request logging is on by default: the gateway captures every
+    # request/response on its state volume and the sidecar mirrors it.
+    assert gateway["request_log"] == {
+        "directory": "/state/inference/requests",
+        "body_bytes": 16384,
+    }
+    assert serve["inference_request_log_dir"] == "/state/inference/requests"
+
+
+def test_compiler_omits_request_log_when_disabled(tmp_path):
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+            log_requests=False,
+        ),
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    gateway = json.loads(
+        (output / "environment/gateway/config.json").read_text(encoding="utf-8")
+    )
+    serve = json.loads(
+        (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    assert gateway["request_log"] is None
+    assert serve["inference_request_log_dir"] is None
 
 
 def test_workspace_overlay_rejects_unsafe_dest_and_missing_source(tmp_path):

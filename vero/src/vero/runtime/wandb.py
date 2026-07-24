@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -12,6 +15,8 @@ from vero.evaluation.budget import BudgetLedger
 from vero.evaluation.models import CaseStatus, EvaluationRecord
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import RuntimeEvent
+
+logger = logging.getLogger(__name__)
 
 
 def _open_wandb_run(
@@ -207,9 +212,12 @@ class SidecarWandbSink:
             self.logged_evaluations = set(state.get("evaluation_ids", []))
             self.next_step = int(state.get("next_step", len(self.logged_evaluations)))
             stored_run_id = state.get("run_id")
+            self._shipped_request_logs = dict(state.get("request_log_files", {}))
         else:
             self.logged_evaluations: set[str] = set()
             self.next_step = 0
+            self._shipped_request_logs: dict[str, int] = {}
+        self._last_inference_usage: dict[str, Any] = {}
         # One W&B run per invocation. A fresh session volume mints a new id; a
         # sidecar restart within the same run reuses the one persisted in state,
         # so it resumes rather than colliding with other invocations.
@@ -241,6 +249,7 @@ class SidecarWandbSink:
                 "evaluation_ids": sorted(self.logged_evaluations),
                 "next_step": self.next_step,
                 "run_id": self.run_id,
+                "request_log_files": self._shipped_request_logs,
             },
         )
 
@@ -323,6 +332,54 @@ class SidecarWandbSink:
         if added:
             self.run.log_artifact(artifact)
 
+    def log_inference_usage(self, scopes: dict[str, Any]) -> None:
+        """Log the gateway's per-scope usage counters as W&B series."""
+        payload: dict[str, Any] = {}
+        for name, usage in sorted(scopes.items()):
+            if not isinstance(usage, dict):
+                continue
+            for key in (
+                "requests",
+                "upstream_errors",
+                "input_tokens",
+                "output_tokens",
+                "total_tokens",
+                "active_requests",
+            ):
+                value = usage.get(key)
+                if isinstance(value, (int, float)):
+                    payload[f"inference/{name}/{key}"] = value
+        if not payload or payload == self._last_inference_usage:
+            return
+        self.run.log(payload, step=self.next_step)
+        self.next_step += 1
+        self._last_inference_usage = payload
+        self._save_state()
+
+    def ship_request_logs(self, directory: Path, *, final: bool = False) -> None:
+        """Upload the gateway's rotated request-log files as one W&B artifact.
+
+        The highest-numbered file is still being appended to, so it is only
+        included on the final call. Unchanged files dedupe by digest on the
+        W&B side, so re-adding them per version is cheap.
+        """
+        files = sorted(directory.glob("requests-*.jsonl"))
+        if not final:
+            files = files[:-1]
+        if not files:
+            return
+        snapshot = {path.name: path.stat().st_size for path in files}
+        if snapshot == self._shipped_request_logs:
+            return
+        artifact = self._wandb.Artifact(
+            name="inference-requests", type="inference_request_log"
+        )
+        for path in files:
+            artifact.add_file(str(path), name=path.name)
+        self.run.log_artifact(artifact)
+        self._shipped_request_logs = snapshot
+        self._save_state()
+
     def __call__(self, record: EvaluationRecord) -> None:
         if record.id in self.logged_evaluations:
             return
@@ -346,3 +403,52 @@ class SidecarWandbSink:
         if summary:
             self.run.summary.update(summary)
         self.run.finish(exit_code=1 if failed else 0)
+
+
+class InferenceTelemetryPoller:
+    """Mirror the gateway's durable state into the sidecar's W&B run.
+
+    The gateway state volume is mounted read-only in the trusted sidecar, so
+    this gives live inference telemetry (including the untrusted optimizer's
+    producer-scope burn) without W&B credentials leaving the sidecar.
+    Best-effort throughout: telemetry must never affect the eval path.
+    """
+
+    def __init__(
+        self,
+        *,
+        sink: SidecarWandbSink,
+        usage_path: Path | None = None,
+        request_log_dir: Path | None = None,
+        interval_seconds: float = 30.0,
+    ):
+        if usage_path is None and request_log_dir is None:
+            raise ValueError("telemetry poller requires at least one source")
+        if interval_seconds <= 0:
+            raise ValueError("telemetry interval must be positive")
+        self.sink = sink
+        self.usage_path = usage_path
+        self.request_log_dir = request_log_dir
+        self.interval_seconds = interval_seconds
+
+    def poll_once(self, *, final: bool = False) -> None:
+        if self.usage_path is not None:
+            try:
+                if self.usage_path.exists():
+                    value = json.loads(self.usage_path.read_text(encoding="utf-8"))
+                    scopes = value.get("scopes") if isinstance(value, dict) else None
+                    if isinstance(scopes, dict):
+                        self.sink.log_inference_usage(scopes)
+            except Exception:
+                logger.warning("inference usage telemetry failed", exc_info=True)
+        if self.request_log_dir is not None:
+            try:
+                if self.request_log_dir.is_dir():
+                    self.sink.ship_request_logs(self.request_log_dir, final=final)
+            except Exception:
+                logger.warning("inference request log shipping failed", exc_info=True)
+
+    async def run(self) -> None:
+        while True:
+            await asyncio.sleep(self.interval_seconds)
+            await asyncio.to_thread(self.poll_once)

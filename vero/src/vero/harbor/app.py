@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import shutil
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -33,6 +35,9 @@ from vero.harbor.sidecar import (
 )
 from vero.harbor.transport import CandidateTransferError
 from vero.harbor.verifier import CanonicalVerifier
+
+if TYPE_CHECKING:
+    from vero.runtime.wandb import InferenceTelemetryPoller
 
 logger = logging.getLogger(__name__)
 
@@ -64,11 +69,26 @@ def create_app(
     sidecar: EvaluationSidecar,
     verifier: CanonicalVerifier,
     admin_token: str,
+    telemetry: "InferenceTelemetryPoller | None" = None,
 ) -> FastAPI:
     """Expose agent endpoints and token-gated admin endpoints on one app."""
     if not admin_token.strip():
         raise ValueError("admin_token must not be empty")
-    app = FastAPI(title="VeRO evaluation sidecar", version="1")
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        task = (
+            asyncio.create_task(telemetry.run()) if telemetry is not None else None
+        )
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="VeRO evaluation sidecar", version="1", lifespan=lifespan)
     app.add_exception_handler(
         EvaluationBudgetExceeded,
         _error(429, "evaluation budget exhausted"),

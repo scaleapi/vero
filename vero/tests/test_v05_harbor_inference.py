@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
@@ -318,3 +319,152 @@ def test_gateway_releases_concurrency_reservation_on_upstream_failure(tmp_path):
     usage = app.state.usage_store.ledger.scopes["producer"]
     assert usage.active_requests == 0
     assert usage.upstream_errors == 1
+
+
+def _logged_config(tmp_path, **kwargs):
+    from vero.harbor.inference import InferenceRequestLogConfig
+
+    config = _config(tmp_path, **kwargs)
+    return config.model_copy(
+        update={
+            "request_log": InferenceRequestLogConfig(
+                directory=str(tmp_path / "requests"),
+                body_bytes=64,
+            )
+        }
+    )
+
+
+def _log_records(tmp_path):
+    records = []
+    for path in sorted((tmp_path / "requests").glob("requests-*.jsonl")):
+        for line in path.read_text().splitlines():
+            records.append(json.loads(line))
+    return records
+
+
+def test_gateway_request_log_captures_responses_streams_and_denials(tmp_path):
+    stream_payload = (
+        'event: response.completed\ndata: {"type":"response.completed",'
+        '"response":{"usage":{"input_tokens":5,"output_tokens":3,'
+        '"total_tokens":8}}}\n\n'
+    )
+
+    def upstream(request: httpx.Request):
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            return httpx.Response(
+                200,
+                content=stream_payload,
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200,
+            json={"id": "r", "usage": {"input_tokens": 11, "output_tokens": 7}},
+        )
+
+    app = create_inference_gateway_app(
+        config=_logged_config(tmp_path, max_requests=2),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi"},
+        )
+        client.post(
+            "/scopes/producer/eval-1/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi", "stream": True},
+        )
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "denied-model", "input": "hi"},
+        )
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "over budget"},
+        )
+
+    records = _log_records(tmp_path)
+    assert [record["status"] for record in records] == [200, 200, 403, 429]
+    plain, stream, denied, exhausted = records
+    assert plain["scope"] == "producer"
+    assert plain["attribution"] == "optimizer"
+    assert plain["model"] == "gpt-test"
+    assert plain["input_tokens"] == 11 and plain["output_tokens"] == 7
+    assert "gpt-test" in plain["request"]["text"]
+    assert '"id":"r"' in plain["response"]["text"]
+    assert plain["latency_ms"] >= 0
+    assert stream["stream"] is True
+    assert stream["attribution"] == "eval-1"
+    assert stream["total_tokens"] == 8
+    # the head+tail capture keeps the stream's terminal usage frame
+    assert "total_tokens" in (
+        stream["response"]["text"] + stream["response"].get("tail", "")
+    )
+    assert denied["error"] == "model_denied" and denied["response"] is None
+    assert exhausted["error"] == "budget_exhausted"
+
+
+def test_gateway_request_log_truncates_and_rotates(tmp_path):
+    from vero.harbor.inference import InferenceRequestLogConfig
+
+    config = _config(tmp_path, max_requests=None, max_tokens=None).model_copy(
+        update={
+            "request_log": InferenceRequestLogConfig(
+                directory=str(tmp_path / "requests"),
+                body_bytes=32,
+                rotate_bytes=1_048_576,
+            )
+        }
+    )
+    app = create_inference_gateway_app(
+        config=config,
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json={"data": "y" * 200})
+        ),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "x" * 500},
+        )
+
+    (record,) = _log_records(tmp_path)
+    assert record["request"]["truncated"] is True
+    assert record["request"]["bytes"] > 500
+    assert len(record["request"]["text"]) <= 16
+    assert "tail" in record["request"]
+    assert record["response"]["truncated"] is True
+
+
+def test_gateway_request_log_rotation_boundary(tmp_path):
+    from vero.harbor.inference import InferenceRequestLog, InferenceRequestLogConfig
+
+    log = InferenceRequestLog(
+        InferenceRequestLogConfig(
+            directory=str(tmp_path / "requests"),
+            body_bytes=16384,
+            rotate_bytes=1_048_576,
+        )
+    )
+    # Force a tiny rotation threshold without violating the config floor.
+    log.config = log.config.model_copy(update={"rotate_bytes": 400})
+
+    async def fill():
+        for index in range(6):
+            await log.record(scope="producer", index=index, payload="z" * 100)
+
+    asyncio.run(fill())
+    files = sorted((tmp_path / "requests").glob("requests-*.jsonl"))
+    assert len(files) > 1
+    total = sum(
+        len(path.read_text().splitlines()) for path in files
+    )
+    assert total == 6

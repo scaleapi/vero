@@ -101,6 +101,12 @@ class InferenceGatewaySpec(EvaluationModel):
     # omitted, it defaults to a copy of `evaluation`, giving the mandatory re-score
     # its own pool so the optimizer's search evaluations cannot starve it.
     finalization: InferenceBudgetSpec | None = None
+    # Durable JSONL capture of every gateway request/response (metadata plus
+    # head+tail-truncated bodies). Lives on the gateway state volume — never
+    # agent-visible; the trusted sidecar mirrors it to W&B and the session
+    # archive.
+    log_requests: bool = True
+    request_log_body_bytes: int = Field(default=16384, ge=0)
 
     @field_validator("upstream_api_key_env", "upstream_base_url_env")
     @classmethod

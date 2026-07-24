@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -18,6 +21,8 @@ from pydantic import Field, field_validator, model_validator
 
 from vero.evaluation import EvaluationModel
 from vero.evaluation.persistence import _atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 
 def token_digest(token: str) -> str:
@@ -59,6 +64,26 @@ class InferenceScopeConfig(EvaluationModel):
         return value
 
 
+class InferenceRequestLogConfig(EvaluationModel):
+    """Durable JSONL capture of every request the gateway proxies or denies.
+
+    Operator telemetry: the log lives on the gateway state volume, which is
+    never agent-visible. Bodies are stored head+tail truncated so the terminal
+    usage frame of a stream survives; ``body_bytes: 0`` keeps metadata only.
+    """
+
+    directory: str = "/state/inference/requests"
+    body_bytes: int = Field(default=16384, ge=0)
+    rotate_bytes: int = Field(default=64 * 1024 * 1024, ge=1_048_576)
+
+    @field_validator("directory")
+    @classmethod
+    def validate_directory(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("request log directory must be absolute")
+        return value
+
+
 class InferenceGatewayConfig(EvaluationModel):
     """Trusted configuration for an OpenAI-compatible inference gateway."""
 
@@ -66,6 +91,7 @@ class InferenceGatewayConfig(EvaluationModel):
     upstream_base_url_env: str | None = "OPENAI_BASE_URL"
     default_upstream_base_url: str = "https://api.openai.com/v1"
     state_path: str = "/state/inference/usage.json"
+    request_log: InferenceRequestLogConfig | None = None
     scopes: dict[str, InferenceScopeConfig]
 
     @field_validator("upstream_api_key_env", "upstream_base_url_env")
@@ -326,6 +352,102 @@ class _StreamingUsage:
                 self.tokens = tokens
 
 
+class _BoundedCapture:
+    """Keep the head and tail of a byte stream within a fixed byte budget."""
+
+    def __init__(self, cap: int):
+        self.cap = cap
+        self.head_limit = cap // 2
+        self.tail_limit = cap - self.head_limit
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.total = 0
+
+    def feed(self, chunk: bytes) -> None:
+        self.total += len(chunk)
+        if self.cap <= 0:
+            return
+        if len(self.head) < self.head_limit:
+            take = min(self.head_limit - len(self.head), len(chunk))
+            self.head += chunk[:take]
+            chunk = chunk[take:]
+        if chunk:
+            self.tail += chunk
+            if len(self.tail) > self.tail_limit:
+                del self.tail[: len(self.tail) - self.tail_limit]
+
+    def snapshot(self) -> dict[str, Any]:
+        if self.cap <= 0:
+            return {"bytes": self.total, "truncated": self.total > 0}
+        kept = len(self.head) + len(self.tail)
+        result: dict[str, Any] = {"bytes": self.total, "truncated": self.total > kept}
+        text = bytes(self.head).decode("utf-8", errors="replace")
+        if self.tail and not result["truncated"]:
+            text += bytes(self.tail).decode("utf-8", errors="replace")
+        elif self.tail:
+            result["tail"] = bytes(self.tail).decode("utf-8", errors="replace")
+        result["text"] = text
+        return result
+
+
+class InferenceRequestLog:
+    """Size-rotated JSONL log of every request the gateway proxies or denies.
+
+    Best-effort by construction: a logging failure must never affect the
+    proxied request.
+    """
+
+    def __init__(self, config: InferenceRequestLogConfig):
+        self.config = config
+        self.directory = Path(config.directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._lock = asyncio.Lock()
+        existing = sorted(self.directory.glob("requests-*.jsonl"))
+        if existing:
+            self._current = existing[-1]
+            self._index = len(existing)
+            self._size = self._current.stat().st_size
+        else:
+            self._index = 1
+            self._current = self.directory / "requests-00001.jsonl"
+            self._size = 0
+
+    def body(self, data: bytes) -> dict[str, Any]:
+        capture = self.capture()
+        capture.feed(data)
+        return capture.snapshot()
+
+    def capture(self) -> _BoundedCapture:
+        return _BoundedCapture(self.config.body_bytes)
+
+    async def record(self, **fields: Any) -> None:
+        try:
+            line = json.dumps(
+                {
+                    "schema_version": 1,
+                    "ts": datetime.now(UTC).isoformat(),
+                    **fields,
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            encoded = (line + "\n").encode("utf-8")
+            async with self._lock:
+                if self._size and self._size + len(encoded) > self.config.rotate_bytes:
+                    self._index += 1
+                    self._current = self.directory / f"requests-{self._index:05d}.jsonl"
+                    self._size = 0
+                await asyncio.to_thread(self._append, self._current, encoded)
+                self._size += len(encoded)
+        except Exception:
+            logger.warning("inference request log write failed", exc_info=True)
+
+    @staticmethod
+    def _append(path: Path, data: bytes) -> None:
+        with open(path, "ab") as handle:
+            handle.write(data)
+
+
 _REQUEST_HEADERS = {
     "accept",
     "content-type",
@@ -377,6 +499,11 @@ def create_inference_gateway_app(
 
     base_url = (upstream_base_url or config.default_upstream_base_url).rstrip("/")
     store = InferenceUsageStore(config)
+    request_log = (
+        InferenceRequestLog(config.request_log)
+        if config.request_log is not None
+        else None
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -390,6 +517,7 @@ def create_inference_gateway_app(
 
     app = FastAPI(title="VeRO inference gateway", version="1", lifespan=lifespan)
     app.state.usage_store = store
+    app.state.request_log = request_log
 
     @app.get("/health")
     async def health():
@@ -450,6 +578,36 @@ def create_inference_gateway_app(
             value = json.loads(body) if body else {}
         except (json.JSONDecodeError, UnicodeDecodeError):
             return _provider_error(400, "request body must be JSON", "invalid_request")
+
+        started = time.monotonic()
+
+        async def log_request(
+            *,
+            status: int,
+            error: str | None = None,
+            stream: bool = False,
+            tokens: tuple[int, int, int] = (0, 0, 0),
+            response: dict[str, Any] | None = None,
+            upstream_error: bool = False,
+        ) -> None:
+            if request_log is None:
+                return
+            await request_log.record(
+                scope=scope_name,
+                attribution=attribution,
+                endpoint=endpoint,
+                model=value.get("model") if isinstance(value, dict) else None,
+                stream=stream,
+                status=status,
+                error=error,
+                latency_ms=round((time.monotonic() - started) * 1000, 1),
+                input_tokens=tokens[0],
+                output_tokens=tokens[1],
+                total_tokens=tokens[2],
+                upstream_error=upstream_error,
+                request=request_log.body(body),
+                response=response,
+            )
         # Per-scope allow-list: producer (optimizer) and evaluation (target) have
         # separate tokens + allowed_models, so the target is normally confined to
         # its fixed eval model. NOTE (known, deferred): this is not a *hard*
@@ -463,6 +621,7 @@ def create_inference_gateway_app(
         # producer.
         model = value.get("model") if isinstance(value, dict) else None
         if not isinstance(model, str) or model not in scope.allowed_models:
+            await log_request(status=403, error="model_denied")
             return _provider_error(
                 403, "model is not allowed for this scope", "model_denied"
             )
@@ -475,6 +634,7 @@ def create_inference_gateway_app(
         try:
             await store.reserve(scope_name, attribution)
         except InferenceBudgetExceeded as error:
+            await log_request(status=429, error="budget_exhausted")
             return _provider_error(429, str(error), "budget_exhausted")
 
         headers = {
@@ -499,6 +659,7 @@ def create_inference_gateway_app(
             await asyncio.shield(
                 store.complete(scope_name, attribution, upstream_error=True)
             )
+            await log_request(status=502, error="upstream_error", upstream_error=True)
             return _provider_error(
                 502, "upstream inference request failed", "upstream_error"
             )
@@ -515,6 +676,7 @@ def create_inference_gateway_app(
         is_stream = "text/event-stream" in upstream.headers.get("content-type", "")
         if is_stream:
             observed = _StreamingUsage()
+            captured = request_log.capture() if request_log is not None else None
 
             async def chunks() -> AsyncIterator[bytes]:
                 failed = upstream.status_code >= 400
@@ -531,10 +693,21 @@ def create_inference_gateway_app(
                             total_tokens=observed.tokens[2],
                             upstream_error=failed,
                         )
+                        await log_request(
+                            status=upstream.status_code,
+                            stream=True,
+                            tokens=observed.tokens,
+                            response=(
+                                captured.snapshot() if captured is not None else None
+                            ),
+                            upstream_error=failed,
+                        )
 
                 try:
                     async for chunk in upstream.aiter_bytes():
                         observed.feed(chunk)
+                        if captured is not None:
+                            captured.feed(chunk)
                         yield chunk
                 except asyncio.CancelledError:
                     # OpenAI clients commonly stop consuming an SSE stream as soon
@@ -579,6 +752,12 @@ def create_inference_gateway_app(
                 total_tokens=tokens[2],
                 upstream_error=upstream.status_code >= 400,
             )
+        )
+        await log_request(
+            status=upstream.status_code,
+            tokens=tokens,
+            response=request_log.body(content) if request_log is not None else None,
+            upstream_error=upstream.status_code >= 400,
         )
         return Response(
             content=content,
