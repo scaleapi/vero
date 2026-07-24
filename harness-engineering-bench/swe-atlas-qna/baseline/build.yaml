@@ -48,7 +48,7 @@ rescore_attempts: 1
 model: openai/gpt-5.4-mini-2026-03-17
 environment_name: modal
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
-extra_harbor_args: ["--ek", "app_name=harness-engineering-bench"]
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1

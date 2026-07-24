@@ -54,7 +54,7 @@ model: openai/gpt-5.4-mini-2026-03-17
 environment_name: modal
 # --no-force-build pulls the prebuilt officeqa-corpus image (see task_source
 # note above); the --ek groups inner sandboxes under one dedicated Modal app.
-extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-engineering-bench"]
+extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
