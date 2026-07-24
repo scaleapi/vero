@@ -66,6 +66,12 @@ benchmark can be checked against the others at a glance.
 - **Verifier timeout** is 2× `timeout_seconds`: finalization runs the
   candidate and the baseline test evaluations.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
+- **`infrastructure_max_attempts: 3`** applies only to trusted finalization
+  re-scores. For competitive (agent) evaluations, whole-sub-run infrastructure
+  retry is disabled and a within-trial transient-infra failure is scored at the
+  failure value rather than excluded — a candidate cannot inflate its mean by
+  emitting a timeout/connection error. Coverage gaps (no trial produced) and
+  gateway budget/auth exhaustion remain excluded/terminating for both.
 
 † Sized from stock-agent probes (codex on the target model, 3 development
 tasks each, full declared timeouts): tau3 trials took 202-211s (900s budget
