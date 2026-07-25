@@ -24,7 +24,7 @@ model_provider = "vero_gateway"
 
 [model_providers.vero_gateway]
 name = "VeRO inference gateway"
-base_url = "{{ inference_gateway_url }}/scopes/producer/optimizer/v1"
+base_url = "{{ producer_base_url }}"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 supports_websockets = false

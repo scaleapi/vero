@@ -642,6 +642,45 @@ def test_compiled_task_factory_path_resolves(tmp_path):
     assert callable(load_factory(factory))
 
 
+def test_compiled_producer_base_url_matches_the_gateway_route(tmp_path):
+    """Every artifact naming the producer scope must agree with the served route.
+
+    The URL used to be rebuilt by string concatenation in four places while the
+    route was declared in a fifth. A mismatch 404s or 403s inside the container
+    at run time, so asserting on the rendered artifacts is the only check that
+    would catch a template going back to concatenation.
+    """
+    expected = LAYOUT.scope_url("producer", LAYOUT.optimizer_attribution)
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        ),
+        model="gpt-target",
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+
+    compose = yaml.safe_load(
+        (output / "environment/docker-compose.yaml").read_text(encoding="utf-8")
+    )
+    assert compose["services"]["main"]["environment"]["OPENAI_BASE_URL"] == expected
+    launch = json.loads(
+        (output / "environment/gateway/launch.json").read_text(encoding="utf-8")
+    )
+    assert launch["producer_base_url"] == expected
+    seed = (output / "environment/main/seed.sh").read_text(encoding="utf-8")
+    assert f'base_url = "{expected}"' in seed
+
+    # And the path the gateway actually serves is the same string, not a copy.
+    assert LAYOUT.scope_route.startswith(LAYOUT.scope_route_base)
+    assert expected.endswith(
+        LAYOUT.scope_path("producer", LAYOUT.optimizer_attribution)
+    )
+
+
 def test_load_build_config_resolves_relative_local_paths(tmp_path):
     target = _target_repo(tmp_path / "target")
     tasks = tmp_path / "tasks"

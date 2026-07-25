@@ -681,7 +681,7 @@ def create_inference_gateway_app(
         return store.public_status()[scope_name]
 
     @app.api_route(
-        "/scopes/{scope_name}/{attribution}/v1/{endpoint:path}",
+        LAYOUT.scope_route,
         methods=["POST"],
     )
     async def proxy(

@@ -46,6 +46,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.harbor.isolation import harness_grant_commands, harness_reachability_probe
+from vero.harbor.layout import LAYOUT
 from vero.models import StrictModel
 from vero.sandbox import CommandResult, Sandbox
 from vero.staging import SandboxStagingArea
@@ -653,8 +654,8 @@ class HarborBackend:
                 else self.config.inference_gateway_token
             ) or ""
             gateway_url = (
-                f"{self.config.inference_gateway_url.rstrip('/')}/scopes/{scope}/"
-                f"{evaluation_id}/v1"
+                f"{self.config.inference_gateway_url.rstrip('/')}"
+                f"{LAYOUT.scope_path(scope, evaluation_id)}"
             )
             if self.config.task_services_use_upstream:
                 # Task-owned eval services (user-sims, LLM graders) run inside the

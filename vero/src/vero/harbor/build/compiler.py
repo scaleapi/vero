@@ -31,8 +31,15 @@ _TEMPLATES = Path(__file__).parent / "templates"
 _VERO_COPY = ("pyproject.toml", "README.md", "uv.lock", "src")
 
 SESSION_ID = "trial"
-UPSTREAM_API_KEY_ENV = "VERO_INFERENCE_UPSTREAM_API_KEY"
-UPSTREAM_BASE_URL_ENV = "VERO_INFERENCE_UPSTREAM_BASE_URL"
+UPSTREAM_API_KEY_ENV = LAYOUT.gateway_upstream_api_key_env
+UPSTREAM_BASE_URL_ENV = LAYOUT.gateway_upstream_base_url_env
+PRODUCER_BASE_URL = LAYOUT.scope_url('producer', LAYOUT.optimizer_attribution)
+
+# Credentials the compose template routes through the gateway by setting them
+# explicitly, instead of blanking them like every other declared secret. The two
+# halves are one invariant: a name here must be set below, and a name set below
+# must be here, or the rendered compose emits the key twice.
+GATEWAY_ROUTED_CREDENTIALS = frozenset({"OPENAI_API_KEY", "OPENAI_BASE_URL"})
 
 # Container paths and service identities come from the layout, never from a
 # literal here: the templates read the same object, so the two cannot drift.
@@ -654,7 +661,7 @@ def compile_harbor_task(
                     "upstream_base_url_target": UPSTREAM_BASE_URL_ENV,
                     "producer_api_key": producer_inference_token,
                     "producer_base_url": (
-                        f"{INFERENCE_GATEWAY_URL}/scopes/producer/optimizer/v1"
+                        PRODUCER_BASE_URL
                     ),
                 },
                 ensure_ascii=False,
@@ -692,10 +699,14 @@ def compile_harbor_task(
         "sidecar_secrets": config.secrets,
         "inference_gateway": config.inference_gateway,
         "gateway_environment": gateway_environment,
+        # Names the main container blanks. Default-deny: every declared secret is
+        # blanked for the optimizer unless it appears in GATEWAY_ROUTED_CREDENTIALS,
+        # which the compose template sets explicitly just below the blanking loop
+        # (to the producer token and the gateway URL). The exclusion exists to
+        # avoid emitting the same key twice, not to permit anything: adding a new
+        # credential to `secrets` gets it blanked automatically.
         "scrubbed_main_environment": [
-            name
-            for name in task_environment
-            if name not in {"OPENAI_API_KEY", "OPENAI_BASE_URL"}
+            name for name in task_environment if name not in GATEWAY_ROUTED_CREDENTIALS
         ],
         "producer_inference_token": producer_inference_token,
         "evaluation_inference_token": evaluation_inference_token,
@@ -703,6 +714,7 @@ def compile_harbor_task(
         "read_only_paths": config.read_only_paths,
         "local_task_source": local_task_source,
         "sidecar_factory": FACTORY_PATH,
+        "producer_base_url": PRODUCER_BASE_URL,
         "command_harness": config.command_backend is not None,
         "selection_backend": _backend_id(config.selection_partition),
         "evaluation_set_name": config.evaluation_set_name,

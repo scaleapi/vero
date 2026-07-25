@@ -3,13 +3,13 @@ services:
   main:
     command: ["{{ layout.seed_script }}"]
     environment:
-      VERO_EVAL_URL: "{{ layout.sidecar_url }}"
+      {{ layout.eval_url_env }}: "{{ layout.sidecar_url }}"
 {% for secret in scrubbed_main_environment %}
       {{ secret }}: ""
 {% endfor %}
 {% if inference_gateway %}
       OPENAI_API_KEY: "{{ producer_inference_token }}"
-      OPENAI_BASE_URL: "{{ inference_gateway_url }}/scopes/producer/optimizer/v1"
+      OPENAI_BASE_URL: "{{ producer_base_url }}"
 {% elif "OPENAI_API_KEY" in secrets %}
       OPENAI_API_KEY: ""
 {% if "OPENAI_BASE_URL" in secrets %}

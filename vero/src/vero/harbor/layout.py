@@ -69,6 +69,14 @@ class TaskLayout:
     sidecar_port: int = 8000
     gateway_host: str = "inference-gateway"
     gateway_port: int = 8001
+    eval_url_env: str = "VERO_EVAL_URL"
+    gateway_upstream_api_key_env: str = "VERO_INFERENCE_UPSTREAM_API_KEY"
+    gateway_upstream_base_url_env: str = "VERO_INFERENCE_UPSTREAM_BASE_URL"
+    optimizer_attribution: str = "optimizer"
+    # The gateway's proxy route, with the FastAPI parameter names it binds. Both
+    # the route the gateway serves and every URL built for it derive from this one
+    # string, so a caller cannot construct a path the gateway will not match.
+    scope_route_base: str = "/scopes/{scope_name}/{attribution}/v1"
 
     # Derived paths. Defined here rather than spelled out at each use site, so a
     # base path and its children cannot drift apart.
@@ -112,6 +120,27 @@ class TaskLayout:
     @property
     def gateway_url(self) -> str:
         return f"http://{self.gateway_host}:{self.gateway_port}"
+
+    @property
+    def scope_route(self) -> str:
+        """The route the gateway registers, including the proxied endpoint."""
+        return f"{self.scope_route_base}/{{endpoint:path}}"
+
+    def scope_path(self, scope: str, attribution: str) -> str:
+        """Path for one scope, for callers that hold their own base URL.
+
+        The trusted backend reads its gateway URL from the deployment config
+        rather than assuming this layout's, so it needs the path alone.
+        """
+        return self.scope_route_base.format(scope_name=scope, attribution=attribution)
+
+    def scope_url(self, scope: str, attribution: str) -> str:
+        """Base URL an OpenAI-compatible client should use for one scope.
+
+        The attribution segment is a free-form label for per-caller accounting,
+        not a security boundary: the token decides what the scope may do.
+        """
+        return f"{self.gateway_url}{self.scope_path(scope, attribution)}"
 
 
 LAYOUT = TaskLayout()

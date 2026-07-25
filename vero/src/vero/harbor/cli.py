@@ -25,6 +25,7 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.harbor.auth import read_admin_token
+from vero.harbor.layout import LAYOUT
 from vero.harbor.session import (
     create_harbor_session_archive,
     extract_harbor_session_archive,
@@ -34,9 +35,9 @@ from vero.harbor.sidecar import SidecarEvaluationRequest
 
 
 def _base_url() -> str:
-    value = os.environ.get("VERO_EVAL_URL")
+    value = os.environ.get(LAYOUT.eval_url_env)
     if not value:
-        raise click.ClickException("VERO_EVAL_URL is not set")
+        raise click.ClickException(f"{LAYOUT.eval_url_env} is not set")
     return value.rstrip("/")
 
 
