@@ -31,6 +31,7 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
+    baseline_reward: 0.4495  # held-out K=3 mean (see CONFIGURATION.md)
     failure_value: 0.0
     max_attempts: 1
 
@@ -41,7 +42,7 @@ objective:
   direction: maximize
 reward_mode: submit
 baseline_floor: false
-score_baseline: true
+score_baseline: false
 rescore_top_k: 3
 rescore_attempts: 1
 
