@@ -203,6 +203,11 @@ tags = ["qa", "deep-research", "retrieval", "browsecomp-plus"]
 [verifier]
 timeout_sec = 300.0
 
+[verifier.env]
+OPENAI_API_KEY = "${{OPENAI_API_KEY}}"
+OPENAI_BASE_URL = "${{OPENAI_BASE_URL}}"
+BROWSECOMP_JUDGE_MODEL = "${{BROWSECOMP_JUDGE_MODEL:-gpt-4.1}}"
+
 [agent]
 timeout_sec = 3600.0
 
