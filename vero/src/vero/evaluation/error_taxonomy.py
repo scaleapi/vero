@@ -158,6 +158,22 @@ _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], ErrorCategory]] = [
         ),
         ErrorCategory.TRANSIENT_INFRA,
     ),
+    (
+        # Harness / Modal environment loss: the task sandbox died, was never
+        # created, or its container or held-out tests fixture could not be
+        # provisioned. This is infrastructure the candidate did not cause, so
+        # it is excluded from the aggregate and counted toward invalidity,
+        # never scored as an informative task failure. Without this, a run
+        # whose sandboxes all collapsed reports a fully "successful" 0.0
+        # instead of an invalid aggregate.
+        re.compile(
+            r"sandbox|streamterminated|"
+            r"failed.?to.?add.?tests.?directory|addtestsdirerror|"
+            r"loading.?container|fetchspec",
+            re.IGNORECASE,
+        ),
+        ErrorCategory.TRANSIENT_INFRA,
+    ),
 ]
 
 
