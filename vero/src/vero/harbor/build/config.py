@@ -430,6 +430,7 @@ class HarborBuildConfig(StrictModel):
         max_concurrency: Cases evaluated concurrently.
         error_rate_threshold: Case error fraction above which an evaluation is
             abandoned.
+        build_timeout_seconds: Wall clock for building the task's images.
         verifier_timeout_seconds: Wall clock for the trusted verifier. Falls back
             to timeout_seconds.
         evaluation_drain_timeout_seconds: Grace period for in-flight evaluations
@@ -541,6 +542,7 @@ class HarborBuildConfig(StrictModel):
     task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     max_concurrency: int = Field(default=8, ge=1)
     error_rate_threshold: float | None = Field(default=0.1, gt=0, le=1)
+    build_timeout_seconds: int = Field(default=1800, ge=1)
     verifier_timeout_seconds: int | None = Field(default=None, ge=1)
     evaluation_drain_timeout_seconds: float | None = Field(default=None, gt=0)
 

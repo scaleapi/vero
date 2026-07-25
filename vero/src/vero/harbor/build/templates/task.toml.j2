@@ -12,7 +12,7 @@ environment_mode = "shared"
 timeout_sec = {{ verifier_timeout }}
 
 [environment]
-build_timeout_sec = 1800
+build_timeout_sec = {{ build_timeout }}
 {% if secrets %}
 
 [environment.env]

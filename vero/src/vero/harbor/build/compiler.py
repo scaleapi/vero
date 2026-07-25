@@ -734,6 +734,7 @@ def compile_harbor_task(
         ],
         "exhaust_budget": config.instruct_exhaust_budget,
         "disclose_budget": config.disclose_budget,
+        "build_timeout": config.build_timeout_seconds,
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),
