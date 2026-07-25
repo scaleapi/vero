@@ -319,6 +319,7 @@ class CommandBackendSpec(StrictModel):
 _HARBOR_ONLY_FIELDS = frozenset(
     {
         "agent_import_path",
+        "task_source",
         "model",
         "environment_name",
         "harbor_python_version",
@@ -361,7 +362,8 @@ class HarborBuildConfig(StrictModel):
         agent_repo: Absolute path to the editable target. Copied twice, into the
             immutable agent-baseline and the editable agent-seed.
         task_source: Local path to the task definitions, or a registry reference
-            pinned as name@version.
+            pinned as name@version. Required for a harbor evaluation_backend,
+            and rejected for a command one, which has no Harbor tasks.
         agent_import_path: Import path of the target agent class Harbor loads.
             Required for a harbor evaluation_backend, unused for a command one.
         evaluation_backend: How a candidate is scored. "harbor" drives a target
@@ -471,7 +473,9 @@ class HarborBuildConfig(StrictModel):
     name: str
     description: str = ""
     agent_repo: str
-    task_source: str
+    # Optional because a command evaluation_backend has no Harbor task
+    # definitions; validate_references requires it for a harbor backend.
+    task_source: str | None = None
     # Optional because a command evaluation_backend has no agent class to load;
     # validate_references requires it for a harbor backend.
     agent_import_path: str | None = None
@@ -560,7 +564,6 @@ class HarborBuildConfig(StrictModel):
     @field_validator(
         "name",
         "agent_repo",
-        "task_source",
         "evaluation_set_name",
         "environment_name",
         "harbor_python_version",
@@ -596,7 +599,7 @@ class HarborBuildConfig(StrictModel):
             )
         return value
 
-    @field_validator("model", "reward_key", "agent_import_path")
+    @field_validator("model", "reward_key", "agent_import_path", "task_source")
     @classmethod
     def validate_optional_identity(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -684,7 +687,9 @@ class HarborBuildConfig(StrictModel):
 
     @model_validator(mode="after")
     def validate_references(self) -> HarborBuildConfig:
-        if not Path(self.task_source).exists() and "@" not in self.task_source:
+        if self.task_source is not None and (
+            not Path(self.task_source).exists() and "@" not in self.task_source
+        ):
             raise ValueError("registry task_source must include an explicit version")
         if self.evaluation_backend == "command":
             if self.command_backend is None:
@@ -703,9 +708,14 @@ class HarborBuildConfig(StrictModel):
                 raise ValueError(
                     "command_backend requires evaluation_backend: command"
                 )
-            if self.agent_import_path is None:
+            missing = sorted(
+                name
+                for name in ("agent_import_path", "task_source")
+                if getattr(self, name) is None
+            )
+            if missing:
                 raise ValueError(
-                    "harbor evaluation_backend requires an agent_import_path"
+                    "harbor evaluation_backend requires: " + ", ".join(missing)
                 )
         known = set(self.partitions)
         if self.selection_partition not in known:
@@ -728,7 +738,7 @@ class HarborBuildConfig(StrictModel):
         reward_keys = [target.reward_key for target in self.targets]
         if len(reward_keys) != len(set(reward_keys)):
             raise ValueError("target reward keys must be unique")
-        if self.task_manifest is not None:
+        if self.task_manifest is not None and self.task_source is not None:
             try:
                 manifest = json.loads(
                     Path(self.task_manifest).read_text(encoding="utf-8")

@@ -186,11 +186,11 @@ def _local_result_task_name(task_source: Path, selector: str) -> str:
 
 def _write_cases(config: HarborBuildConfig, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    task_source = Path(config.task_source)
-    # A command backend's case ids name whatever its harness understands (seeds,
-    # instances, shards), not local Harbor task directories, so there is no
-    # canonical task name to resolve for them.
-    local = task_source.exists() and config.command_backend is None
+    # Only a harbor backend names a task_source, and only then does a case id
+    # correspond to a local Harbor task directory with a canonical name. A
+    # command backend's ids name whatever its harness understands.
+    task_source = Path(config.task_source) if config.task_source else None
+    local = task_source is not None and task_source.exists()
     for partition, tasks in config.partitions.items():
         path = destination / f"{partition}.jsonl"
         lines = [
@@ -473,9 +473,10 @@ def compile_harbor_task(
     protected = [Path(config.agent_repo).resolve()]
     if use_local_vero:
         protected.append(source_root)
-    task_source_path = Path(config.task_source)
-    if task_source_path.exists():
-        protected.append(task_source_path.resolve())
+    if config.task_source is not None:
+        task_source_path = Path(config.task_source)
+        if task_source_path.exists():
+            protected.append(task_source_path.resolve())
     for path in protected:
         if output == path or output.is_relative_to(path) or path.is_relative_to(output):
             raise ValueError(
@@ -551,7 +552,9 @@ def compile_harbor_task(
             Path(config.command_backend.harness_source),
             sidecar_dir / "harness",
         )
-    local_task_source = Path(config.task_source).exists()
+    local_task_source = (
+        config.task_source is not None and Path(config.task_source).exists()
+    )
     if local_task_source:
         shutil.copytree(
             Path(config.task_source),

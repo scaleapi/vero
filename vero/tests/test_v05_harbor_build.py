@@ -485,6 +485,7 @@ def test_command_backend_compiles_a_task_with_no_target_agent(tmp_path):
         evaluation_backend="command",
         command_backend=_command_backend(tmp_path / "cmd"),
         agent_import_path=_OMIT,
+        task_source=_OMIT,
     )
     assert config.agent_import_path is None
 
@@ -552,11 +553,19 @@ def test_build_config_keeps_the_two_backend_kinds_apart(tmp_path):
             tmp_path / "missing",
             evaluation_backend="command",
             agent_import_path=_OMIT,
+            task_source=_OMIT,
         )
     with pytest.raises(ValidationError, match="requires evaluation_backend: command"):
         _config(tmp_path / "stray", command_backend=_command_backend(tmp_path / "s"))
-    with pytest.raises(ValidationError, match="requires an agent_import_path"):
+    with pytest.raises(ValidationError, match="requires: agent_import_path"):
         _config(tmp_path / "noagent", agent_import_path=None)
+    with pytest.raises(ValidationError, match="only apply to a harbor"):
+        _config(
+            tmp_path / "tasksource",
+            evaluation_backend="command",
+            command_backend=_command_backend(tmp_path / "t"),
+            agent_import_path=_OMIT,
+        )
     # Harbor-only knobs are reported rather than silently ignored.
     with pytest.raises(ValidationError, match="only apply to a harbor"):
         _config(
@@ -564,6 +573,7 @@ def test_build_config_keeps_the_two_backend_kinds_apart(tmp_path):
             evaluation_backend="command",
             command_backend=_command_backend(tmp_path / "i"),
             agent_import_path=_OMIT,
+            task_source=_OMIT,
             max_retries=5,
             feedback_transcripts=True,
         )
