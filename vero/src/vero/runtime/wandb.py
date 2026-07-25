@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,31 @@ from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import RuntimeEvent
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_wandb_base_url(environment: dict[str, str] | None = None) -> str | None:
+    """Give a scheme-less ``WANDB_BASE_URL`` the ``https://`` it needs.
+
+    A self-hosted host is naturally written ``scaleai.wandb.io``, but W&B's
+    settings model parses ``base_url`` as a URL and rejects that with
+    ``Input should be a valid URL, relative URL without a base``. The error
+    surfaces out of ``wandb.init()``, which callers treat as "W&B unavailable",
+    so one missing scheme silently costs a run all of its reporting.
+
+    Returns the value in effect, or None when the variable is unset.
+    """
+    environ = os.environ if environment is None else environment
+    value = (environ.get("WANDB_BASE_URL") or "").strip()
+    if not value or "://" in value:
+        return value or None
+    corrected = f"https://{value}"
+    environ["WANDB_BASE_URL"] = corrected
+    logger.warning(
+        "WANDB_BASE_URL %r has no scheme and would be rejected by W&B; using %r",
+        value,
+        corrected,
+    )
+    return corrected
 
 
 def _open_wandb_run(
@@ -43,6 +69,7 @@ def _open_wandb_run(
             raise RuntimeError(
                 "W&B reporting requires `pip install scale-vero[wandb]`"
             ) from error
+    normalize_wandb_base_url()
     wandb_dir.mkdir(parents=True, exist_ok=True)
     stable_id = run_id or ("vero-" + hashlib.sha256(session_id.encode()).hexdigest()[:16])
     init_kwargs: dict[str, Any] = {
@@ -96,6 +123,7 @@ class WandbEventSink:
                     "W&B reporting requires `pip install scale-vero[wandb]`"
                 ) from error
 
+        normalize_wandb_base_url()
         wandb_dir = session_dir / "artifacts" / "wandb"
         wandb_dir.mkdir(parents=True, exist_ok=True)
         self.artifacts = ArtifactStore(session_dir / "artifacts")

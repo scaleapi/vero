@@ -270,3 +270,76 @@ async def test_deployment_finalize_hook_archives_gateway_state(tmp_path):
     assert (
         exported / "requests/requests-00001.jsonl"
     ).read_text() == '{"scope":"producer"}\n'
+
+
+@pytest.mark.asyncio
+async def test_wandb_init_failure_is_recorded_in_the_session_artifacts(tmp_path):
+    # A sink that cannot start only logs to the sidecar container's stderr, which
+    # no run artifact captures, so a disabled sink is indistinguishable from a
+    # healthy run that logged nothing. Leave the reason behind in the session.
+    trusted = tmp_path / "trusted"
+    agent = tmp_path / "agent"
+    _repo(trusted, "VALUE = 1\n")
+    _repo(agent, "VALUE = 1\n")
+    cases = tmp_path / "cases.json"
+    cases.write_text('[{"id":"task","task_name":"org/task"}]')
+    evaluation_set = EvaluationSet(name="benchmark")
+    objective = ObjectiveSpec(
+        selector=MetricSelector(metric="score"),
+        direction="maximize",
+    )
+    session_dir = tmp_path / "state/session"
+    config = {
+        "repo_path": str(trusted),
+        "agent_repo_path": str(agent),
+        "session_dir": str(session_dir),
+        "backends": {
+            "backend": {
+                "task_source": "org/benchmark@1.0",
+                "agent_import_path": "program:Agent",
+                "cases_path": str(cases),
+                "harbor_requirement": "harbor==0.1.17",
+                "uv_executable": sys.executable,
+            }
+        },
+        "access_policies": [],
+        "budgets": [],
+        "selection": {
+            "mode": "auto_best",
+            "backend_id": "backend",
+            "evaluation_set": evaluation_set.model_dump(mode="json"),
+            "objective": objective.model_dump(mode="json"),
+            "baseline_version": "HEAD",
+        },
+        "targets": [
+            {
+                "reward_key": "reward",
+                "backend_id": "backend",
+                "evaluation_set": evaluation_set.model_dump(mode="json"),
+                "objective": objective.model_dump(mode="json"),
+            }
+        ],
+        "admin_volume": str(tmp_path / "state/admin"),
+        "wandb": {"project": "vero-tests"},
+    }
+
+    import vero.runtime.wandb as wandb_module
+
+    def _explode(**kwargs):
+        raise ValueError("Input should be a valid URL, relative URL without a base")
+
+    original = wandb_module.SidecarWandbSink
+    wandb_module.SidecarWandbSink = _explode
+    try:
+        components = await build_harbor_components(config)
+    finally:
+        wandb_module.SidecarWandbSink = original
+
+    # The eval path survives: observability never takes the sidecar down.
+    assert components.telemetry is None
+    recorded = json.loads(
+        (session_dir / "artifacts/wandb/init-error.json").read_text()
+    )
+    assert recorded["project"] == "vero-tests"
+    assert recorded["error_type"] == "ValueError"
+    assert "valid URL" in recorded["error"]
