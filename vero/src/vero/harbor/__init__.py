@@ -3,6 +3,7 @@
 from vero.harbor.backend import HarborBackend, HarborBackendConfig, HarborCase
 from vero.harbor.build import (
     AgentAccessSpec,
+    CommandBackendSpec,
     HarborBuildConfig,
     InferenceBudgetSpec,
     InferenceGatewaySpec,
@@ -48,6 +49,7 @@ __all__ = [
     "HarborDeploymentConfig",
     "HarborSessionManifest",
     "AgentAccessSpec",
+    "CommandBackendSpec",
     "HarborBuildConfig",
     "InferenceBudgetSpec",
     "InferenceGatewaySpec",

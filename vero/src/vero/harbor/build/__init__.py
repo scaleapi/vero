@@ -3,6 +3,7 @@
 from vero.harbor.build.compiler import compile_harbor_task
 from vero.harbor.build.config import (
     AgentAccessSpec,
+    CommandBackendSpec,
     HarborBuildConfig,
     InferenceBudgetSpec,
     InferenceGatewaySpec,
@@ -14,6 +15,7 @@ from vero.harbor.build.config import (
 
 __all__ = [
     "AgentAccessSpec",
+    "CommandBackendSpec",
     "HarborBuildConfig",
     "InferenceBudgetSpec",
     "InferenceGatewaySpec",

@@ -271,6 +271,77 @@ class WandbSpec(StrictModel):
     log_traces: bool = False
 
 
+class CommandBackendSpec(StrictModel):
+    """Inner evaluation that scores a candidate by running a program.
+
+    Use this when the outer loop is still a Harbor coding agent but the target is
+    not an agent — a solver, an index build, a data pipeline — so there is nothing
+    to drive with a nested `harbor run`. The compiler copies harness_source into
+    the sidecar and points the backend's harness_root at it.
+
+    Attributes:
+        harness_source: Host directory holding the scoring program, resolved
+            relative to the build YAML. Must exist.
+        command: Argument vector to run. Supports the placeholders {harness},
+            {workspace}, {request}, {report}, and {artifacts}.
+        working_directory: Directory to run the command from.
+        environment: Environment variables set for the command.
+        passthrough_environment: Names forwarded from the sidecar's environment.
+        staged_inputs: Extra files staged into the command's workspace.
+        agent_context_inputs: Per-case files published into the agent context.
+    """
+
+    harness_source: str
+    command: list[str]
+    working_directory: str = "."
+    environment: dict[str, str] = Field(default_factory=dict)
+    passthrough_environment: list[str] = Field(default_factory=list)
+    staged_inputs: dict[str, str] = Field(default_factory=dict)
+    agent_context_inputs: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("harness_source")
+    @classmethod
+    def validate_harness_source(cls, value: str) -> str:
+        if not value.strip() or not Path(value).is_dir():
+            raise ValueError("harness_source must be an existing directory")
+        return value
+
+    @field_validator("command")
+    @classmethod
+    def validate_command(cls, value: list[str]) -> list[str]:
+        if not value or any(not part.strip() for part in value):
+            raise ValueError("command must contain non-empty arguments")
+        return value
+
+
+# Fields that only mean something for a nested `harbor run`. Setting one on a
+# command build is a mistake worth reporting: it would be silently ignored.
+_HARBOR_ONLY_FIELDS = frozenset(
+    {
+        "agent_import_path",
+        "model",
+        "environment_name",
+        "harbor_python_version",
+        "default_index",
+        "n_attempts",
+        "max_retries",
+        "retry_wait_multiplier",
+        "retry_min_wait_seconds",
+        "retry_max_wait_seconds",
+        "infrastructure_max_attempts",
+        "infrastructure_retry_delay_seconds",
+        "aggregate_attempts",
+        "feedback_transcripts",
+        "feedback_max_bytes",
+        "expose_attempt_detail",
+        "extra_harbor_args",
+        "task_agent_timeout_seconds",
+        "task_environment",
+        "task_services_use_upstream",
+    }
+)
+
+
 class HarborBuildConfig(StrictModel):
     """Everything needed to emit an isolated Harbor optimization task.
 
@@ -292,6 +363,13 @@ class HarborBuildConfig(StrictModel):
         task_source: Local path to the task definitions, or a registry reference
             pinned as name@version.
         agent_import_path: Import path of the target agent class Harbor loads.
+            Required for a harbor evaluation_backend, unused for a command one.
+        evaluation_backend: How a candidate is scored. "harbor" drives a target
+            agent with a nested `harbor run`; "command" runs a program instead,
+            for a target that is not an agent. The outer optimizer is a Harbor
+            agent either way.
+        command_backend: The scoring program, required when evaluation_backend is
+            "command" and rejected otherwise.
         harbor_requirement: Pinned harbor requirement for the task image.
         partitions: Partition name to the Harbor task names it holds. Emitted as
             one cases/<partition>.jsonl per partition.
@@ -394,13 +472,22 @@ class HarborBuildConfig(StrictModel):
     description: str = ""
     agent_repo: str
     task_source: str
-    agent_import_path: str
+    # Optional because a command evaluation_backend has no agent class to load;
+    # validate_references requires it for a harbor backend.
+    agent_import_path: str | None = None
     harbor_requirement: str
     partitions: dict[str, list[str]]
     task_manifest: str | None = None
     agent_access: list[AgentAccessSpec]
     selection_partition: str
     targets: list[VerificationTargetSpec]
+    # TODO: the Harbor-inner fields below (model, retries, feedback, harbor args)
+    # only apply when evaluation_backend is "harbor", and the command equivalents
+    # live in command_backend. Nesting each group under its own discriminated
+    # sub-spec would make that structural instead of validated, at the cost of
+    # rewriting every benchmark's build.yaml. Deferred deliberately.
+    evaluation_backend: Literal["harbor", "command"] = "harbor"
+    command_backend: CommandBackendSpec | None = None
 
     evaluation_set_name: str = "harbor"
     objective: ObjectiveSpec = Field(
@@ -474,7 +561,6 @@ class HarborBuildConfig(StrictModel):
         "name",
         "agent_repo",
         "task_source",
-        "agent_import_path",
         "evaluation_set_name",
         "environment_name",
         "harbor_python_version",
@@ -510,7 +596,7 @@ class HarborBuildConfig(StrictModel):
             )
         return value
 
-    @field_validator("model", "reward_key")
+    @field_validator("model", "reward_key", "agent_import_path")
     @classmethod
     def validate_optional_identity(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
@@ -600,6 +686,27 @@ class HarborBuildConfig(StrictModel):
     def validate_references(self) -> HarborBuildConfig:
         if not Path(self.task_source).exists() and "@" not in self.task_source:
             raise ValueError("registry task_source must include an explicit version")
+        if self.evaluation_backend == "command":
+            if self.command_backend is None:
+                raise ValueError(
+                    "command evaluation_backend requires a command_backend"
+                )
+            # Reported rather than ignored: these would silently do nothing.
+            ignored = sorted(_HARBOR_ONLY_FIELDS & self.model_fields_set)
+            if ignored:
+                raise ValueError(
+                    "these fields only apply to a harbor evaluation_backend: "
+                    + ", ".join(ignored)
+                )
+        else:
+            if self.command_backend is not None:
+                raise ValueError(
+                    "command_backend requires evaluation_backend: command"
+                )
+            if self.agent_import_path is None:
+                raise ValueError(
+                    "harbor evaluation_backend requires an agent_import_path"
+                )
         known = set(self.partitions)
         if self.selection_partition not in known:
             raise ValueError("selection_partition is not present in partitions")
@@ -676,10 +783,12 @@ class HarborBuildConfig(StrictModel):
                     "inference gateway credentials must not also be sidecar secrets: "
                     + ", ".join(overlap)
                 )
-            # Every model that will actually be requested has to be allowed by the
-            # scope that will actually serve it. Otherwise the mismatch surfaces as
-            # a gateway 403 at run time — and for a verification target, only after
-            # search has already spent its budget.
+        # Every model that will actually be requested has to be allowed by the
+        # scope that will actually serve it. Otherwise the mismatch surfaces as a
+        # gateway 403 at run time — and for a verification target, only after
+        # search has already spent its budget. A command backend requests no
+        # models, so there is nothing to reconcile.
+        if self.inference_gateway is not None and self.evaluation_backend == "harbor":
             evaluation_models = self.inference_gateway.evaluation.allowed_models
             if self.model is not None and self.model not in evaluation_models:
                 raise ValueError(

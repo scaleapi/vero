@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from vero.harbor import (
     AgentAccessSpec,
+    CommandBackendSpec,
     HarborBuildConfig,
     HarborDeploymentConfig,
     InferenceBudgetSpec,
@@ -24,6 +25,8 @@ from vero.harbor import (
 )
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
+
+_OMIT = object()
 
 # harness-engineering-bench is a separate branch/PR in the stacked split, so
 # skip the benchmark-config tests when it isn't checked out here.
@@ -162,7 +165,9 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
         "targets": [VerificationTargetSpec(partition="test")],
     }
     values.update(updates)
-    return HarborBuildConfig(**values)
+    # Pass _OMIT to leave a key out entirely, which is different from passing
+    # None: the build config reports Harbor-only keys that were set at all.
+    return HarborBuildConfig(**{k: v for k, v in values.items() if v is not _OMIT})
 
 
 def test_compiler_bakes_workspace_overlay_into_agent_environment(tmp_path):
@@ -457,6 +462,111 @@ def test_build_config_requires_requested_models_to_be_allowed_by_their_scope(tmp
 
     # No gateway means no metering, so there is nothing to check against.
     assert _config(tmp_path / "ungated", model="gpt-anything").model == "gpt-anything"
+
+
+def _command_backend(tmp_path: Path) -> CommandBackendSpec:
+    harness = tmp_path / "harness"
+    harness.mkdir(parents=True)
+    (harness / "score.py").write_text("print('score')\n", encoding="utf-8")
+    return CommandBackendSpec(
+        harness_source=str(harness),
+        command=["python", "{harness}/score.py", "--report", "{report}"],
+    )
+
+
+def test_command_backend_compiles_a_task_with_no_target_agent(tmp_path):
+    """The outer loop stays a Harbor agent while the target is scored by a program.
+
+    This is the Family B shape: a solver or index build has no agent to drive, so
+    there is nothing for a nested `harbor run` to do.
+    """
+    config = _config(
+        tmp_path,
+        evaluation_backend="command",
+        command_backend=_command_backend(tmp_path / "cmd"),
+        agent_import_path=_OMIT,
+    )
+    assert config.agent_import_path is None
+
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    serve = json.loads(
+        (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    backend = serve["backends"]["harbor-validation"]
+    assert backend["type"] == "command"
+    assert backend["harness_root"] == "/opt/harness"
+    # Case enumeration is the harness's job, so it is told where the case files are.
+    assert backend["environment"]["VERO_CASES_DIR"] == "/opt/cases"
+    # None of the nested-harbor plumbing leaks into a command backend.
+    assert "agent_import_path" not in backend
+    assert "task_source" not in backend
+
+    # The harness is baked into the trusted sidecar, never the agent workspace.
+    assert (output / "environment/sidecar/harness/score.py").is_file()
+    dockerfile = (output / "environment/sidecar/Dockerfile").read_text(encoding="utf-8")
+    assert "COPY sidecar/harness /opt/harness" in dockerfile
+
+    # And the trusted side still parses what the compiler emitted.
+    assert HarborDeploymentConfig.model_validate(serve).backends["harbor-validation"]
+
+
+def test_deployment_treats_a_backend_without_a_type_as_harbor(tmp_path):
+    """serve.json written before the backend union existed must still load.
+
+    A discriminated union needs the tag in the input, so without a default the
+    union would break any run resuming from an older compiled task.
+    """
+    from vero.harbor.backend import HarborBackendConfig
+
+    cases = tmp_path / "cases.jsonl"
+    cases.write_text('{"id": "a", "task_name": "a"}\n', encoding="utf-8")
+    backend = HarborBackendConfig(
+        task_source=str(tmp_path),
+        agent_import_path="target.agent:Agent",
+        cases_path=str(cases),
+        harbor_requirement="harbor==0.20.0",
+    )
+    legacy = {
+        "repo_path": "/opt/agent-baseline",
+        "agent_repo_path": "/work/agent",
+        "session_dir": "/state/admin/session",
+        "admin_volume": "/state/admin",
+        "access_policies": [],
+        "targets": [],
+        "selection": {"mode": "submit"},
+        "submit_enabled": True,
+        # The tag the older compiler never wrote.
+        "backends": {"harbor-validation": backend.model_dump(
+            mode="json", exclude={"type"}
+        )},
+    }
+    parsed = HarborDeploymentConfig.model_validate(legacy)
+    assert parsed.backends["harbor-validation"].type == "harbor"
+
+
+def test_build_config_keeps_the_two_backend_kinds_apart(tmp_path):
+    with pytest.raises(ValidationError, match="requires a command_backend"):
+        _config(
+            tmp_path / "missing",
+            evaluation_backend="command",
+            agent_import_path=_OMIT,
+        )
+    with pytest.raises(ValidationError, match="requires evaluation_backend: command"):
+        _config(tmp_path / "stray", command_backend=_command_backend(tmp_path / "s"))
+    with pytest.raises(ValidationError, match="requires an agent_import_path"):
+        _config(tmp_path / "noagent", agent_import_path=None)
+    # Harbor-only knobs are reported rather than silently ignored.
+    with pytest.raises(ValidationError, match="only apply to a harbor"):
+        _config(
+            tmp_path / "ignored",
+            evaluation_backend="command",
+            command_backend=_command_backend(tmp_path / "i"),
+            agent_import_path=_OMIT,
+            max_retries=5,
+            feedback_transcripts=True,
+        )
 
 
 def test_load_build_config_resolves_relative_local_paths(tmp_path):

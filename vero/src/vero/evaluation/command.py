@@ -7,6 +7,7 @@ import os
 import posixpath
 import re
 from pathlib import Path, PurePosixPath
+from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
@@ -37,6 +38,8 @@ _INPUT_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
 class CommandBackendConfig(StrictModel):
+    # Discriminates this from the other backend configs a deployment may name.
+    type: Literal["command"] = "command"
     harness_root: str
     command: list[str]
     working_directory: str = "."

@@ -34,6 +34,7 @@ TRUSTED_REPO = "/opt/agent-baseline"
 AGENT_REPO = "/work/agent"
 CASES_DIR = "/opt/cases"
 TASK_SOURCE_DIR = "/opt/task-source"
+HARNESS_DIR = "/opt/harness"
 SERVE_CONFIG = "/opt/serve.json"
 AGENT_VOLUME = "/state/agent-context"
 ADMIN_VOLUME = "/state/admin"
@@ -186,7 +187,10 @@ def _local_result_task_name(task_source: Path, selector: str) -> str:
 def _write_cases(config: HarborBuildConfig, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     task_source = Path(config.task_source)
-    local = task_source.exists()
+    # A command backend's case ids name whatever its harness understands (seeds,
+    # instances, shards), not local Harbor task directories, so there is no
+    # canonical task name to resolve for them.
+    local = task_source.exists() and config.command_backend is None
     for partition, tasks in config.partitions.items():
         path = destination / f"{partition}.jsonl"
         lines = [
@@ -222,58 +226,89 @@ def _deployment_config(
 ) -> dict:
     task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
     backends = {}
-    for partition in config.partitions:
-        backends[_backend_id(partition)] = {
-            "task_source": task_source,
-            "agent_import_path": config.agent_import_path,
-            "cases_path": f"{CASES_DIR}/{partition}.jsonl",
-            "harbor_requirement": config.harbor_requirement,
-            "evaluation_set_name": config.evaluation_set_name,
-            "partition": partition,
-            "model": config.model,
-            "environment_name": config.environment_name,
-            "python_version": config.harbor_python_version,
-            "case_timeout_seconds": config.case_timeout_seconds,
-            "task_agent_timeout_seconds": config.task_agent_timeout_seconds,
-            "default_index": config.default_index,
-            "n_attempts": config.n_attempts,
-            "max_retries": config.max_retries,
-            "retry_wait_multiplier": config.retry_wait_multiplier,
-            "retry_min_wait_seconds": config.retry_min_wait_seconds,
-            "retry_max_wait_seconds": config.retry_max_wait_seconds,
-            "infrastructure_max_attempts": config.infrastructure_max_attempts,
-            "infrastructure_retry_delay_seconds": (
-                config.infrastructure_retry_delay_seconds
-            ),
-            "reward_key": config.reward_key,
-            "aggregate_attempts": config.aggregate_attempts,
-            "feedback_transcripts": config.feedback_transcripts,
-            "feedback_max_bytes": config.feedback_max_bytes,
-            "expose_attempt_detail": config.expose_attempt_detail,
-            "passthrough_environment": config.secrets,
-            "environment": config.task_environment,
-            "inference_gateway_url": (
-                INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
-            ),
-            "inference_gateway_token": evaluation_inference_token,
-            "inference_gateway_finalization_token": finalization_inference_token,
-            "harness_user": config.harness_user,
-            "task_services_use_upstream": config.task_services_use_upstream,
-            "upstream_api_key_env": (
-                UPSTREAM_API_KEY_ENV if config.inference_gateway is not None else None
-            ),
-            "upstream_base_url_env": (
-                UPSTREAM_BASE_URL_ENV
-                if config.inference_gateway is not None
-                and config.inference_gateway.upstream_base_url_env is not None
-                else None
-            ),
-            "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
-            "inference_usage_path": (
-                INFERENCE_STATE if config.inference_gateway is not None else None
-            ),
-            "extra_args": config.extra_harbor_args,
-        }
+    if config.command_backend is not None:
+        # A command backend scores by running a program, so it needs none of the
+        # nested-`harbor run` plumbing: no task source, no agent import path, no
+        # model. The harness is baked into the sidecar at HARNESS_DIR, and case
+        # enumeration is the harness's job — it reads the partition's case file
+        # from VERO_CASES_DIR, since the backend itself derives a case count from
+        # the requested selection rather than from a cases file.
+        specification = config.command_backend
+        for partition in config.partitions:
+            backends[_backend_id(partition)] = {
+                "type": "command",
+                "harness_root": HARNESS_DIR,
+                "command": list(specification.command),
+                "working_directory": specification.working_directory,
+                "environment": {
+                    "VERO_CASES_DIR": CASES_DIR,
+                    **specification.environment,
+                },
+                "passthrough_environment": list(
+                    dict.fromkeys(
+                        [*specification.passthrough_environment, *config.secrets]
+                    )
+                ),
+                "staged_inputs": dict(specification.staged_inputs),
+                "agent_context_inputs": {
+                    name: list(paths)
+                    for name, paths in specification.agent_context_inputs.items()
+                },
+            }
+    else:
+        for partition in config.partitions:
+            backends[_backend_id(partition)] = {
+                "type": "harbor",
+                "task_source": task_source,
+                "agent_import_path": config.agent_import_path,
+                "cases_path": f"{CASES_DIR}/{partition}.jsonl",
+                "harbor_requirement": config.harbor_requirement,
+                "evaluation_set_name": config.evaluation_set_name,
+                "partition": partition,
+                "model": config.model,
+                "environment_name": config.environment_name,
+                "python_version": config.harbor_python_version,
+                "case_timeout_seconds": config.case_timeout_seconds,
+                "task_agent_timeout_seconds": config.task_agent_timeout_seconds,
+                "default_index": config.default_index,
+                "n_attempts": config.n_attempts,
+                "max_retries": config.max_retries,
+                "retry_wait_multiplier": config.retry_wait_multiplier,
+                "retry_min_wait_seconds": config.retry_min_wait_seconds,
+                "retry_max_wait_seconds": config.retry_max_wait_seconds,
+                "infrastructure_max_attempts": config.infrastructure_max_attempts,
+                "infrastructure_retry_delay_seconds": (
+                    config.infrastructure_retry_delay_seconds
+                ),
+                "reward_key": config.reward_key,
+                "aggregate_attempts": config.aggregate_attempts,
+                "feedback_transcripts": config.feedback_transcripts,
+                "feedback_max_bytes": config.feedback_max_bytes,
+                "expose_attempt_detail": config.expose_attempt_detail,
+                "passthrough_environment": config.secrets,
+                "environment": config.task_environment,
+                "inference_gateway_url": (
+                    INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
+                ),
+                "inference_gateway_token": evaluation_inference_token,
+                "inference_gateway_finalization_token": finalization_inference_token,
+                "harness_user": config.harness_user,
+                "task_services_use_upstream": config.task_services_use_upstream,
+                "upstream_api_key_env": (
+                    UPSTREAM_API_KEY_ENV if config.inference_gateway is not None else None
+                ),
+                "upstream_base_url_env": (
+                    UPSTREAM_BASE_URL_ENV
+                    if config.inference_gateway is not None
+                    and config.inference_gateway.upstream_base_url_env is not None
+                    else None
+                ),
+                "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
+                "inference_usage_path": (
+                    INFERENCE_STATE if config.inference_gateway is not None else None
+                ),
+                "extra_args": config.extra_harbor_args,
+            }
 
     limits = EvaluationLimits(
         timeout_seconds=config.timeout_seconds,
@@ -509,6 +544,13 @@ def compile_harbor_task(
                 if top not in overlay_excludes:
                     overlay_excludes.append(top)
     _write_cases(config, sidecar_dir / "cases")
+    if config.command_backend is not None:
+        # Bake the scoring program into the trusted sidecar, alongside the cases
+        # it enumerates. Never reachable from the agent workspace.
+        shutil.copytree(
+            Path(config.command_backend.harness_source),
+            sidecar_dir / "harness",
+        )
     local_task_source = Path(config.task_source).exists()
     if local_task_source:
         shutil.copytree(
@@ -644,6 +686,7 @@ def compile_harbor_task(
         "inference_gateway_url": INFERENCE_GATEWAY_URL,
         "read_only_paths": config.read_only_paths,
         "local_task_source": local_task_source,
+        "command_harness": config.command_backend is not None,
         "selection_backend": _backend_id(config.selection_partition),
         "evaluation_set_name": config.evaluation_set_name,
         "selection_partition": config.selection_partition,

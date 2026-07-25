@@ -19,6 +19,9 @@ COPY sidecar/serve.json /opt/serve.json
 {% if local_task_source %}
 COPY sidecar/task-source /opt/task-source
 {% endif %}
+{% if command_harness %}
+COPY sidecar/harness /opt/harness
+{% endif %}
 
 RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
 RUN git config --system --add safe.directory /opt/agent-baseline \

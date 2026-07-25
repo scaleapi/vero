@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
@@ -13,6 +13,7 @@ from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import (
     BackendRegistry,
     BudgetLedger,
+    EvaluationBackend,
     EvaluationBudget,
     EvaluationDatabase,
     EvaluationLimits,
@@ -20,6 +21,7 @@ from vero.evaluation import (
     Evaluator,
     ObjectiveSpec,
 )
+from vero.evaluation.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
 from vero.harbor.serve import SidecarComponents
@@ -94,6 +96,25 @@ class SidecarWandbConfig(StrictModel):
     telemetry_interval_seconds: float = Field(default=30.0, gt=0)
 
 
+DeploymentBackendConfig = Annotated[
+    HarborBackendConfig | CommandBackendConfig,
+    Field(discriminator="type"),
+]
+"""One partition's evaluation backend.
+
+Harbor for a nested ``harbor run`` against a target agent, command for a target
+that is scored by running a program (a solver, an index build) rather than by
+driving an agent. Both live behind the EvaluationBackend protocol, so
+everything above this line — disclosure, budgets, verification — is unchanged.
+"""
+
+
+def _build_backend(config: DeploymentBackendConfig) -> EvaluationBackend:
+    if isinstance(config, CommandBackendConfig):
+        return CommandBackend(config)
+    return HarborBackend(config)
+
+
 class HarborDeploymentConfig(StrictModel):
     task_name: str = "harbor-session"
     task_description: str = ""
@@ -101,7 +122,7 @@ class HarborDeploymentConfig(StrictModel):
     agent_repo_path: str
     session_dir: str
     session_id: str = "trial"
-    backends: dict[str, HarborBackendConfig]
+    backends: dict[str, DeploymentBackendConfig]
     access_policies: list[SidecarEvaluationPolicy]
     budgets: list[EvaluationBudget] = Field(default_factory=list)
     selection: DeploymentSelection
@@ -116,6 +137,30 @@ class HarborDeploymentConfig(StrictModel):
     score_baseline: bool = True
     evaluation_drain_timeout_seconds: float = Field(default=600.0, gt=0)
     wandb: SidecarWandbConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_backend_type(cls, value: object) -> object:
+        """Treat a backend with no ``type`` as Harbor.
+
+        A discriminated union needs the tag present in the input, but serve.json
+        files compiled before the union existed omit it. Defaulting here keeps
+        those (and any in-flight run resuming from one) loadable.
+        """
+        if not isinstance(value, dict):
+            return value
+        backends = value.get("backends")
+        if not isinstance(backends, dict):
+            return value
+        patched = {
+            backend_id: (
+                {"type": "harbor", **config}
+                if isinstance(config, dict) and "type" not in config
+                else config
+            )
+            for backend_id, config in backends.items()
+        }
+        return {**value, "backends": patched}
 
     @field_validator(
         "repo_path",
@@ -248,7 +293,7 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         ),
         backends=BackendRegistry(
             {
-                backend_id: HarborBackend(backend_config)
+                backend_id: _build_backend(backend_config)
                 for backend_id, backend_config in parsed.backends.items()
             }
         ),

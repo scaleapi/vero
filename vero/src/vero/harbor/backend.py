@@ -98,6 +98,8 @@ AGENT_INFERENCE_BASE_URL_ENV = "VERO_AGENT_INFERENCE_BASE_URL"
 class HarborBackendConfig(StrictModel):
     """Trusted configuration for nested ``harbor run`` evaluation."""
 
+    # Discriminates this from the other backend configs a deployment may name.
+    type: Literal["harbor"] = "harbor"
     task_source: str
     agent_import_path: str
     cases_path: str
