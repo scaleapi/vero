@@ -175,12 +175,12 @@ class OfficeQaAgent(BaseAgent):
             "messages": messages,
             "tools": TOOLS,
             "max_tokens": 8000,
-            "parallel_tool_calls": False,
         }
-        # OpenAI reasoning models accept reasoning_effort; other providers
-        # (e.g. Fireworks-served open models) reject it.
+        # OpenAI reasoning models accept reasoning_effort and parallel_tool_calls;
+        # other providers (e.g. Fireworks-served open models) reject them.
         if "fireworks" not in self._api_model:
             kwargs["reasoning_effort"] = "medium"
+            kwargs["parallel_tool_calls"] = False
         return kwargs
 
     def _account(self, usage: Any, totals: dict[str, int]) -> None:
