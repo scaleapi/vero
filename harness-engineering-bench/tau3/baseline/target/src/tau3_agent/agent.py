@@ -279,9 +279,9 @@ class Tau3Agent(BaseAgent):
         gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
         gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
         if gateway_key and gateway_url:
-            client = AsyncOpenAI(api_key=gateway_key, base_url=gateway_url)
+            client = AsyncOpenAI(api_key=gateway_key, base_url=gateway_url, max_retries=8)
         else:
-            client = AsyncOpenAI()  # OPENAI_API_KEY / OPENAI_BASE_URL from the env
+            client = AsyncOpenAI(max_retries=8)  # OPENAI_API_KEY / OPENAI_BASE_URL from the env
         input_tokens = output_tokens = cached_tokens = turns = 0
 
         session_id, tools = await self._open_session(environment)
