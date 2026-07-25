@@ -488,8 +488,17 @@ class HarborBuildConfig(StrictModel):
     # TODO: the Harbor-inner fields below (model, retries, feedback, harbor args)
     # only apply when evaluation_backend is "harbor", and the command equivalents
     # live in command_backend. Nesting each group under its own discriminated
-    # sub-spec would make that structural instead of validated, at the cost of
-    # rewriting every benchmark's build.yaml. Deferred deliberately.
+    # sub-spec would make that structural instead of validated: _HARBOR_ONLY_FIELDS
+    # and the whole backend-coherence branch of validate_references would go away,
+    # and task_source/agent_import_path would stop being optional-but-required.
+    #
+    # Measured scope: 29 refs in the compiler, 11 in these validators, 66 in the
+    # build tests, and 80 top-level keys to re-indent across the five benchmark
+    # build.yaml files (nothing outside the build package reads these fields, and
+    # HarborBackendConfig is unaffected). Deferred because it is a breaking schema
+    # change with no functional gain, and re-indenting the benchmark configs risks
+    # silently altering the measurement substrate. A model_validator(mode="before")
+    # that lifts flat keys into the nested field would avoid the flag day.
     evaluation_backend: Literal["harbor", "command"] = "harbor"
     command_backend: CommandBackendSpec | None = None
 
