@@ -56,12 +56,12 @@ model: fireworks_ai/deepseek-v4-flash
 environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
-# The optimizer trial itself is long (>20 min of codex) and kept dying at teardown
-# with grpclib StreamTerminatedError ("Connection lost") while the finalization
-# verifier exec'd into the sandbox. Harbor's DinD strategy runs the whole sandbox
-# over one host-networked gRPC stream, so a single drop kills the trial; the VM
-# runtime does not. Harbor emits this exact suggestion in its own startup warning.
-optimizer_harbor_args: ["--ek", "modal_vm_runtime=true"]
+# NOTE: tau3's optimizer trial reliably dies at ~38-40 min with grpclib
+# StreamTerminatedError ("Connection lost"). Four live experiments (default
+# DinD, --ek modal_vm_runtime=true, --ek modal_sandbox_v2=true, and
+# --max-retries 1) all failed identically, so no `optimizer_harbor_args` value
+# is set here: none of them is a fix, and a config value that claims to be one
+# is worse than nothing. Tracked upstream; see the PR that added this field.
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
