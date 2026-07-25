@@ -54,6 +54,7 @@ benchmark can be checked against the others at a glance.
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus |
 |---|---|---|---|---|---|
 | target model | deepseek-v4-flash | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash |
+| held-out baseline (K=3) ◆ | — | 0.360 ±0.042 | 0.097 ±0.011 (agg 0.632) | 0.611 ±0.021 | 0.449 ±0.007 |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
@@ -81,6 +82,18 @@ benchmark can be checked against the others at a glance.
   failure value rather than excluded — a candidate cannot inflate its mean by
   emitting a timeout/connection error. Coverage gaps (no trial produced) and
   gateway budget/auth exhaustion remain excluded/terminating for both.
+
+◆ Held-out baseline of the seed harness on the **test** partition, mean over
+K=3 independent rounds; ± is the stdev across the three round means. Pinned
+into each target's `baseline_reward` with `score_baseline: false`, so runs use
+this number instead of re-scoring the seed every finalization. gaia is not yet
+measured (deferred). swe-atlas's `reward` is a binary pass/fail over a rubric
+and sits near the floor (0.097); the continuous `agg_score` (0.632, sd 0.011)
+is the far more informative signal — a candidate `reward_key` switch, pending
+the verifier emitting `agg_score` as a selectable key. Measured with
+deepseek-v4-flash (gpt-oss-120b on swe-atlas); the three deepseek benchmarks
+logged zero exceptions over 945 trials, swe-atlas lost 5/150 to gpt-oss 128k
+context overflow.
 
 † Sized from stock-agent probes (codex on the target model, 3 development
 tasks each, full declared timeouts): tau3 trials took 202-211s (900s budget
