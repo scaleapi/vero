@@ -16,7 +16,6 @@ from vero.evaluation import (
     EvaluationBudget,
     EvaluationDatabase,
     EvaluationLimits,
-    EvaluationModel,
     EvaluationSet,
     Evaluator,
     ObjectiveSpec,
@@ -32,13 +31,14 @@ from vero.harbor.verifier import (
     VerificationSelection,
     VerificationTarget,
 )
+from vero.models import StrictModel
 from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace
 
 logger = logging.getLogger(__name__)
 
 
-class DeploymentSelection(EvaluationModel):
+class DeploymentSelection(StrictModel):
     mode: Literal["submit", "auto_best"] = "auto_best"
     backend_id: str | None = None
     evaluation_set: EvaluationSet | None = None
@@ -72,7 +72,7 @@ class DeploymentSelection(EvaluationModel):
         return self
 
 
-class SidecarWandbConfig(EvaluationModel):
+class SidecarWandbConfig(StrictModel):
     """Trusted-side Weights & Biases config for the eval-sidecar. The W&B
     credential (WANDB_API_KEY) is supplied to the sidecar container's
     environment, never to the untrusted optimizer agent."""
@@ -94,7 +94,7 @@ class SidecarWandbConfig(EvaluationModel):
     telemetry_interval_seconds: float = Field(default=30.0, gt=0)
 
 
-class HarborDeploymentConfig(EvaluationModel):
+class HarborDeploymentConfig(StrictModel):
     task_name: str = "harbor-session"
     task_description: str = ""
     repo_path: str

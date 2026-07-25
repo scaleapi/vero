@@ -21,13 +21,13 @@ from vero.evaluation.models import (
     EvaluationArtifact,
     EvaluationCost,
     EvaluationDiagnostic,
-    EvaluationModel,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
     EvaluationStatus,
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.models import StrictModel
 from vero.sandbox import Sandbox
 from vero.staging import SandboxStagingArea
 
@@ -36,7 +36,7 @@ _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 _INPUT_NAME_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
-class CommandBackendConfig(EvaluationModel):
+class CommandBackendConfig(StrictModel):
     harness_root: str
     command: list[str]
     working_directory: str = "."

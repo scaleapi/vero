@@ -39,7 +39,6 @@ from vero.evaluation.models import (
     EvaluationArtifact,
     EvaluationCost,
     EvaluationDiagnostic,
-    EvaluationModel,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
@@ -47,6 +46,7 @@ from vero.evaluation.models import (
 )
 from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
 from vero.harbor.isolation import harness_grant_commands, harness_reachability_probe
+from vero.models import StrictModel
 from vero.sandbox import CommandResult, Sandbox
 from vero.staging import SandboxStagingArea
 
@@ -60,7 +60,7 @@ def _default_uv() -> str:
     return str(Path(executable).resolve())
 
 
-class HarborCase(EvaluationModel):
+class HarborCase(StrictModel):
     """One canonical case mapped to one Harbor task name."""
 
     id: str
@@ -95,7 +95,7 @@ AGENT_INFERENCE_API_KEY_ENV = "VERO_AGENT_INFERENCE_API_KEY"
 AGENT_INFERENCE_BASE_URL_ENV = "VERO_AGENT_INFERENCE_BASE_URL"
 
 
-class HarborBackendConfig(EvaluationModel):
+class HarborBackendConfig(StrictModel):
     """Trusted configuration for nested ``harbor run`` evaluation."""
 
     task_source: str

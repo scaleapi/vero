@@ -6,9 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import Field, JsonValue, field_validator
 
 from vero.candidate import Candidate
+from vero.models import StrictModel
 from vero.optimization import (
     CandidateEvaluationGateway,
     CandidateProposal,
@@ -70,9 +71,7 @@ class AgentContext:
         return self.parent.version
 
 
-class AgentRunResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class AgentRunResult(StrictModel):
     description: str = "Apply coding-agent changes"
     state: JsonValue | None = None
     trace: JsonValue | None = None

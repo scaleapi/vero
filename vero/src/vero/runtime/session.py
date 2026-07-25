@@ -11,7 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, Field, JsonValue, field_validator
 
 from vero.candidate import Candidate
 from vero.candidate_repository import CandidateRepository
@@ -24,6 +24,7 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.evaluation.persistence import _atomic_write_json
+from vero.models import StrictModel
 from vero.optimization import OptimizationResult, Optimizer
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import EventBus, JsonlEventSink, agent_event_emitter
@@ -37,9 +38,7 @@ class SessionStatus(str, Enum):
     FAILED = "failed"
 
 
-class SessionFailure(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class SessionFailure(StrictModel):
     type: str
     message: str
 
@@ -51,10 +50,8 @@ class SessionFailure(BaseModel):
         return value
 
 
-class OptimizationComponentSpec(BaseModel):
+class OptimizationComponentSpec(StrictModel):
     """Stable type and configuration identity for a protocol component."""
-
-    model_config = ConfigDict(extra="forbid")
 
     type: str
     config_digest: str
@@ -76,10 +73,8 @@ class OptimizationComponentSpec(BaseModel):
         return value
 
 
-class OptimizationRunSpec(BaseModel):
+class OptimizationRunSpec(StrictModel):
     """Execution choices that must remain stable when a session resumes."""
-
-    model_config = ConfigDict(extra="forbid")
 
     max_proposals: int = Field(ge=0)
     max_rounds: int = Field(ge=1)
@@ -91,9 +86,7 @@ class OptimizationRunSpec(BaseModel):
     selection: OptimizationComponentSpec | None = None
 
 
-class SessionManifest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class SessionManifest(StrictModel):
     schema_version: Literal[3] = 3
     id: str
     status: SessionStatus

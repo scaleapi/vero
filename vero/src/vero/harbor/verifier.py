@@ -16,7 +16,6 @@ from vero.candidate import Candidate
 from vero.evaluation import (
     EvaluationAuthorization,
     EvaluationLimits,
-    EvaluationModel,
     EvaluationPrincipal,
     EvaluationRecord,
     EvaluationRequest,
@@ -26,6 +25,7 @@ from vero.evaluation import (
 from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.persistence import _atomic_write_json
 from vero.harbor.sidecar import Submission
+from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class NoCandidateError(RuntimeError):
     """Raised when finalization has no submitted or evaluated candidate."""
 
 
-class VerificationTarget(EvaluationModel):
+class VerificationTarget(StrictModel):
     """One trusted final evaluation projected to one Harbor reward key."""
 
     reward_key: str
@@ -75,7 +75,7 @@ class VerificationTarget(EvaluationModel):
         return value
 
 
-class VerificationSelection(EvaluationModel):
+class VerificationSelection(StrictModel):
     """How finalization chooses a candidate before scoring its targets."""
 
     mode: Literal["submit", "auto_best"] = "auto_best"
@@ -112,7 +112,7 @@ class VerificationSelection(EvaluationModel):
         return self
 
 
-class VerificationResult(EvaluationModel):
+class VerificationResult(StrictModel):
     """Durable, idempotent output consumed by Harbor's verifier."""
 
     candidate: Candidate | None = None

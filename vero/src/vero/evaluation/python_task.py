@@ -17,11 +17,11 @@ from vero.evaluation.models import (
     CaseIds,
     CaseRange,
     EvaluationCost,
-    EvaluationModel,
     EvaluationReport,
     EvaluationRequest,
     EvaluationSet,
 )
+from vero.models import StrictModel
 from vero.sandbox import Sandbox
 
 
@@ -32,7 +32,7 @@ def _default_uv() -> str:
     return str(Path(executable).resolve())
 
 
-class PythonTaskEvaluationConfig(EvaluationModel):
+class PythonTaskEvaluationConfig(StrictModel):
     """One named/partitioned dataset owned by a Python task backend."""
 
     name: str
@@ -61,7 +61,7 @@ class PythonTaskEvaluationConfig(EvaluationModel):
         return value
 
 
-class PythonTaskBackendConfig(EvaluationModel):
+class PythonTaskBackendConfig(StrictModel):
     """Configuration for an external task harness and editable target package."""
 
     harness_root: str

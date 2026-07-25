@@ -21,8 +21,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import Field, field_validator, model_validator
 
-from vero.evaluation import EvaluationModel
 from vero.evaluation.persistence import _atomic_write_json
+from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def generate_inference_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-class InferenceScopeConfig(EvaluationModel):
+class InferenceScopeConfig(StrictModel):
     """One independently authenticated and metered inference consumer."""
 
     token_sha256: str
@@ -66,7 +66,7 @@ class InferenceScopeConfig(EvaluationModel):
         return value
 
 
-class InferenceRequestLogConfig(EvaluationModel):
+class InferenceRequestLogConfig(StrictModel):
     """Durable JSONL capture of every request the gateway proxies or denies.
 
     Operator telemetry: the log lives on the gateway state volume, which is
@@ -89,7 +89,7 @@ class InferenceRequestLogConfig(EvaluationModel):
         return value
 
 
-class InferenceGatewayConfig(EvaluationModel):
+class InferenceGatewayConfig(StrictModel):
     """Trusted configuration for an OpenAI-compatible inference gateway."""
 
     upstream_api_key_env: str = "OPENAI_API_KEY"
@@ -136,7 +136,7 @@ class InferenceGatewayConfig(EvaluationModel):
         return self
 
 
-class InferenceAttributionUsage(EvaluationModel):
+class InferenceAttributionUsage(StrictModel):
     requests: int = Field(default=0, ge=0)
     upstream_errors: int = Field(default=0, ge=0)
     input_tokens: int = Field(default=0, ge=0)
@@ -151,7 +151,7 @@ class InferenceScopeUsage(InferenceAttributionUsage):
     attributions: dict[str, InferenceAttributionUsage] = Field(default_factory=dict)
 
 
-class InferenceUsageLedger(EvaluationModel):
+class InferenceUsageLedger(StrictModel):
     schema_version: Literal[1] = 1
     scopes: dict[str, InferenceScopeUsage]
 

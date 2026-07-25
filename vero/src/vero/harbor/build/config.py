@@ -9,18 +9,18 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import Field, JsonValue, field_validator, model_validator
 
 from vero.evaluation import (
     DisclosureLevel,
     EvaluationAccessPolicy,
-    EvaluationModel,
     MetricSelector,
     ObjectiveSpec,
 )
+from vero.models import StrictModel
 
 
-class AgentAccessSpec(EvaluationModel):
+class AgentAccessSpec(StrictModel):
     """The optimizer agent's access to one named evaluation partition.
 
     A build declares one spec per partition; to_access_policy translates it into
@@ -64,7 +64,7 @@ class AgentAccessSpec(EvaluationModel):
         )
 
 
-class VerificationTargetSpec(EvaluationModel):
+class VerificationTargetSpec(StrictModel):
     """One trusted final scoring pass the verifier runs on a chosen candidate.
 
     Distinct from the evaluations the optimizer runs during search: after search
@@ -107,7 +107,7 @@ class VerificationTargetSpec(EvaluationModel):
         return value
 
 
-class InferenceBudgetSpec(EvaluationModel):
+class InferenceBudgetSpec(StrictModel):
     """Routing policy and optional limits for one inference-gateway scope."""
 
     allowed_models: list[str]
@@ -125,7 +125,7 @@ class InferenceBudgetSpec(EvaluationModel):
         return value
 
 
-class InferenceGatewaySpec(EvaluationModel):
+class InferenceGatewaySpec(StrictModel):
     """Credential source and independent producer/evaluator policies."""
 
     upstream_api_key_env: str = "OPENAI_API_KEY"
@@ -162,7 +162,7 @@ class InferenceGatewaySpec(EvaluationModel):
         return value.rstrip("/")
 
 
-class WorkspaceOverlaySpec(EvaluationModel):
+class WorkspaceOverlaySpec(StrictModel):
     """A host file or directory to copy into the compiled task's agent workspace.
 
     General-purpose filesystem injection: bake anything (agent definitions,
@@ -170,8 +170,6 @@ class WorkspaceOverlaySpec(EvaluationModel):
     ``source`` is a host path (resolved relative to the build YAML); ``dest`` is
     where its contents land relative to the workspace root (``.`` = the root).
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     source: str
     dest: str = "."
@@ -202,7 +200,7 @@ class WorkspaceOverlaySpec(EvaluationModel):
         return candidate
 
 
-class WandbSpec(EvaluationModel):
+class WandbSpec(StrictModel):
     """Weights & Biases reporting settings, emitted into the sidecar's
     serve.json. The field names match the sidecar's SidecarWandbConfig."""
 
@@ -218,10 +216,8 @@ class WandbSpec(EvaluationModel):
     log_traces: bool = False
 
 
-class HarborBuildConfig(EvaluationModel):
+class HarborBuildConfig(StrictModel):
     """Everything needed to emit an isolated Harbor optimization task."""
-
-    model_config = ConfigDict(extra="forbid")
 
     name: str
     description: str = ""

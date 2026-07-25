@@ -9,7 +9,7 @@ from pathlib import Path
 
 from pydantic import Field, field_validator, model_validator
 
-from vero.evaluation import EvaluationModel
+from vero.models import StrictModel
 from vero.optimization.models import (
     CandidateChange,
     CandidateProductionContext,
@@ -32,7 +32,7 @@ _PLACEHOLDERS = {
 _PLACEHOLDER_PATTERN = re.compile(r"\{([^{}]+)\}")
 
 
-class CommandCandidateProducerConfig(EvaluationModel):
+class CommandCandidateProducerConfig(StrictModel):
     root: str
     command: list[str]
     working_directory: str = "."

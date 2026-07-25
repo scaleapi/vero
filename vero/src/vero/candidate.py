@@ -6,24 +6,22 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import (
-    BaseModel,
-    ConfigDict,
     Field,
     JsonValue,
     field_validator,
     model_validator,
 )
 
+from vero.models import StrictModel
 
-class Candidate(BaseModel):
+
+class Candidate(StrictModel):
     """A materialized version of the program being optimized.
 
     ``version`` is interpreted by the session's candidate repository. A
     session uses one repository/workspace family, so the identifier remains
     stable when the candidate is materialized in different sandboxes.
     """
-
-    model_config = ConfigDict(extra="forbid")
 
     id: str
     version: str

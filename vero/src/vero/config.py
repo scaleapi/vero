@@ -26,7 +26,6 @@ from vero.evaluation import (
     EvaluationBudget,
     EvaluationDefinition,
     EvaluationLimits,
-    EvaluationModel,
     EvaluationPlan,
     EvaluationPrincipal,
     EvaluationSet,
@@ -36,6 +35,7 @@ from vero.evaluation import (
     ObjectiveSpec,
     RetryPolicy,
 )
+from vero.models import StrictModel
 from vero.optimization import (
     CommandCandidateProducer,
     CommandCandidateProducerConfig,
@@ -51,12 +51,12 @@ from vero.runtime import (
 )
 
 
-class TargetConfig(EvaluationModel):
+class TargetConfig(StrictModel):
     root: str
     ref: str = "HEAD"
 
 
-class BackendConfig(EvaluationModel):
+class BackendConfig(StrictModel):
     id: str = "command"
     kind: Literal["command"] = "command"
     harness_root: str
@@ -68,7 +68,7 @@ class BackendConfig(EvaluationModel):
     agent_context_inputs: dict[str, list[str]] = Field(default_factory=dict)
 
 
-class BudgetConfig(EvaluationModel):
+class BudgetConfig(StrictModel):
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
 
@@ -88,7 +88,7 @@ class BudgetConfig(EvaluationModel):
         )
 
 
-class EvaluationConfig(EvaluationModel):
+class EvaluationConfig(StrictModel):
     name: str
     partition: str | None = None
     case_ids: list[str] | None = None
@@ -162,7 +162,7 @@ class EvaluationConfig(EvaluationModel):
         )
 
 
-class ProtocolConfig(EvaluationModel):
+class ProtocolConfig(StrictModel):
     selection_evaluation: str
     final_evaluation: str | None = None
     evaluate_final_baseline: bool = True
@@ -187,7 +187,7 @@ class ProtocolConfig(EvaluationModel):
         )
 
 
-class ObjectiveConstraintConfig(EvaluationModel):
+class ObjectiveConstraintConfig(StrictModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
     case_failure_value: float | None = None
@@ -206,7 +206,7 @@ class ObjectiveConstraintConfig(EvaluationModel):
         )
 
 
-class ObjectiveConfig(EvaluationModel):
+class ObjectiveConfig(StrictModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
     case_failure_value: float | None = None
@@ -227,7 +227,7 @@ class ObjectiveConfig(EvaluationModel):
         )
 
 
-class BaseOptimizerConfig(EvaluationModel):
+class BaseOptimizerConfig(StrictModel):
     instruction: str | None = None
 
 
@@ -266,12 +266,12 @@ OptimizerConfig = Annotated[
 ]
 
 
-class SessionConfig(EvaluationModel):
+class SessionConfig(StrictModel):
     id: str | None = None
     directory: str | None = None
 
 
-class WandbConfig(EvaluationModel):
+class WandbConfig(StrictModel):
     project: str
     run_id: str | None = None
     entity: str | None = None
@@ -283,7 +283,7 @@ class WandbConfig(EvaluationModel):
     config: dict[str, JsonValue] = Field(default_factory=dict)
 
 
-class VeroConfig(EvaluationModel):
+class VeroConfig(StrictModel):
     target: TargetConfig
     backend: BackendConfig
     evaluations: list[EvaluationConfig]

@@ -14,11 +14,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import AsyncIterator, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import field_validator
 
 from vero.candidate import Candidate
 from vero.candidate_repository.base import CandidateRepository, CandidateRepositoryError
 from vero.evaluation.persistence import _atomic_write_json
+from vero.models import StrictModel
 from vero.sandbox import LocalSandbox, Sandbox
 from vero.workspace import GitWorkspace, Workspace
 
@@ -26,9 +27,7 @@ _OBJECT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _AGENT_CONTEXT_DIRECTORY = ".evals"
 
 
-class _GitRepositoryConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class _GitRepositoryConfig(StrictModel):
     schema_version: Literal[1] = 1
     family: Literal["git"] = "git"
     project_subpath: str = "."
@@ -42,9 +41,7 @@ class _GitRepositoryConfig(BaseModel):
         return value
 
 
-class _CandidateRecord(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class _CandidateRecord(StrictModel):
     schema_version: Literal[1] = 1
     candidate: Candidate
 

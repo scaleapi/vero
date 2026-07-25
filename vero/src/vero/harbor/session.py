@@ -16,14 +16,15 @@ from typing import Literal
 
 from pydantic import field_validator
 
-from vero.evaluation import BackendProvenance, EvaluationModel
+from vero.evaluation import BackendProvenance
 from vero.evaluation.persistence import _atomic_write_json
 from vero.harbor.verifier import VerificationSelection, VerificationTarget
+from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
 
-class HarborSessionManifest(EvaluationModel):
+class HarborSessionManifest(StrictModel):
     """Trusted metadata needed to interpret an exported Harbor session."""
 
     schema_version: Literal[1] = 1

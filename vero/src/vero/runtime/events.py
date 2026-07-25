@@ -12,14 +12,14 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import Field, JsonValue, field_validator
+
+from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
 
-class RuntimeEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class RuntimeEvent(StrictModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     session_id: str
     kind: str

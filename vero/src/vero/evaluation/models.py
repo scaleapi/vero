@@ -13,7 +13,6 @@ from typing import Annotated, Any, Literal, Mapping
 
 from pydantic import (
     BaseModel,
-    ConfigDict,
     Field,
     JsonValue,
     field_validator,
@@ -21,12 +20,7 @@ from pydantic import (
 )
 
 from vero.candidate import Candidate
-
-
-class EvaluationModel(BaseModel):
-    """Strict base model for public evaluation contracts."""
-
-    model_config = ConfigDict(extra="forbid")
+from vero.models import StrictModel
 
 
 def _non_empty(value: str, field_name: str) -> str:
@@ -59,11 +53,11 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-class AllCases(EvaluationModel):
+class AllCases(StrictModel):
     kind: Literal["all"] = "all"
 
 
-class CaseIds(EvaluationModel):
+class CaseIds(StrictModel):
     kind: Literal["ids"] = "ids"
     ids: list[str]
 
@@ -79,7 +73,7 @@ class CaseIds(EvaluationModel):
         return ids
 
 
-class CaseRange(EvaluationModel):
+class CaseRange(StrictModel):
     kind: Literal["range"] = "range"
     stop: int
     start: int = 0
@@ -96,7 +90,7 @@ class CaseRange(EvaluationModel):
 CaseSelection = Annotated[AllCases | CaseIds | CaseRange, Field(discriminator="kind")]
 
 
-class EvaluationSet(EvaluationModel):
+class EvaluationSet(StrictModel):
     """A backend-owned collection of cases and a selection within it."""
 
     name: str = "default"
@@ -133,7 +127,7 @@ class AgentSelectionMode(str, Enum):
     ARBITRARY = "arbitrary"
 
 
-class RetryPolicy(EvaluationModel):
+class RetryPolicy(StrictModel):
     max_attempts: int = Field(default=3, ge=1)
     initial_delay_seconds: float = Field(default=4.0, ge=0.0)
     maximum_delay_seconds: float = Field(default=120.0, ge=0.0)
@@ -179,7 +173,7 @@ class RetryPolicy(EvaluationModel):
         return cls(max_attempts=1)
 
 
-class EvaluationLimits(EvaluationModel):
+class EvaluationLimits(StrictModel):
     timeout_seconds: float = Field(default=600.0, gt=0.0)
     case_timeout_seconds: float = Field(default=180.0, gt=0.0)
     max_concurrency: int = Field(default=100, ge=1)
@@ -187,7 +181,7 @@ class EvaluationLimits(EvaluationModel):
     retry: RetryPolicy = Field(default_factory=RetryPolicy)
 
 
-class EvaluationRequest(EvaluationModel):
+class EvaluationRequest(StrictModel):
     candidate: Candidate
     evaluation_set: EvaluationSet = Field(default_factory=EvaluationSet)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
@@ -218,14 +212,14 @@ class EvaluationRequest(EvaluationModel):
         return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
-class CommandEvaluationInput(EvaluationModel):
+class CommandEvaluationInput(StrictModel):
     """Versioned JSON input passed to an external evaluation harness."""
 
     schema_version: Literal[1] = 1
     request: EvaluationRequest
 
 
-class EvaluationArtifact(EvaluationModel):
+class EvaluationArtifact(StrictModel):
     path: str
     media_type: str | None = None
     description: str | None = None
@@ -254,7 +248,7 @@ class CaseStatus(str, Enum):
     SKIPPED = "skipped"
 
 
-class CaseError(EvaluationModel):
+class CaseError(StrictModel):
     message: str
     code: str | None = None
     phase: str | None = None
@@ -274,7 +268,7 @@ class CaseError(EvaluationModel):
         return _optional_non_empty(value, "error code or phase")
 
 
-class CaseResult(EvaluationModel):
+class CaseResult(StrictModel):
     case_id: str
     status: CaseStatus
     metrics: dict[str, float] = Field(default_factory=dict)
@@ -329,7 +323,7 @@ class DiagnosticSeverity(str, Enum):
     ERROR = "error"
 
 
-class EvaluationDiagnostic(EvaluationModel):
+class EvaluationDiagnostic(StrictModel):
     code: str
     message: str
     severity: DiagnosticSeverity
@@ -347,7 +341,7 @@ class EvaluationDiagnostic(EvaluationModel):
         return _optional_non_empty(value, "diagnostic phase")
 
 
-class EvaluationReport(EvaluationModel):
+class EvaluationReport(StrictModel):
     schema_version: Literal[1] = 1
     status: EvaluationStatus
     metrics: dict[str, float] = Field(default_factory=dict)
@@ -368,7 +362,7 @@ class EvaluationReport(EvaluationModel):
         return self
 
 
-class BackendProvenance(EvaluationModel):
+class BackendProvenance(StrictModel):
     name: str
     version: str
     config_digest: str
@@ -411,7 +405,7 @@ class MetricAggregation(str, Enum):
     MAX = "max"
 
 
-class MetricSelector(EvaluationModel):
+class MetricSelector(StrictModel):
     metric: str
     aggregation: MetricAggregation = MetricAggregation.REPORT
     case_failure_value: float | None = None
@@ -447,7 +441,7 @@ class ConstraintOperator(str, Enum):
     GTE = ">="
 
 
-class MetricConstraint(EvaluationModel):
+class MetricConstraint(StrictModel):
     selector: MetricSelector
     operator: ConstraintOperator
     value: float
@@ -460,7 +454,7 @@ class MetricConstraint(EvaluationModel):
         return value
 
 
-class ObjectiveSpec(EvaluationModel):
+class ObjectiveSpec(StrictModel):
     selector: MetricSelector
     direction: Literal["maximize", "minimize"]
     failure_value: float | None = None
@@ -474,7 +468,7 @@ class ObjectiveSpec(EvaluationModel):
         return value
 
 
-class ConstraintViolation(EvaluationModel):
+class ConstraintViolation(StrictModel):
     constraint: MetricConstraint
     observed: float | None
     reason: str
@@ -492,7 +486,7 @@ class ConstraintViolation(EvaluationModel):
         return _non_empty(value, "constraint violation reason")
 
 
-class ObjectiveResult(EvaluationModel):
+class ObjectiveResult(StrictModel):
     value: float | None
     feasible: bool
     violations: list[ConstraintViolation] = Field(default_factory=list)
@@ -513,7 +507,7 @@ class ObjectiveResult(EvaluationModel):
         return self
 
 
-class EvaluationRecord(EvaluationModel):
+class EvaluationRecord(StrictModel):
     schema_version: Literal[2] = 2
     id: str
     request: EvaluationRequest
@@ -553,7 +547,7 @@ class DisclosureLevel(str, Enum):
     NONE = "none"
 
 
-class EvaluationSummary(EvaluationModel):
+class EvaluationSummary(StrictModel):
     evaluation_id: str
     candidate_id: str
     candidate_version: str
@@ -580,12 +574,12 @@ class EvaluationSummary(EvaluationModel):
         return self
 
 
-class EvaluationAcknowledgement(EvaluationModel):
+class EvaluationAcknowledgement(StrictModel):
     evaluation_id: str
     status: EvaluationStatus
 
 
-class EvaluationReceipt(EvaluationModel):
+class EvaluationReceipt(StrictModel):
     """Bounded agent-facing pointer to filesystem evaluation feedback."""
 
     evaluation_id: str
@@ -627,7 +621,7 @@ class EvaluationReceipt(EvaluationModel):
         return self
 
 
-class EvaluationAuthorization(EvaluationModel):
+class EvaluationAuthorization(StrictModel):
     may_evaluate: bool
     may_view: bool | None = None
     meter_budget: bool = True
@@ -648,12 +642,12 @@ class EvaluationAuthorization(EvaluationModel):
         return _optional_non_empty(value, "authorization reason")
 
 
-class EvaluationCost(EvaluationModel):
+class EvaluationCost(StrictModel):
     runs: int = Field(default=1, ge=1)
     cases: int | None = Field(default=None, ge=0)
 
 
-class EvaluationBudget(EvaluationModel):
+class EvaluationBudget(StrictModel):
     backend_id: str
     evaluation_set_key: str
     principal: EvaluationPrincipal = EvaluationPrincipal.AGENT
@@ -684,7 +678,7 @@ class EvaluationBudget(EvaluationModel):
         return self
 
 
-class EvaluationAccessPolicy(EvaluationModel):
+class EvaluationAccessPolicy(StrictModel):
     """Agent visibility and invocation rights for one named evaluation set."""
 
     agent_can_evaluate: bool = True
@@ -710,7 +704,7 @@ class EvaluationAccessPolicy(EvaluationModel):
         return self
 
 
-class EvaluationDefinition(EvaluationModel):
+class EvaluationDefinition(StrictModel):
     """One named evaluation together with access and principal-scoped budgets."""
 
     evaluation_set: EvaluationSet
@@ -740,7 +734,7 @@ class EvaluationDefinition(EvaluationModel):
         return self
 
 
-class EvaluationPlan(EvaluationModel):
+class EvaluationPlan(StrictModel):
     """All evaluations available to one optimization protocol."""
 
     evaluations: list[EvaluationDefinition]

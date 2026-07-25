@@ -11,14 +11,14 @@ from pydantic import Field, JsonValue, field_validator, model_validator
 from vero.candidate import Candidate
 from vero.evaluation import (
     EvaluationAcknowledgement,
-    EvaluationModel,
     EvaluationRecord,
     EvaluationSummary,
 )
+from vero.models import StrictModel
 from vero.workspace import Workspace
 
 
-class CandidateProposal(EvaluationModel):
+class CandidateProposal(StrictModel):
     """A strategy's request for one producer to explore a parent candidate."""
 
     id: str = Field(default_factory=lambda: str(uuid4()))
@@ -48,7 +48,7 @@ class CandidateProposal(EvaluationModel):
         return self
 
 
-class CandidateChange(EvaluationModel):
+class CandidateChange(StrictModel):
     """Producer metadata returned after it edits a supplied workspace."""
 
     description: str = "Optimize candidate"

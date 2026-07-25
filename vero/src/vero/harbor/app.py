@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict
 from starlette.background import BackgroundTask
 
 from vero.evaluation import (
@@ -35,6 +34,7 @@ from vero.harbor.sidecar import (
 )
 from vero.harbor.transport import CandidateTransferError
 from vero.harbor.verifier import CanonicalVerifier
+from vero.models import StrictModel
 
 if TYPE_CHECKING:
     from vero.runtime.wandb import InferenceTelemetryPoller
@@ -42,15 +42,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SubmitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class SubmitRequest(StrictModel):
     version: str | None = None
 
 
-class ScoreBaselineRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
+class ScoreBaselineRequest(StrictModel):
     replicates: int = 1
 
 

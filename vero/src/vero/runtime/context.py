@@ -21,7 +21,6 @@ from vero.evaluation import (
     EvaluationAcknowledgement,
     EvaluationBudget,
     EvaluationEngine,
-    EvaluationModel,
     EvaluationPlan,
     EvaluationPrincipal,
     EvaluationReceipt,
@@ -31,6 +30,7 @@ from vero.evaluation import (
     project_evaluation,
 )
 from vero.evaluation.persistence import _atomic_write_json
+from vero.models import StrictModel
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 
@@ -105,12 +105,12 @@ def make_evaluation_receipt(
     )
 
 
-class AgentDisclosureEntry(EvaluationModel):
+class AgentDisclosureEntry(StrictModel):
     evaluation_id: str
     maximum_disclosure: DisclosureLevel
 
 
-class AgentDisclosureLedgerModel(EvaluationModel):
+class AgentDisclosureLedgerModel(StrictModel):
     schema_version: Literal[1] = 1
     evaluations: dict[str, AgentDisclosureEntry] = Field(default_factory=dict)
 

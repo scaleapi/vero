@@ -26,7 +26,6 @@ from vero.evaluation import (
     EvaluationExecutionError,
     EvaluationInfrastructureError,
     EvaluationLimits,
-    EvaluationModel,
     EvaluationReceipt,
     EvaluationRecord,
     EvaluationRequest,
@@ -40,6 +39,7 @@ from vero.evaluation import (
 from vero.evaluation.engine import EvaluationEngine
 from vero.evaluation.persistence import _atomic_write_json
 from vero.harbor.transport import CandidateTransferError, CandidateTransport
+from vero.models import StrictModel
 from vero.runtime.context import (
     CANDIDATES_SUBDIRECTORY,
     AgentContextDirectory,
@@ -64,7 +64,7 @@ class EvaluationJobNotFoundError(LookupError):
     """Raised when an agent requests an unknown evaluation job."""
 
 
-class SidecarEvaluationPolicy(EvaluationModel):
+class SidecarEvaluationPolicy(StrictModel):
     """Agent access to one backend-owned evaluation-set partition."""
 
     backend_id: str
@@ -114,7 +114,7 @@ class SidecarEvaluationPolicy(EvaluationModel):
         return self
 
 
-class SidecarEvaluationRequest(EvaluationModel):
+class SidecarEvaluationRequest(StrictModel):
     """Agent request; candidate identity is established by the transport."""
 
     backend_id: str
@@ -142,7 +142,7 @@ class SidecarEvaluationRequest(EvaluationModel):
 EvaluationProjection = EvaluationRecord | EvaluationSummary | EvaluationAcknowledgement
 
 
-class SidecarEvaluationResult(EvaluationModel):
+class SidecarEvaluationResult(StrictModel):
     disclosure: DisclosureLevel
     receipt: EvaluationReceipt
 
@@ -161,7 +161,7 @@ class EvaluationJobStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class SidecarEvaluationJob(EvaluationModel):
+class SidecarEvaluationJob(StrictModel):
     """Durable agent-facing lifecycle for one sidecar evaluation request."""
 
     job_id: str
@@ -199,7 +199,7 @@ class SidecarEvaluationJob(EvaluationModel):
         return self
 
 
-class EvaluationAccessStatus(EvaluationModel):
+class EvaluationAccessStatus(StrictModel):
     backend_id: str
     evaluation_set_name: str
     partition: str | None
@@ -211,14 +211,14 @@ class EvaluationAccessStatus(EvaluationModel):
     budget: EvaluationBudget | None = None
 
 
-class SidecarStatus(EvaluationModel):
+class SidecarStatus(StrictModel):
     submit_enabled: bool
     evaluation_access: list[EvaluationAccessStatus]
     inference_usage: dict[str, JsonValue] | None = None
     evaluation_jobs: list[SidecarEvaluationJob] = Field(default_factory=list)
 
 
-class Submission(EvaluationModel):
+class Submission(StrictModel):
     candidate: Candidate
 
 

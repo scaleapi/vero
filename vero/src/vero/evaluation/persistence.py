@@ -20,7 +20,6 @@ from vero.candidate import Candidate
 from vero.evaluation.models import (
     BackendProvenance,
     CaseResult,
-    EvaluationModel,
     EvaluationPrincipal,
     EvaluationRecord,
     EvaluationReport,
@@ -30,6 +29,7 @@ from vero.evaluation.models import (
     ObjectiveSpec,
 )
 from vero.evaluation.objective import select_best_evaluation
+from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def _case_digest(case_id: str) -> str:
     return hashlib.sha256(case_id.encode()).hexdigest()
 
 
-class CaseFileReference(EvaluationModel):
+class CaseFileReference(StrictModel):
     case_id: str
     path: str
 
@@ -82,7 +82,7 @@ class CaseFileReference(EvaluationModel):
         return self
 
 
-class EvaluationManifest(EvaluationModel):
+class EvaluationManifest(StrictModel):
     schema_version: Literal[1] = 1
     lifecycle: Literal["complete"] = "complete"
     id: str
@@ -137,7 +137,7 @@ class EvaluationManifest(EvaluationModel):
         )
 
 
-class RunningEvaluationManifest(EvaluationModel):
+class RunningEvaluationManifest(StrictModel):
     schema_version: Literal[1] = 1
     lifecycle: Literal["running"] = "running"
     id: str
