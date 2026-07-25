@@ -6,27 +6,27 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 {% if use_local_vero %}
-COPY vero /opt/vero
-RUN uv pip install --system "/opt/vero[{{ sidecar_extras }}]"
+COPY vero {{ layout.vero }}
+RUN uv pip install --system "{{ layout.vero }}[{{ sidecar_extras }}]"
 {% else %}
 RUN uv pip install --system "{{ vero_requirement }}"
 {% endif %}
 RUN uv pip install --system "{{ harbor_requirement }}"
 
-COPY agent-baseline /opt/agent-baseline
-COPY sidecar/cases /opt/cases
-COPY sidecar/serve.json /opt/serve.json
+COPY agent-baseline {{ layout.trusted_repo }}
+COPY sidecar/cases {{ layout.cases }}
+COPY sidecar/serve.json {{ layout.serve_config }}
 {% if local_task_source %}
-COPY sidecar/task-source /opt/task-source
+COPY sidecar/task-source {{ layout.task_source }}
 {% endif %}
 {% if command_harness %}
-COPY sidecar/harness /opt/harness
+COPY sidecar/harness {{ layout.harness }}
 {% endif %}
 
-RUN cd /opt/agent-baseline && uv sync 2>/dev/null || true
-RUN git config --system --add safe.directory /opt/agent-baseline \
-    && git config --system --add safe.directory /work/agent \
-    && git config --system --add safe.directory /work/agent/.git
+RUN cd {{ layout.trusted_repo }} && uv sync 2>/dev/null || true
+RUN git config --system --add safe.directory {{ layout.trusted_repo }} \
+    && git config --system --add safe.directory {{ layout.target_repo }} \
+    && git config --system --add safe.directory {{ layout.target_git }}
 
 # Unprivileged user for executing the untrusted candidate harness. The sidecar
 # still starts as root (the trusted control plane); only the `harbor run`
@@ -46,8 +46,8 @@ RUN mkdir -p /home/harness/.cache \
 # Lock the trusted, root-only files the harness must never read: the case lists
 # reveal held-out (validation/test) task membership, and the deployment config
 # carries the reserved finalization inference token. (Local task packages under
-# /opt/task-source, which harbor must read to grade host-side, remain readable
+# {{ layout.task_source }}, which harbor must read to grade host-side, remain readable
 # and are addressed by the deeper in-container isolation work.)
-RUN chmod 700 /opt/cases && chmod 600 /opt/serve.json
+RUN chmod 700 {{ layout.cases }} && chmod 600 {{ layout.serve_config }}
 
 WORKDIR /opt

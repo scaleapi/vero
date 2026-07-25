@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import Field, field_validator, model_validator
 
 from vero.evaluation.persistence import _atomic_write_json
+from vero.harbor.layout import LAYOUT
 from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class InferenceRequestLogConfig(StrictModel):
     usage frame of a stream survives; ``body_bytes: 0`` keeps metadata only.
     """
 
-    directory: str = "/state/inference/requests"
+    directory: str = LAYOUT.inference_request_log_dir
     body_bytes: int = Field(default=16384, ge=0)
     rotate_bytes: int = Field(default=64 * 1024 * 1024, ge=1_048_576)
     # Experimental: stamp each record with a provider-agnostic conversation
@@ -95,7 +96,7 @@ class InferenceGatewayConfig(StrictModel):
     upstream_api_key_env: str = "OPENAI_API_KEY"
     upstream_base_url_env: str | None = "OPENAI_BASE_URL"
     default_upstream_base_url: str = "https://api.openai.com/v1"
-    state_path: str = "/state/inference/usage.json"
+    state_path: str = LAYOUT.inference_state
     request_log: InferenceRequestLogConfig | None = None
     scopes: dict[str, InferenceScopeConfig]
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-cd /work/agent
+cd {{ layout.target_repo }}
 git config user.name optimizer
 git config user.email optimizer@example.test
 echo "# optimizer candidate" >> README.md 2>/dev/null || echo "candidate" > NOTES.md

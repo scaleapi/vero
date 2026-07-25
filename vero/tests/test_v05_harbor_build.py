@@ -23,6 +23,7 @@ from vero.harbor import (
     compile_harbor_task,
     load_harbor_build_config,
 )
+from vero.harbor.layout import LAYOUT
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 
@@ -34,6 +35,47 @@ _requires_benchmarks = pytest.mark.skipif(
     not BENCHMARK_ROOT.exists(),
     reason="harness-engineering-bench is not present on this branch",
 )
+
+
+def test_task_layout_values_are_pinned():
+    """The one place the layout's literal values are written down twice.
+
+    Every other test references LAYOUT, so without this they would all be
+    tautological: changing a path would silently keep them green. These values
+    are a contract with the benchmarks' read_only_paths and with the compiled
+    task directories that are checked in, so a deliberate change should have to
+    edit this list too.
+    """
+    assert LAYOUT.target_repo == "/work/agent"
+    assert LAYOUT.trusted_repo == "/opt/agent-baseline"
+    assert LAYOUT.seed_repo == "/opt/agent-seed"
+    assert LAYOUT.vero == "/opt/vero"
+    assert LAYOUT.cases == "/opt/cases"
+    assert LAYOUT.task_source == "/opt/task-source"
+    assert LAYOUT.harness == "/opt/harness"
+    assert LAYOUT.overlay == "/opt/overlay"
+    assert LAYOUT.serve_config == "/opt/serve.json"
+    assert LAYOUT.seed_script == "/opt/seed.sh"
+    assert LAYOUT.inference_config == "/opt/inference.json"
+    assert LAYOUT.agent_volume == "/state/agent-context"
+    assert LAYOUT.admin_volume == "/state/admin"
+    assert LAYOUT.token_dir == "/state/token"
+    assert LAYOUT.inference_dir == "/state/inference"
+    assert LAYOUT.sidecar_host == "eval-sidecar"
+    assert LAYOUT.sidecar_port == 8000
+    assert LAYOUT.gateway_host == "inference-gateway"
+    assert LAYOUT.gateway_port == 8001
+    # Derived paths, so a base and its children cannot drift apart.
+    assert LAYOUT.session_dir == "/state/admin/session"
+    assert LAYOUT.case_resources_dir == "/state/admin/case-resources"
+    assert LAYOUT.token_path == "/state/token/admin.token"
+    assert LAYOUT.inference_state == "/state/inference/usage.json"
+    assert LAYOUT.inference_request_log_dir == "/state/inference/requests"
+    assert LAYOUT.target_git == "/work/agent/.git"
+    assert LAYOUT.target_git_exclude == "/work/agent/.git/info/exclude"
+    assert LAYOUT.target_evals == "/work/agent/.evals"
+    assert LAYOUT.sidecar_url == "http://eval-sidecar:8000"
+    assert LAYOUT.gateway_url == "http://inference-gateway:8001"
 
 
 def _git(path: Path, *arguments: str) -> str:
@@ -191,9 +233,9 @@ def test_compiler_bakes_workspace_overlay_into_agent_environment(tmp_path):
     assert (env / "overlay" / ".claude" / "agents" / "insights.md").is_file()
     assert (env / "overlay" / "skills" / "insights" / "SKILL.md").is_file()
     # Dockerfile copies it, seed applies it, injected tooling is git-excluded
-    assert "COPY overlay /opt/overlay" in (env / "Dockerfile").read_text()
+    assert f"COPY overlay {LAYOUT.overlay}" in (env / "Dockerfile").read_text()
     seed = (env / "main" / "seed.sh").read_text()
-    assert "cp -a /opt/overlay/. /work/agent/" in seed
+    assert f"cp -a {LAYOUT.overlay}/. {LAYOUT.target_repo}/" in seed
     assert "/.claude/" in seed and "/skills/" in seed
 
 
@@ -224,7 +266,7 @@ def test_compiler_omits_overlay_when_unset(tmp_path):
     env = output / "environment"
     assert not (env / "overlay").exists()
     assert "COPY overlay" not in (env / "Dockerfile").read_text()
-    assert "/opt/overlay" not in (env / "main" / "seed.sh").read_text()
+    assert LAYOUT.overlay not in (env / "main" / "seed.sh").read_text()
 
 
 def test_compiler_bakes_evals_skill_by_default(tmp_path):
@@ -233,7 +275,7 @@ def test_compiler_bakes_evals_skill_by_default(tmp_path):
     skill = env / "overlay" / "skills" / "evals" / "SKILL.md"
     assert skill.is_file()
     assert "evals run" in skill.read_text(encoding="utf-8")
-    assert "'/skills/' >> /work/agent/.git/info/exclude" in (
+    assert f"'/skills/' >> {LAYOUT.target_git_exclude}" in (
         env / "main" / "seed.sh"
     ).read_text(encoding="utf-8")
 
@@ -342,11 +384,11 @@ def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path)
     # request/response on its state volume and the sidecar mirrors it. The
     # experimental thread-attribution stamping stays off unless opted into.
     assert gateway["request_log"] == {
-        "directory": "/state/inference/requests",
+        "directory": LAYOUT.inference_request_log_dir,
         "body_bytes": 16384,
         "attribution": False,
     }
-    assert serve["inference_request_log_dir"] == "/state/inference/requests"
+    assert serve["inference_request_log_dir"] == LAYOUT.inference_request_log_dir
 
 
 def test_compiler_emits_request_log_attribution_when_enabled(tmp_path):
@@ -497,9 +539,9 @@ def test_command_backend_compiles_a_task_with_no_target_agent(tmp_path):
     )
     backend = serve["backends"]["harbor-validation"]
     assert backend["type"] == "command"
-    assert backend["harness_root"] == "/opt/harness"
+    assert backend["harness_root"] == LAYOUT.harness
     # Case enumeration is the harness's job, so it is told where the case files are.
-    assert backend["environment"]["VERO_CASES_DIR"] == "/opt/cases"
+    assert backend["environment"]["VERO_CASES_DIR"] == LAYOUT.cases
     # None of the nested-harbor plumbing leaks into a command backend.
     assert "agent_import_path" not in backend
     assert "task_source" not in backend
@@ -507,7 +549,7 @@ def test_command_backend_compiles_a_task_with_no_target_agent(tmp_path):
     # The harness is baked into the trusted sidecar, never the agent workspace.
     assert (output / "environment/sidecar/harness/score.py").is_file()
     dockerfile = (output / "environment/sidecar/Dockerfile").read_text(encoding="utf-8")
-    assert "COPY sidecar/harness /opt/harness" in dockerfile
+    assert f"COPY sidecar/harness {LAYOUT.harness}" in dockerfile
 
     # And the trusted side still parses what the compiler emitted.
     assert HarborDeploymentConfig.model_validate(serve).backends["harbor-validation"]
@@ -530,10 +572,10 @@ def test_deployment_treats_a_backend_without_a_type_as_harbor(tmp_path):
         harbor_requirement="harbor==0.20.0",
     )
     legacy = {
-        "repo_path": "/opt/agent-baseline",
-        "agent_repo_path": "/work/agent",
-        "session_dir": "/state/admin/session",
-        "admin_volume": "/state/admin",
+        "repo_path": LAYOUT.trusted_repo,
+        "agent_repo_path": LAYOUT.target_repo,
+        "session_dir": LAYOUT.session_dir,
+        "admin_volume": LAYOUT.admin_volume,
         "access_policies": [],
         "targets": [],
         "selection": {"mode": "submit"},
@@ -793,13 +835,13 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["targets"][0]["backend_id"] == "harbor-test"
     assert serve["targets"][0]["reward_scale"] == 1.0
     assert serve["evaluation_drain_timeout_seconds"] == config.timeout_seconds
-    assert serve["backends"]["harbor-test"]["task_source"] == "/opt/task-source"
+    assert serve["backends"]["harbor-test"]["task_source"] == LAYOUT.task_source
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
     assert serve["backends"]["harbor-test"]["case_timeout_seconds"] == 180.0
     assert serve["backends"]["harbor-test"]["task_agent_timeout_seconds"] == 600.0
     assert (
         serve["backends"]["harbor-validation"]["case_resources_cache_path"]
-        == "/state/admin/case-resources/validation"
+        == f"{LAYOUT.case_resources_dir}/validation"
     )
     assert serve["access_policies"][0]["limits"]["retry"]["max_attempts"] == 1
     assert serve["access_policies"][0]["limits"]["case_timeout_seconds"] == 180.0
@@ -836,9 +878,9 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert tomllib.loads(task_toml)["task"]["name"] == 'org/optimize-"program"'
     compose = (output / "environment/docker-compose.yaml").read_text()
     assert "vero.harbor.deployment:build_harbor_components" in compose
-    assert "admin_state:/state/admin" in compose
-    assert "agent_context:/work/agent/.evals:ro" in compose
-    assert "agent_context:/state/agent-context" in compose
+    assert f"admin_state:{LAYOUT.admin_volume}" in compose
+    assert f"agent_context:{LAYOUT.target_evals}:ro" in compose
+    assert f"agent_context:{LAYOUT.agent_volume}" in compose
     assert set(yaml.safe_load(compose)["services"]) == {"main", "eval-sidecar"}
     sidecar_dockerfile = (output / "environment/sidecar/Dockerfile").read_text()
     assert 'uv pip install --system "harbor==0.1.17"' in sidecar_dockerfile
@@ -847,8 +889,8 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "useradd -m -u 1002 harness" in sidecar_dockerfile
     assert "chown -R harness:harness /home/harness/.cache" in sidecar_dockerfile
     seed = (output / "environment/main/seed.sh").read_text()
-    assert "-path /work/agent/.evals -prune" in seed
-    assert "'/.evals/' >> /work/agent/.git/info/exclude" in seed
+    assert f"-path {LAYOUT.target_evals} -prune" in seed
+    assert f"'/.evals/' >> {LAYOUT.target_git_exclude}" in seed
     test_script = output / "tests/test.sh"
     assert test_script.stat().st_mode & 0o111
     assert "vero harbor export-session" in test_script.read_text()

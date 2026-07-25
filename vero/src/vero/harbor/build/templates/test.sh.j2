@@ -3,8 +3,8 @@ set -eu
 
 mkdir -p /logs/verifier
 vero harbor finalize \
-  --token-file /state/token/admin.token \
+  --token-file {{ layout.token_path }} \
   --output /logs/verifier/reward.json
 vero harbor export-session \
-  --token-file /state/token/admin.token
+  --token-file {{ layout.token_path }}
 cat /logs/verifier/reward.json

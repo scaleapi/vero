@@ -1,6 +1,6 @@
 # Optimize the program
 
-Improve the program in `/work/agent` so it scores as highly as possible on the
+Improve the program in `{{ layout.target_repo }}` so it scores as highly as possible on the
 hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 {% if disclose_budget %}budget, {% endif %}and final candidate selection.
 
@@ -12,7 +12,7 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 {% endif %}
 ## Workflow
 
-1. Inspect and edit `/work/agent`.
+1. Inspect and edit `{{ layout.target_repo }}`.
 2. Commit each candidate with Git.
 3. Evaluate the current commit on the selection set:
 

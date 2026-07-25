@@ -203,7 +203,7 @@ class WorkspaceOverlaySpec(StrictModel):
     """A host file or directory to copy into the compiled task's agent workspace.
 
     General-purpose filesystem injection: bake anything (agent definitions,
-    skills, config, data) into the optimizer's /work/agent at build time.
+    skills, config, data) into the optimizer's workspace at build time.
 
     Attributes:
         source: Host path, resolved relative to the build YAML. Must exist. A

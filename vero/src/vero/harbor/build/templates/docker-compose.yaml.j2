@@ -1,9 +1,9 @@
 # Harbor merges this after its generated main-service configuration.
 services:
   main:
-    command: ["/opt/seed.sh"]
+    command: ["{{ layout.seed_script }}"]
     environment:
-      VERO_EVAL_URL: "http://eval-sidecar:8000"
+      VERO_EVAL_URL: "{{ layout.sidecar_url }}"
 {% for secret in scrubbed_main_environment %}
       {{ secret }}: ""
 {% endfor %}
@@ -17,18 +17,18 @@ services:
 {% endif %}
 {% endif %}
     volumes:
-      - agent_repo:/work/agent
-      - agent_context:/work/agent/.evals:ro
-      - token_state:/state/token:ro
+      - agent_repo:{{ layout.target_repo }}
+      - agent_context:{{ layout.target_evals }}:ro
+      - token_state:{{ layout.token_dir }}:ro
     depends_on:
-      eval-sidecar:
+      {{ layout.sidecar_host }}:
         condition: service_healthy
 {% if inference_gateway %}
-      inference-gateway:
+      {{ layout.gateway_host }}:
         condition: service_healthy
 {% endif %}
 
-  eval-sidecar:
+  {{ layout.sidecar_host }}:
     build:
       context: .
       dockerfile: sidecar/Dockerfile
@@ -39,9 +39,9 @@ services:
       - "--factory"
       - "vero.harbor.deployment:build_harbor_components"
       - "--config"
-      - "/opt/serve.json"
+      - "{{ layout.serve_config }}"
       - "--admin-token"
-      - "/state/token/admin.token"
+      - "{{ layout.token_path }}"
     environment:
 {% if sidecar_secrets %}
 {% for secret in sidecar_secrets %}
@@ -59,39 +59,39 @@ services:
 {% endfor %}
 {% endif %}
     volumes:
-      - agent_repo:/work/agent:ro
-      - agent_context:/state/agent-context
-      - admin_state:/state/admin
-      - token_state:/state/token
+      - agent_repo:{{ layout.target_repo }}:ro
+      - agent_context:{{ layout.agent_volume }}
+      - admin_state:{{ layout.admin_volume }}
+      - token_state:{{ layout.token_dir }}
 {% if inference_gateway %}
-      - inference_state:/state/inference:ro
+      - inference_state:{{ layout.inference_dir }}:ro
 {% endif %}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ layout.sidecar_port }}/health')"]
       interval: 5s
       timeout: 10s
       retries: 30
       start_period: 10s
 
 {% if inference_gateway %}
-  inference-gateway:
+  {{ layout.gateway_host }}:
     build:
       context: .
       dockerfile: gateway/Dockerfile
     command:
       - "vero"
       - "harbor"
-      - "inference-gateway"
+      - "{{ layout.gateway_host }}"
       - "--config"
-      - "/opt/inference.json"
+      - "{{ layout.inference_config }}"
     environment:
 {% for secret in gateway_environment %}
       {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the inference gateway{{ '}' }}"
 {% endfor %}
     volumes:
-      - inference_state:/state/inference
+      - inference_state:{{ layout.inference_dir }}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ layout.gateway_port }}/health')"]
       interval: 5s
       timeout: 10s
       retries: 30

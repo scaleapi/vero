@@ -6,12 +6,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 {% if use_local_vero %}
-COPY vero /opt/vero
-RUN uv pip install --system "/opt/vero[harbor]"
+COPY vero {{ layout.vero }}
+RUN uv pip install --system "{{ layout.vero }}[harbor]"
 {% else %}
 RUN uv pip install --system "{{ vero_requirement }}"
 {% endif %}
 
-COPY gateway/config.json /opt/inference.json
+COPY gateway/config.json {{ layout.inference_config }}
 
 WORKDIR /opt

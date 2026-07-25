@@ -1,19 +1,19 @@
 #!/bin/sh
 set -eu
 
-if [ ! -d /work/agent/.git ]; then
-  cp -a /opt/agent-seed/. /work/agent/
+if [ ! -d {{ layout.target_git }} ]; then
+  cp -a {{ layout.seed_repo }}/. {{ layout.target_repo }}/
 fi
 {% if overlay_present %}
 # Inject baked-in workspace overlay (agent definitions, skills, config, ...).
-cp -a /opt/overlay/. /work/agent/
+cp -a {{ layout.overlay }}/. {{ layout.target_repo }}/
 {% endif %}
 
-find /work/agent -path /work/agent/.evals -prune -o -exec chown agent:agent {} +
-git config --system --add safe.directory /work/agent
-printf '%s\n' '/.evals/' >> /work/agent/.git/info/exclude
+find {{ layout.target_repo }} -path {{ layout.target_evals }} -prune -o -exec chown agent:agent {} +
+git config --system --add safe.directory {{ layout.target_repo }}
+printf '%s\n' '/.evals/' >> {{ layout.target_git_exclude }}
 {% for path in overlay_excludes %}
-printf '%s\n' '/{{ path }}/' >> /work/agent/.git/info/exclude
+printf '%s\n' '/{{ path }}/' >> {{ layout.target_git_exclude }}
 {% endfor %}
 {% if inference_gateway %}
 # Codex otherwise treats the built-in OpenAI provider as WebSocket-capable.
@@ -32,9 +32,9 @@ TOML
 chown -R agent:agent /tmp/codex-home
 {% endif %}
 {% for path in read_only_paths %}
-if [ -e "/work/agent/{{ path }}" ]; then
-  chown -R root:root "/work/agent/{{ path }}"
-  chmod -R a-w "/work/agent/{{ path }}"
+if [ -e "{{ layout.target_repo }}/{{ path }}" ]; then
+  chown -R root:root "{{ layout.target_repo }}/{{ path }}"
+  chmod -R a-w "{{ layout.target_repo }}/{{ path }}"
 fi
 {% endfor %}
 

@@ -22,6 +22,7 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.harbor import HarborBackend, HarborBackendConfig
+from vero.harbor.layout import LAYOUT
 from vero.sandbox import CommandResult, LocalSandbox
 
 
@@ -1035,7 +1036,7 @@ def test_command_forwards_retry_config_and_max_retries(tmp_path):
     backend = HarborBackend(_config(tmp_path, max_retries=5))
 
     command = backend._command(
-        workspace="/work/agent",
+        workspace=LAYOUT.target_repo,
         request=_request(),
         cases=[],
         jobs_dir="/staging/jobs",

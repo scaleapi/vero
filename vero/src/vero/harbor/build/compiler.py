@@ -23,29 +23,33 @@ from vero.evaluation import (
 )
 from vero.harbor.build.config import HarborBuildConfig, WorkspaceOverlaySpec
 from vero.harbor.inference import generate_inference_token, token_digest
+from vero.harbor.layout import LAYOUT
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES = Path(__file__).parent / "templates"
 _VERO_COPY = ("pyproject.toml", "README.md", "uv.lock", "src")
 
-VERO_DIR = "/opt/vero"
-TRUSTED_REPO = "/opt/agent-baseline"
-AGENT_REPO = "/work/agent"
-CASES_DIR = "/opt/cases"
-TASK_SOURCE_DIR = "/opt/task-source"
-HARNESS_DIR = "/opt/harness"
-SERVE_CONFIG = "/opt/serve.json"
-AGENT_VOLUME = "/state/agent-context"
-ADMIN_VOLUME = "/state/admin"
-SESSION_DIR = "/state/admin/session"
-TOKEN_PATH = "/state/token/admin.token"
 SESSION_ID = "trial"
-INFERENCE_STATE = "/state/inference/usage.json"
-INFERENCE_REQUEST_LOG_DIR = "/state/inference/requests"
-INFERENCE_GATEWAY_URL = "http://inference-gateway:8001"
 UPSTREAM_API_KEY_ENV = "VERO_INFERENCE_UPSTREAM_API_KEY"
 UPSTREAM_BASE_URL_ENV = "VERO_INFERENCE_UPSTREAM_BASE_URL"
+
+# Container paths and service identities come from the layout, never from a
+# literal here: the templates read the same object, so the two cannot drift.
+VERO_DIR = LAYOUT.vero
+TRUSTED_REPO = LAYOUT.trusted_repo
+AGENT_REPO = LAYOUT.target_repo
+CASES_DIR = LAYOUT.cases
+TASK_SOURCE_DIR = LAYOUT.task_source
+HARNESS_DIR = LAYOUT.harness
+SERVE_CONFIG = LAYOUT.serve_config
+AGENT_VOLUME = LAYOUT.agent_volume
+ADMIN_VOLUME = LAYOUT.admin_volume
+SESSION_DIR = LAYOUT.session_dir
+TOKEN_PATH = LAYOUT.token_path
+INFERENCE_STATE = LAYOUT.inference_state
+INFERENCE_REQUEST_LOG_DIR = LAYOUT.inference_request_log_dir
+INFERENCE_GATEWAY_URL = LAYOUT.gateway_url
 
 
 def _backend_id(partition: str) -> str:
@@ -303,7 +307,9 @@ def _deployment_config(
                     and config.inference_gateway.upstream_base_url_env is not None
                     else None
                 ),
-                "case_resources_cache_path": (f"{ADMIN_VOLUME}/case-resources/{partition}"),
+                "case_resources_cache_path": (
+                    f"{LAYOUT.case_resources_dir}/{partition}"
+                ),
                 "inference_usage_path": (
                     INFERENCE_STATE if config.inference_gateway is not None else None
                 ),
@@ -437,6 +443,8 @@ def _deployment_config(
 
 
 def _render(template: str, destination: Path, **context) -> None:
+    """Render one template. Every template gets the layout, so no template needs
+    to spell out a container path, service name, or port of its own."""
     try:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ImportError as error:
@@ -453,7 +461,7 @@ def _render(template: str, destination: Path, **context) -> None:
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(
-        environment.get_template(template).render(**context),
+        environment.get_template(template).render(layout=LAYOUT, **context),
         encoding="utf-8",
     )
 
