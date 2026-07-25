@@ -105,7 +105,7 @@ class OfficeQaAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("OfficeQA agent requires a Harbor model")
         self._api_model = self.model_name.removeprefix("openai/")
-        self._client = AsyncOpenAI()
+        self._client = AsyncOpenAI(max_retries=8)
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:

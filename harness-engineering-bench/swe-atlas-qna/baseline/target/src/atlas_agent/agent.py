@@ -88,6 +88,7 @@ class AtlasAgent(BaseAgent):
         # The metered per-evaluation gateway arrives on dedicated variables
         # (OPENAI_* carries the upstream for the task's rubric judge instead).
         self._client = AsyncOpenAI(
+            max_retries=8,
             api_key=os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
             or os.environ.get("OPENAI_API_KEY"),
             base_url=os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
