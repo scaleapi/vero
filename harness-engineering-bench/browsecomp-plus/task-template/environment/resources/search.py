@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
-from pyserini.search.lucene import LuceneSearcher
+# pyserini 1.2.0 eagerly constructs an openai.OpenAI() client at import time for
+# its (unused) OpenAI embedding encoders, which raises without a key. BM25 search
+# never calls OpenAI, so a placeholder satisfies the import.
+os.environ.setdefault("OPENAI_API_KEY", "unused-bm25-only")
+
+from pyserini.search.lucene import LuceneSearcher  # noqa: E402
 
 INDEX = Path("/opt/browsecomp/indexes/bm25")
 DEFAULT_SNIPPET_WORDS = 512
