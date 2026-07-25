@@ -62,7 +62,7 @@ def test_openai_tools_excludes_start_conversation():
         {"name": "start_conversation", "description": "x", "inputSchema": {}},
         {"name": "send_message_to_user", "description": "y", "inputSchema": {}},
     ]
-    names = {t["name"] for t in Tau3Agent._openai_tools(tools)}
+    names = {t["function"]["name"] for t in Tau3Agent._openai_tools(tools)}
     assert names == {"send_message_to_user"}
 
 
@@ -117,25 +117,25 @@ class _RecordingEnv:
 
 
 def _response(*, calls=None, text="", rid="r1"):
-    output = calls or []
     return SimpleNamespace(
-        id=rid,
-        output=output,
-        output_text=text,
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(content=text or None, tool_calls=calls or None)
+            )
+        ],
         usage=SimpleNamespace(
-            input_tokens=10,
-            output_tokens=5,
-            input_tokens_details=SimpleNamespace(cached_tokens=3),
+            prompt_tokens=10,
+            completion_tokens=5,
+            prompt_tokens_details=SimpleNamespace(cached_tokens=3),
         ),
     )
 
 
 def _call(name, arguments):
     return SimpleNamespace(
-        type="function_call",
-        name=name,
-        arguments=json.dumps(arguments),
-        call_id=f"c-{name}",
+        id=f"c-{name}",
+        type="function",
+        function=SimpleNamespace(name=name, arguments=json.dumps(arguments)),
     )
 
 
@@ -179,7 +179,7 @@ async def test_run_drives_loop_and_records_usage(tmp_path, monkeypatch):
 
     class _FakeClient:
         def __init__(self):
-            self.responses = _FakeResponses(script)
+            self.chat = SimpleNamespace(completions=_FakeResponses(script))
 
     monkeypatch.setattr(agent_module, "AsyncOpenAI", lambda *a, **k: _FakeClient())
 
@@ -220,7 +220,7 @@ async def test_agent_prefers_dedicated_gateway_creds(tmp_path, monkeypatch):
 
     class _FakeClient:
         def __init__(self):
-            self.responses = _FakeResponses()
+            self.chat = SimpleNamespace(completions=_FakeResponses())
 
     def _fake(*a, **k):
         captured.update(k)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 from typing import Any, override
 
 from harbor.agents.base import BaseAgent
@@ -64,7 +65,7 @@ class Tau3Agent(BaseAgent):
     @staticmethod
     @override
     def name() -> str:
-        return "tau3-responses-baseline"
+        return "tau3-chat-baseline"
 
     @override
     def version(self) -> str:
@@ -216,8 +217,11 @@ class Tau3Agent(BaseAgent):
             session_id=None,
         )
         session_id = self._session_id_from(init)
-        if not session_id:
-            raise RuntimeError("MCP initialize did not return a session id")
+        # The session id is interpolated into a shell `curl -H` header; constrain
+        # it to a safe token charset so a malformed/hostile value can't break out
+        # of the header quoting.
+        if not session_id or not re.fullmatch(r"[A-Za-z0-9._-]+", session_id):
+            raise RuntimeError("MCP initialize did not return a valid session id")
         await self._mcp_raw(
             environment,
             {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -245,9 +249,11 @@ class Tau3Agent(BaseAgent):
         return [
             {
                 "type": "function",
-                "name": tool["name"],
-                "description": tool.get("description") or f"Call {tool['name']}.",
-                "parameters": tool["inputSchema"],
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description") or f"Call {tool['name']}.",
+                    "parameters": tool["inputSchema"],
+                },
             }
             for tool in tools
             if tool["name"] != "start_conversation"
@@ -285,89 +291,125 @@ class Tau3Agent(BaseAgent):
             environment, session_id, "start_conversation", {}
         )
         self._trace({"turn": 0, "tool": "start_conversation", "result": first_text})
-        next_input: Any = (
-            f"{instruction}\n\nThe conversation has been started exactly once. "
-            f"The current user message is in this MCP result:\n{first_text}"
-        )
-        previous_response_id: str | None = None
+        # Stateless Chat Completions: the whole conversation lives in `messages`
+        # and is resent each turn. This works across every provider (unlike the
+        # OpenAI-only Responses API) and keeps full history across plain-text
+        # customer turns (the previous_response_id reset used to drop it).
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": INSTRUCTIONS},
+            {
+                "role": "user",
+                "content": (
+                    f"{instruction}\n\nThe conversation has been started exactly "
+                    f"once. The current user message is in this MCP result:\n"
+                    f"{first_text}"
+                ),
+            },
+        ]
 
         for turn in range(1, MAX_TURNS + 1):
             turns = turn
-            request: dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "model": self._api_model,
-                "instructions": INSTRUCTIONS,
-                "input": next_input,
+                "messages": messages,
                 "tools": openai_tools,
-                "reasoning": {"effort": "medium"},
-                "max_output_tokens": 8_000,
-                "parallel_tool_calls": False,
+                "max_tokens": 8_000,
             }
-            if previous_response_id is not None:
-                request["previous_response_id"] = previous_response_id
-            response = await client.responses.create(**request)
+            # OpenAI reasoning models accept reasoning_effort; other providers
+            # (e.g. Fireworks-served open models) reject it.
+            if "fireworks" not in self._api_model:
+                kwargs["reasoning_effort"] = "medium"
+            response = await client.chat.completions.create(**kwargs)
             usage = response.usage
-            input_tokens += _usage_value(usage, "input_tokens")
-            output_tokens += _usage_value(usage, "output_tokens")
+            input_tokens += _usage_value(usage, "prompt_tokens")
+            output_tokens += _usage_value(usage, "completion_tokens")
             cached_tokens += _usage_value(
-                getattr(usage, "input_tokens_details", None), "cached_tokens"
+                getattr(usage, "prompt_tokens_details", None), "cached_tokens"
             )
 
-            calls = [item for item in response.output if item.type == "function_call"]
+            message = response.choices[0].message
+            calls = message.tool_calls or []
             self._trace(
                 {
                     "turn": turn,
-                    "response_id": response.id,
-                    "output_text": response.output_text,
-                    "function_calls": [
-                        {"name": call.name, "arguments": call.arguments}
-                        for call in calls
+                    "content": message.content,
+                    "tool_calls": [
+                        {"name": c.function.name, "arguments": c.function.arguments}
+                        for c in calls
                     ],
                 }
             )
 
             if calls:
+                # This agent acts one tool at a time; record only the first call
+                # so the assistant turn and its single tool reply stay balanced
+                # (Chat Completions requires a tool message per tool_call id).
                 call = calls[0]
+                assistant: dict[str, Any] = {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                    ],
+                }
+                if message.content:
+                    assistant["content"] = message.content
+                messages.append(assistant)
                 try:
-                    arguments = json.loads(call.arguments)
+                    arguments = json.loads(call.function.arguments)
                     result_text = await self._call_tool(
-                        environment, session_id, call.name, arguments
+                        environment, session_id, call.function.name, arguments
                     )
-                except Exception as error:  # noqa: BLE001 - feed failures back to model
+                except Exception as error:  # noqa: BLE001 - feed failures to model
                     result_text = json.dumps(
                         {"error": f"{type(error).__name__}: {error}"}
                     )
-                self._trace({"turn": turn, "tool": call.name, "result": result_text})
-                next_input = [
+                self._trace(
+                    {"turn": turn, "tool": call.function.name, "result": result_text}
+                )
+                messages.append(
                     {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": result_text,
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": result_text,
                     }
-                ]
-                previous_response_id = response.id
-                if call.name == "end_conversation" or _looks_stopped(result_text):
+                )
+                if call.function.name == "end_conversation" or _looks_stopped(
+                    result_text
+                ):
                     break
                 continue
 
-            message = response.output_text.strip()
-            if not message:
+            text = (message.content or "").strip()
+            if not text:
                 raise RuntimeError(
                     "model returned neither a customer message nor a tool call"
                 )
+            messages.append({"role": "assistant", "content": text})
             fallback_tool = (
-                "end_conversation" if message == "###STOP###" else "send_message_to_user"
+                "end_conversation" if text == "###STOP###" else "send_message_to_user"
             )
             result_text = await self._call_tool(
-                environment, session_id, fallback_tool, {"message": message}
+                environment, session_id, fallback_tool, {"message": text}
             )
             self._trace({"turn": turn, "tool": fallback_tool, "result": result_text})
             if fallback_tool == "end_conversation" or _looks_stopped(result_text):
                 break
-            next_input = (
-                "Your previous text was delivered to the user. "
-                f"Their next response is in this MCP result:\n{result_text}"
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous message was delivered to the user. Their "
+                        f"next response is in this MCP result:\n{result_text}"
+                    ),
+                }
             )
-            previous_response_id = None
         else:
             await self._call_tool(
                 environment,
