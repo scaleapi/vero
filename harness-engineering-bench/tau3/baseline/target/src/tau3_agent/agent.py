@@ -298,10 +298,14 @@ class Tau3Agent(BaseAgent):
                 "instructions": INSTRUCTIONS,
                 "input": next_input,
                 "tools": openai_tools,
-                "reasoning": {"effort": "medium"},
                 "max_output_tokens": 8_000,
                 "parallel_tool_calls": False,
             }
+            # gpt-4o and other non-reasoning models reject `reasoning.effort`
+            # with HTTP 400; only send it to reasoning-capable models.
+            _model = self._api_model.lower()
+            if _model.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in _model:
+                request["reasoning"] = {"effort": "medium"}
             if previous_response_id is not None:
                 request["previous_response_id"] = previous_response_id
             response = await client.responses.create(**request)
