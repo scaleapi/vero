@@ -45,10 +45,18 @@ score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: openai/gpt-5.4-mini-2026-03-17
+# gpt-5.4-mini-2026-03-17 is NOT provisioned on the configured Azure resource:
+# every eval- and finalization-scope call returned 404 DeploymentNotFound, so the
+# candidate agent made no progress and each case that survived infrastructure was
+# scored 0.0 as a task failure. gpt-4o and gpt-5.3-codex are the only deployments
+# that answer today. Restore this to a reasoning model once one is provisioned.
+model: openai/gpt-4o
 environment_name: modal
-# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
-extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default.
+# modal_vm_runtime replaces the DinD strategy, whose single host-networked gRPC
+# stream is a per-sandbox SPOF: 320 of 469 cases were lost to it as sandbox
+# NotFoundError / AddTestsDirError / RuntimeError.
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", "modal_vm_runtime=true"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
@@ -80,7 +88,8 @@ inference_gateway:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
   evaluation:
-    allowed_models: [gpt-5.4-mini-2026-03-17]
+    # Must stay in lockstep with `model` above, or the gateway 403s instead.
+    allowed_models: [gpt-4o]
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64

@@ -45,17 +45,19 @@ def _git(path: Path, *arguments: str) -> str:
 
 @_requires_benchmarks
 @pytest.mark.parametrize(
-    ("benchmark", "producer_models"),
+    ("benchmark", "producer_models", "evaluation_models"),
     [
         # gaia parametrizes the producer model via ${optimizer_model}; the
         # default (no --param) resolves to gpt-5.4.
-        ("gaia", ["gpt-5.4"]),
-        ("swe-atlas-qna", ["gpt-5.4"]),
-        ("tau3", ["gpt-5.4"]),
+        ("gaia", ["gpt-5.4"], ["gpt-5.4-mini-2026-03-17"]),
+        # swe-atlas-qna is pinned to gpt-4o: it is one of only two deployments
+        # that answer on the configured Azure resource.
+        ("swe-atlas-qna", ["gpt-5.4"], ["gpt-4o"]),
+        ("tau3", ["gpt-5.4"], ["gpt-5.4-mini-2026-03-17"]),
     ],
 )
 def test_canonical_benchmarks_isolate_upstream_inference_credentials(
-    benchmark, producer_models
+    benchmark, producer_models, evaluation_models
 ):
     # All benchmarks live at the top level of harness-engineering-bench.
     config = load_harbor_build_config(
@@ -73,9 +75,10 @@ def test_canonical_benchmarks_isolate_upstream_inference_credentials(
     assert config.inference_gateway.producer.allowed_models == producer_models
     assert config.inference_gateway.producer.max_requests is None
     assert config.inference_gateway.producer.max_tokens is None
-    assert config.inference_gateway.evaluation.allowed_models == [
-        "gpt-5.4-mini-2026-03-17"
-    ]
+    assert config.inference_gateway.evaluation.allowed_models == evaluation_models
+    # The gateway allow-list and the agent's model must move together, or every
+    # eval-scope request is rejected 403 before it reaches the upstream.
+    assert config.model == f"openai/{evaluation_models[0]}"
     assert config.inference_gateway.evaluation.max_requests == 15000
     assert config.inference_gateway.evaluation.max_tokens == 100000000
 
