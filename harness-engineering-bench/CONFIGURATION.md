@@ -48,9 +48,9 @@ benchmark can be checked against the others at a glance.
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus |
 |---|---|---|---|---|---|
 | target model | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini |
-| split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 166/332/332 |
-| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 664 |
-| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 1328 |
+| split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
+| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
+| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
 | timeout_seconds (per eval) | 3600 | 7200 | 14400 | 14400 | 28800 |
 | case_timeout_seconds (enforced) | 180 | 300 | 1800 † | 900 † | 900 † |
 | task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 |
