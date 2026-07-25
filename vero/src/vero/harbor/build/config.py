@@ -928,6 +928,11 @@ def load_harbor_build_config(
     task_manifest = value.get("task_manifest")
     if isinstance(task_manifest, str) and not Path(task_manifest).is_absolute():
         value["task_manifest"] = str((base / task_manifest).resolve())
+    command_backend = value.get("command_backend")
+    if isinstance(command_backend, dict):
+        harness_source = command_backend.get("harness_source")
+        if isinstance(harness_source, str) and not Path(harness_source).is_absolute():
+            command_backend["harness_source"] = str((base / harness_source).resolve())
     overlays = value.get("workspace_overlays")
     if isinstance(overlays, list):
         for entry in overlays:

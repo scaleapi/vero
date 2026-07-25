@@ -612,6 +612,44 @@ def test_load_build_config_resolves_relative_local_paths(tmp_path):
     assert loaded.task_source == str(tasks)
 
 
+def test_load_build_config_resolves_a_relative_harness_source(tmp_path):
+    """A command build's harness is relocatable like every other path field."""
+    target = _target_repo(tmp_path / "target")
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    (harness / "score.py").write_text("print('score')\n", encoding="utf-8")
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text(
+        "\n".join(
+            [
+                "name: org/solve",
+                f"agent_repo: {target.name}",
+                "harbor_requirement: harbor==0.1.17",
+                "partitions:",
+                "  validation: [s0]",
+                "  test: [s1]",
+                "agent_access:",
+                "  - partition: validation",
+                "    min_aggregate_cases: 1",
+                "selection_partition: validation",
+                "targets:",
+                "  - partition: test",
+                "evaluation_backend: command",
+                "command_backend:",
+                f"  harness_source: {harness.name}",
+                '  command: [python, "{harness}/score.py"]',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_harbor_build_config(config_path)
+
+    assert loaded.command_backend is not None
+    assert loaded.command_backend.harness_source == str(harness)
+
+
 def test_load_build_config_supports_partition_files_and_validates_manifest(tmp_path):
     target = _target_repo(tmp_path / "target")
     partitions = tmp_path / "partitions"
