@@ -1,4 +1,4 @@
-"""A compact codebase investigation agent built on the Responses API."""
+"""A compact codebase investigation agent built on the Chat Completions API."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
-MAX_TURNS = 30
+MAX_TURNS = 40
 MAX_TOOL_OUTPUT_CHARS = 30_000
 
 INSTRUCTIONS = """You investigate software repositories and answer deep codebase questions.
@@ -29,34 +29,41 @@ submit_answer with the complete answer; do not merely describe what you would in
 TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
-        "name": "run_shell",
-        "description": (
-            "Run a non-interactive command in the repository at /app. Use this for "
-            "read-only exploration and temporary experiments; never edit repository files."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "Shell command to run"}
+        "function": {
+            "name": "run_shell",
+            "description": (
+                "Run a non-interactive command in the repository at /app. Use this "
+                "for read-only exploration and temporary experiments; never edit "
+                "repository files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Shell command to run",
+                    }
+                },
+                "required": ["command"],
             },
-            "required": ["command"],
-            "additionalProperties": False,
         },
-        "strict": True,
     },
     {
         "type": "function",
-        "name": "submit_answer",
-        "description": "Write the complete evidence-backed answer and finish the task.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "answer": {"type": "string", "description": "Complete final answer"}
+        "function": {
+            "name": "submit_answer",
+            "description": "Write the complete evidence-backed answer and finish.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "answer": {
+                        "type": "string",
+                        "description": "Complete final answer",
+                    }
+                },
+                "required": ["answer"],
             },
-            "required": ["answer"],
-            "additionalProperties": False,
         },
-        "strict": True,
     },
 ]
 
@@ -131,6 +138,31 @@ class AtlasAgent(BaseAgent):
         result = getattr(value, name, 0) if value is not None else 0
         return int(result or 0)
 
+    def _completion_kwargs(
+        self, messages: list[dict[str, Any]], *, tools: bool = True
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "model": self._api_model,
+            "messages": messages,
+            "max_tokens": 12_000,
+        }
+        if tools:
+            kwargs["tools"] = TOOLS
+        # OpenAI reasoning models accept reasoning_effort; other providers
+        # (e.g. Fireworks-served open models) reject it.
+        if "fireworks" not in self._api_model:
+            kwargs["reasoning_effort"] = "high"
+        return kwargs
+
+    def _account(
+        self, usage: Any, totals: dict[str, int]
+    ) -> None:
+        totals["input"] += self._usage_value(usage, "prompt_tokens")
+        totals["output"] += self._usage_value(usage, "completion_tokens")
+        totals["cached"] += self._usage_value(
+            getattr(usage, "prompt_tokens_details", None), "cached_tokens"
+        )
+
     @override
     async def run(
         self,
@@ -138,86 +170,118 @@ class AtlasAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        next_input: Any = instruction
-        previous_response_id: str | None = None
-        input_tokens = 0
-        output_tokens = 0
-        cached_tokens = 0
+        # Stateless Chat Completions: the full message history is resent each
+        # turn (provider prompt-caching handles the repeated prefix), which
+        # works across every provider, unlike the OpenAI-only Responses API.
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": INSTRUCTIONS},
+            {"role": "user", "content": instruction},
+        ]
+        totals = {"input": 0, "output": 0, "cached": 0}
 
         for turn in range(1, MAX_TURNS + 1):
-            request: dict[str, Any] = {
-                "model": self._api_model,
-                "instructions": INSTRUCTIONS,
-                "input": next_input,
-                "tools": TOOLS,
-                "reasoning": {"effort": "high"},
-                "max_output_tokens": 12_000,
-                "parallel_tool_calls": False,
-            }
-            if previous_response_id is not None:
-                request["previous_response_id"] = previous_response_id
-            response = await self._client.responses.create(**request)
-            usage = response.usage
-            input_tokens += self._usage_value(usage, "input_tokens")
-            output_tokens += self._usage_value(usage, "output_tokens")
-            cached_tokens += self._usage_value(
-                getattr(usage, "input_tokens_details", None), "cached_tokens"
+            response = await self._client.chat.completions.create(
+                **self._completion_kwargs(messages)
             )
-
-            calls = [item for item in response.output if item.type == "function_call"]
+            self._account(response.usage, totals)
+            message = response.choices[0].message
+            calls = message.tool_calls or []
             self._trace(
                 {
                     "turn": turn,
-                    "response_id": response.id,
-                    "output_text": response.output_text,
-                    "function_calls": [
-                        {"name": call.name, "arguments": call.arguments}
-                        for call in calls
+                    "content": message.content,
+                    "tool_calls": [
+                        {"name": c.function.name, "arguments": c.function.arguments}
+                        for c in calls
                     ],
                 }
             )
+            # Record the assistant turn (with any tool calls) in the history.
+            assistant: dict[str, Any] = {"role": "assistant"}
+            if message.content:
+                assistant["content"] = message.content
+            if calls:
+                assistant["tool_calls"] = [
+                    {
+                        "id": c.id,
+                        "type": "function",
+                        "function": {
+                            "name": c.function.name,
+                            "arguments": c.function.arguments,
+                        },
+                    }
+                    for c in calls
+                ]
+            messages.append(assistant)
+
             if not calls:
-                if response.output_text.strip():
-                    self._submit(response.output_text)
+                if (message.content or "").strip():
+                    self._submit(message.content)
                     context.metadata = {"turns": turn, "trace": "atlas-trace.jsonl"}
                     break
                 raise RuntimeError("model returned neither an answer nor a tool call")
 
-            next_input = []
             submitted = False
             for call in calls:
                 try:
-                    arguments = json.loads(call.arguments)
+                    arguments = json.loads(call.function.arguments)
                 except json.JSONDecodeError as error:
                     result: dict[str, Any] = {"error": f"invalid arguments: {error}"}
                 else:
-                    if call.name == "run_shell":
+                    if call.function.name == "run_shell":
                         result = await self._run_shell(
                             environment, arguments["command"]
                         )
-                    elif call.name == "submit_answer":
+                    elif call.function.name == "submit_answer":
                         self._submit(arguments["answer"])
                         result = {"submitted": True}
                         submitted = True
                     else:
-                        result = {"error": f"unknown tool: {call.name}"}
-                self._trace({"turn": turn, "tool": call.name, "result": result})
-                next_input.append(
+                        result = {"error": f"unknown tool: {call.function.name}"}
+                self._trace({"turn": turn, "tool": call.function.name, "result": result})
+                messages.append(
                     {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(result, ensure_ascii=False),
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
                 if submitted:
                     break
-            previous_response_id = response.id
             if submitted:
                 context.metadata = {"turns": turn, "trace": "atlas-trace.jsonl"}
                 break
         else:
-            raise RuntimeError(f"agent exceeded {MAX_TURNS} turns")
+            # Investigation budget exhausted. Force one final tool-free answer
+            # from what was gathered instead of crashing: a best-effort answer
+            # is a real (if low) score, while a raised exception loses the case
+            # entirely and records no usage.
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "You have exhausted your investigation budget. Give your "
+                        "single best final answer now, based on what you have "
+                        "gathered so far."
+                    ),
+                }
+            )
+            final = await self._client.chat.completions.create(
+                **self._completion_kwargs(messages, tools=False)
+            )
+            self._account(final.usage, totals)
+            answer = (final.choices[0].message.content or "").strip() or (
+                "No conclusive answer was determined within the investigation "
+                "budget."
+            )
+            self._submit(answer)
+            self._trace({"turn": MAX_TURNS, "forced_final_answer": answer})
+            context.metadata = {
+                "turns": MAX_TURNS,
+                "trace": "atlas-trace.jsonl",
+                "forced_final": True,
+            }
 
-        context.n_input_tokens = input_tokens
-        context.n_output_tokens = output_tokens
-        context.n_cache_tokens = cached_tokens
+        context.n_input_tokens = totals["input"]
+        context.n_output_tokens = totals["output"]
+        context.n_cache_tokens = totals["cached"]
