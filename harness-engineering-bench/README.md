@@ -32,12 +32,8 @@ promote a task set to the top level once it is ready.
 | Benchmark | Editable target | Dataset | Split |
 | --- | --- | --- | --- |
 | [GAIA baseline](gaia/baseline/) | Tool-using Responses API agent | Harbor `gaia/gaia` | 20% / 40% / 40% |
-
-### Candidates
-
-| Benchmark | Editable target | Dataset | Split |
-| --- | --- | --- | --- |
-| [SWE-Atlas-QnA baseline](candidates/swe-atlas-qna/baseline/) | Codebase investigation agent | Harbor `scale-ai/swe-atlas-qna` | 20% / 40% / 40% |
-| [tau3 baseline](candidates/tau3/baseline/) | MCP customer-service agent | Harbor `sierra-research/tau3-bench` | 20% / 40% / 40% |
-| [OfficeQA baseline](candidates/officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
-| [ALE-Bench (ahc011)](candidates/ale-bench/) | C++ solver program (component, not an agent) | ALE-Bench AHC problem | public / private seeds |
+| [OfficeQA baseline](officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
+| [SWE-Atlas-QnA baseline](swe-atlas-qna/baseline/) | Codebase investigation agent | Harbor `scale-ai/swe-atlas-qna` | 20% / 40% / 40% |
+| [tau3 baseline](tau3/baseline/) | MCP customer-service agent | Harbor `sierra-research/tau3-bench` | 20% / 40% / 40% |
+| [BrowseComp-Plus baseline](browsecomp-plus/baseline/) | Fixed-corpus deep-research agent | Pinned local Harbor tasks | 20% / 40% / 40% |
+| [ALE-Bench (ahc011)](ale-bench/) | C++ solver program (component, not an agent) | ALE-Bench AHC problem | public / private seeds |
