@@ -108,7 +108,22 @@ class VerificationTargetSpec(StrictModel):
 
 
 class InferenceBudgetSpec(StrictModel):
-    """Routing policy and optional limits for one inference-gateway scope."""
+    """Routing policy and optional limits for one inference-gateway scope.
+
+    The compiler lowers each spec into an InferenceScopeConfig, adding the
+    SHA-256 digest of a freshly minted per-scope token. The gateway then checks
+    the presented token, the requested model, and the running budget on every
+    proxied request; limits are held server-side in a ledger written through to
+    disk, so they survive a gateway restart.
+
+    Attributes:
+        allowed_models: Models this scope may request. A request naming anything
+            else is refused with 403 model_denied.
+        max_requests: Cap on proxied requests; unlimited when omitted.
+        max_tokens: Cap on cumulative tokens; unlimited when omitted. Checked
+            before a request starts, so a single request can overshoot it.
+        max_concurrency: Requests this scope may have in flight at once.
+    """
 
     allowed_models: list[str]
     max_requests: int | None = Field(default=None, ge=1)
@@ -126,25 +141,47 @@ class InferenceBudgetSpec(StrictModel):
 
 
 class InferenceGatewaySpec(StrictModel):
-    """Credential source and independent producer/evaluator policies."""
+    """Credential source and independent producer/evaluator policies.
+
+    All model access in a compiled task goes through the gateway, which holds
+    the one upstream credential and hands each consumer a separate token. The
+    optimizer never sees the evaluation or finalization tokens, so it cannot
+    spend from those pools.
+
+    The per-scope allow-lists keep the target on its fixed evaluation model, but
+    only against a non-adversarial optimizer: the scopes share a gateway host and
+    are split by URL path, so an optimizer that smuggles its own token into the
+    candidate can reach the producer scope from the eval sandbox. See the proxy
+    handler in vero.harbor.inference for the full note.
+
+    Attributes:
+        upstream_api_key_env: Environment variable on the build host holding the
+            real upstream API key.
+        upstream_base_url_env: Environment variable holding the upstream base
+            URL; None to always use default_upstream_base_url.
+        default_upstream_base_url: Upstream used when no base-URL variable is set.
+        producer: Policy for the optimizer's own model calls.
+        evaluation: Policy for the target agent under evaluation.
+        finalization: Reserved policy for trusted finalization (admin re-score
+            and verification targets). Defaults to a copy of evaluation, giving
+            the mandatory re-score a pool that search evaluations cannot starve.
+        log_requests: Capture every proxied or denied request as JSONL on the
+            gateway state volume. Never agent-visible; the trusted sidecar
+            mirrors it to Weights & Biases and the session archive.
+        request_log_body_bytes: Head+tail budget per logged body, in bytes.
+        request_log_attribution: Experimental. Stamp log records with
+            provider-agnostic conversation threads for post-hoc per-trial
+            accounting.
+    """
 
     upstream_api_key_env: str = "OPENAI_API_KEY"
     upstream_base_url_env: str | None = "OPENAI_BASE_URL"
     default_upstream_base_url: str = "https://api.openai.com/v1"
     producer: InferenceBudgetSpec
     evaluation: InferenceBudgetSpec
-    # Reserved budget for trusted finalization (admin re-score / targets). When
-    # omitted, it defaults to a copy of `evaluation`, giving the mandatory re-score
-    # its own pool so the optimizer's search evaluations cannot starve it.
     finalization: InferenceBudgetSpec | None = None
-    # Durable JSONL capture of every gateway request/response (metadata plus
-    # head+tail-truncated bodies). Lives on the gateway state volume — never
-    # agent-visible; the trusted sidecar mirrors it to W&B and the session
-    # archive.
     log_requests: bool = True
     request_log_body_bytes: int = Field(default=16384, ge=0)
-    # Experimental: stamp request-log records with provider-agnostic
-    # conversation threads for post-hoc per-trial accounting. Off by default.
     request_log_attribution: bool = False
 
     @field_validator("upstream_api_key_env", "upstream_base_url_env")
@@ -166,9 +203,13 @@ class WorkspaceOverlaySpec(StrictModel):
     """A host file or directory to copy into the compiled task's agent workspace.
 
     General-purpose filesystem injection: bake anything (agent definitions,
-    skills, config, data) into the optimizer's ``/work/agent`` at build time.
-    ``source`` is a host path (resolved relative to the build YAML); ``dest`` is
-    where its contents land relative to the workspace root (``.`` = the root).
+    skills, config, data) into the optimizer's /work/agent at build time.
+
+    Attributes:
+        source: Host path, resolved relative to the build YAML. Must exist. A
+            directory contributes its contents; a file lands as dest/<name>.
+        dest: Where the contents land, relative to the workspace root. Must be a
+            safe relative path; "." is the root itself.
     """
 
     source: str
@@ -201,8 +242,23 @@ class WorkspaceOverlaySpec(StrictModel):
 
 
 class WandbSpec(StrictModel):
-    """Weights & Biases reporting settings, emitted into the sidecar's
-    serve.json. The field names match the sidecar's SidecarWandbConfig."""
+    """Weights & Biases reporting settings, emitted into the sidecar's serve.json.
+
+    Reporting runs on the trusted side only. The field names match the sidecar's
+    SidecarWandbConfig, which consumes them verbatim.
+
+    Attributes:
+        project: Weights & Biases project to report into.
+        entity: Owning user or team; the account default when omitted.
+        name: Display name for the run.
+        group: Group to file the run under.
+        tags: Tags applied to the run.
+        mode: Client mode, e.g. "online" or "offline".
+        notes: Free-text note attached to the run.
+        run_id: Resume into this existing run instead of creating one.
+        log_traces: Upload each evaluation's trace artifacts. Off by default
+            because they are large.
+    """
 
     project: str
     entity: str | None = None
@@ -212,12 +268,127 @@ class WandbSpec(StrictModel):
     mode: str | None = None
     notes: str | None = None
     run_id: str | None = None
-    # Upload each evaluation's trace artifacts to W&B (off by default; large).
     log_traces: bool = False
 
 
 class HarborBuildConfig(StrictModel):
-    """Everything needed to emit an isolated Harbor optimization task."""
+    """Everything needed to emit an isolated Harbor optimization task.
+
+    This is the whole grammar of a benchmark's build.yaml: load_harbor_build_config
+    parses and validates one, and compile_harbor_task lowers it into a task
+    directory. Unknown keys are rejected, so a typo fails the build instead of
+    quietly taking a default.
+
+    Two cross-field rules are checked after parsing. harness_user cannot be
+    combined with task_services_use_upstream, because the raw upstream credential
+    would then reach the isolated harness. And a task_source that is not a local
+    path must name an explicit registry version.
+
+    Attributes:
+        name: Task name written into task.toml.
+        description: Human-readable task description.
+        agent_repo: Absolute path to the editable target. Copied twice, into the
+            immutable agent-baseline and the editable agent-seed.
+        task_source: Local path to the task definitions, or a registry reference
+            pinned as name@version.
+        agent_import_path: Import path of the target agent class Harbor loads.
+        harbor_requirement: Pinned harbor requirement for the task image.
+        partitions: Partition name to the Harbor task names it holds. Emitted as
+            one cases/<partition>.jsonl per partition.
+        task_manifest: Optional path to an existing JSON task manifest.
+        agent_access: One AgentAccessSpec per partition the optimizer may reach.
+        selection_partition: Partition search optimizes against, normally
+            validation.
+        targets: Trusted final scoring passes; see VerificationTargetSpec.
+        evaluation_set_name: Name given to the evaluation set.
+        objective: Metric and direction that define fitness.
+        reward_mode: "submit" scores the candidate the agent submits;
+            "auto_best" scores the best measured candidate.
+        baseline_floor: Never ship a candidate scoring below the baseline.
+        baseline_selection_score: Pin the baseline's selection score rather than
+            measuring it.
+        score_baseline: Whether to score the baseline at all.
+        rescore_top_k: How many leading candidates the trusted side re-scores.
+        rescore_attempts: Re-score repeats per candidate.
+        selection_coverage_threshold: Fraction of the selection set an agent
+            evaluation must cover to be eligible for auto_best ranking. Below
+            this it is too partial to trust for selection.
+        model: Default model for the run.
+        environment_name: Harbor environment, e.g. "modal".
+        harbor_python_version: Python version for the task image.
+        default_index: Package index used for installs.
+        n_attempts: Attempts per case in the nested evaluation run.
+        max_retries: Per-case retries for the nested `harbor run`, forwarded as
+            --max-retries. Harbor already retries non-excluded exceptions with
+            backoff; this tunes how hard, so a transient upstream rate-limit
+            storm during a mandatory evaluation does not fail otherwise-good
+            candidates.
+        retry_wait_multiplier: Backoff multiplier. This and the two delays below
+            are forwarded in a --config JobConfig snippet, since harbor's CLI
+            exposes no backoff flags.
+        retry_min_wait_seconds: Minimum backoff delay.
+        retry_max_wait_seconds: Maximum backoff delay.
+        infrastructure_max_attempts: Attempts for infrastructure-classed
+            failures.
+        infrastructure_retry_delay_seconds: Delay between those attempts.
+        reward_key: Metric key the backend treats as the reward.
+        aggregate_attempts: Combine repeat attempts by "best" or "mean".
+        feedback_transcripts: Include target transcripts in the agent's feedback.
+        feedback_max_bytes: Byte cap per feedback transcript.
+        expose_attempt_detail: Report per-attempt detail, not just the aggregate.
+        extra_harbor_args: Extra flags for the evaluation sub-run. Rejected if
+            they override a flag the compiler controls.
+        agent_env: Environment injected into the optimizer agent's own shell
+            (setup, install, and run) as harbor --ae KEY=VALUE. Distinct from
+            extra_harbor_args, which only reaches the evaluation sub-run, and
+            task_environment, which is that sub-run's environment. Use it for
+            things like UV_TOOL_BIN_DIR, so `uv tool install` targets a writable
+            directory on a non-root sandbox.
+        timeout_seconds: Wall clock for one evaluation.
+        case_timeout_seconds: Wall clock for one case.
+        task_agent_timeout_seconds: Wall clock declared for the target agent.
+        max_concurrency: Cases evaluated concurrently.
+        error_rate_threshold: Case error fraction above which an evaluation is
+            abandoned.
+        verifier_timeout_seconds: Wall clock for the trusted verifier. Falls back
+            to timeout_seconds.
+        evaluation_drain_timeout_seconds: Grace period for in-flight evaluations
+            to finish. Falls back to timeout_seconds.
+        secrets: Environment variable names routed into the task. Their presence
+            on the build host is checked at compile time unless
+            VERO_SKIP_SECRET_CHECK is set.
+        inference_gateway: Gateway credential source and per-scope policies; see
+            InferenceGatewaySpec. Omit for no metered model access.
+        wandb: Trusted-side Weights & Biases reporting from the evaluation
+            sidecar. Requires WANDB_API_KEY in secrets, routed to the sidecar and
+            never to the agent.
+        read_only_paths: Candidate-relative paths the optimizer may read but not
+            edit. Must be safe relative paths.
+        workspace_overlays: Host files baked into the optimizer's workspace.
+        include_evals_skill: Bake vero's packaged evals skill into the workspace,
+            so any coding agent learns the CLI and the .evals layout.
+        instruct_multifidelity: Tell the optimizer it allocates its own case
+            budget and may evaluate subsets. Requires disclose_budget.
+        instruct_exhaust_budget: Tell the optimizer that unspent budget is
+            wasted. Requires disclose_budget.
+        disclose_budget: Master switch for budget disclosure, not enforcement.
+            When False the instruction renders no budget language and the
+            sidecar's status omits remaining budgets, so the agent cannot reason
+            about its budget at all. The two instruct_ flags above apply only
+            when this is True.
+        task_services_use_upstream: Give task-owned model services (user
+            simulators, graders) running inside the task containers the real
+            upstream via OPENAI_*, while the candidate keeps the metered,
+            allow-listed gateway on VERO_AGENT_INFERENCE_*. Needed for
+            benchmarks like tau3 whose environment makes its own model calls.
+        harness_user: Unprivileged OS user that runs the untrusted candidate
+            harness in the sidecar, isolating it from trusted state. None
+            disables that isolation.
+        task_environment: Extra environment for the evaluation sub-run, available
+            to the task's ${VAR} substitutions. Must not name secrets.
+        base_image_main: Base image for the main container.
+        base_image_sidecar: Base image for the sidecar container.
+    """
 
     name: str
     description: str = ""
@@ -244,9 +415,6 @@ class HarborBuildConfig(StrictModel):
     score_baseline: bool = True
     rescore_top_k: int = Field(default=3, ge=1)
     rescore_attempts: int = Field(default=1, ge=1)
-    # Fraction of the selection set's cases an agent eval must cover to be
-    # eligible for auto_best ranking. Below this, the eval is too partial to
-    # trust for selection.
     selection_coverage_threshold: float = Field(default=0.9, ge=0.0, le=1.0)
 
     model: str | None = None
@@ -254,12 +422,6 @@ class HarborBuildConfig(StrictModel):
     harbor_python_version: str = "3.12"
     default_index: str = "https://pypi.org/simple"
     n_attempts: int = Field(default=1, ge=1)
-    # Per-case retry for the nested `harbor run` eval. Harbor already retries any
-    # non-excluded exception (including rate limits) with backoff; these knobs let
-    # a build tune how hard, so a transient upstream rate-limit storm during the
-    # (mandatory) selection/rescore evals does not fail otherwise-good candidates.
-    # `max_retries` -> `harbor run --max-retries`; the backoff fields are forwarded
-    # via a `--config` JobConfig snippet (harbor's CLI exposes no backoff flags).
     max_retries: int = Field(default=2, ge=0)
     retry_wait_multiplier: float = Field(default=2.0, ge=1.0)
     retry_min_wait_seconds: float = Field(default=4.0, ge=0.0)
@@ -272,12 +434,6 @@ class HarborBuildConfig(StrictModel):
     feedback_max_bytes: int = Field(default=3000, ge=0)
     expose_attempt_detail: bool = False
     extra_harbor_args: list[str] = Field(default_factory=list)
-    # Environment variables injected into the optimizer agent's shell (setup/
-    # install and run), rendered as harbor `--ae KEY=VALUE` on the optimizer's
-    # `harbor run`. Distinct from `extra_harbor_args` (which only flows into the
-    # eval sub-run) and `task_environment` (the eval sub-run's env): this reaches
-    # the optimizer agent's own install/setup exec, e.g. UV_TOOL_BIN_DIR so
-    # `uv tool install` targets a writable dir on a non-root sandbox.
     agent_env: dict[str, str] = Field(default_factory=dict)
 
     timeout_seconds: float = Field(default=1800.0, gt=0)
@@ -290,34 +446,15 @@ class HarborBuildConfig(StrictModel):
 
     secrets: list[str] = Field(default_factory=list)
     inference_gateway: InferenceGatewaySpec | None = None
-    # Trusted-side Weights & Biases reporting from the eval-sidecar. Requires
-    # WANDB_API_KEY declared in `secrets` (routed to the sidecar, never the agent).
     wandb: WandbSpec | None = None
     read_only_paths: list[str] = Field(default_factory=list)
     workspace_overlays: list[WorkspaceOverlaySpec] = Field(default_factory=list)
-    # Bake vero's packaged `evals` skill (skills/evals/SKILL.md) into the
-    # optimizer workspace so any coding agent learns the CLI + .evals layout.
     include_evals_skill: bool = True
     instruct_multifidelity: bool = True
     instruct_exhaust_budget: bool = True
-    # Master switch for budget *disclosure* to the optimizer (not enforcement).
-    # When False, no budget language is rendered into the instruction and the
-    # sidecar `/status` omits remaining budgets, so the agent cannot see or reason
-    # about its budget — enabling budget-blind optimization runs. The two
-    # instruct_* flags above only take effect when this is True.
     disclose_budget: bool = True
-    # Give task-owned evaluation services (LLM user-simulators/graders that run
-    # inside the task containers and can't reach the compose-internal gateway) the
-    # real upstream via OPENAI_*, while the candidate agent keeps the metered/
-    # allow-listed gateway on dedicated VERO_AGENT_INFERENCE_* vars. Needed for
-    # benchmarks like tau3 whose environment makes its own LLM calls.
     task_services_use_upstream: bool = False
-    # Unprivileged OS user that executes the untrusted candidate harness in the
-    # compiled sidecar, isolating it from the trusted state. The sidecar image
-    # creates this user; isolation is on by default for compiled deployments.
     harness_user: str | None = "harness"
-    # Extra environment injected into the eval sub-run (and thus available for the
-    # task's ${VAR} substitutions), e.g. TAU2_USER_MODEL. Must not name secrets.
     task_environment: dict[str, str] = Field(default_factory=dict)
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
     base_image_sidecar: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
