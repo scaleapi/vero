@@ -169,13 +169,16 @@ class OfficeQaAgent(BaseAgent):
         result = getattr(value, name, 0) if value is not None else 0
         return int(result or 0)
 
-    def _completion_kwargs(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    def _completion_kwargs(
+        self, messages: list[dict[str, Any]], *, tools: bool = True
+    ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": self._api_model,
             "messages": messages,
-            "tools": TOOLS,
             "max_tokens": 8000,
         }
+        if tools:
+            kwargs["tools"] = TOOLS
         # OpenAI reasoning models accept reasoning_effort and parallel_tool_calls;
         # other providers (e.g. Fireworks-served open models) reject them.
         if "fireworks" not in self._api_model:
@@ -298,7 +301,32 @@ class OfficeQaAgent(BaseAgent):
                 context.metadata = {"turns": turn, "trace": "officeqa-trace.jsonl"}
                 break
         else:
-            raise RuntimeError(f"OfficeQA agent exceeded {MAX_TURNS} turns")
+            # Turn budget exhausted: force one final tool-free answer from what
+            # was gathered rather than crashing, so the case scores best-effort
+            # instead of being lost with no answer recorded.
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "You have used your full research budget. Give your single "
+                        "best final answer now, based on what you have gathered."
+                    ),
+                }
+            )
+            final = await self._client.chat.completions.create(
+                **self._completion_kwargs(messages, tools=False)
+            )
+            self._account(final.usage, totals)
+            answer = (final.choices[0].message.content or "").strip() or (
+                "No answer could be determined within the research budget."
+            )
+            await self._submit(environment, answer)
+            self._trace({"turn": MAX_TURNS, "forced_final_answer": answer})
+            context.metadata = {
+                "turns": MAX_TURNS,
+                "trace": "officeqa-trace.jsonl",
+                "forced_final": True,
+            }
 
         context.n_input_tokens = totals["input"]
         context.n_output_tokens = totals["output"]
