@@ -52,11 +52,8 @@ rescore_attempts: 1
 # that answer today. Restore this to a reasoning model once one is provisioned.
 model: openai/gpt-4o
 environment_name: modal
-# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default.
-# modal_vm_runtime replaces the DinD strategy, whose single host-networked gRPC
-# stream is a per-sandbox SPOF: 320 of 469 cases were lost to it as sandbox
-# NotFoundError / AddTestsDirError / RuntimeError.
-extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", "modal_vm_runtime=true"]
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
