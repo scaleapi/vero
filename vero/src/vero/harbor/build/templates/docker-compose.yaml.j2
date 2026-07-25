@@ -37,7 +37,7 @@ services:
       - "harbor"
       - "serve"
       - "--factory"
-      - "vero.harbor.deployment:build_harbor_components"
+      - "{{ sidecar_factory }}"
       - "--config"
       - "{{ layout.serve_config }}"
       - "--admin-token"

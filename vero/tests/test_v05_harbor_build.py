@@ -23,7 +23,9 @@ from vero.harbor import (
     compile_harbor_task,
     load_harbor_build_config,
 )
+from vero.harbor.deployment import FACTORY_PATH
 from vero.harbor.layout import LAYOUT
+from vero.harbor.serve import load_factory
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 
@@ -619,6 +621,25 @@ def test_build_config_keeps_the_two_backend_kinds_apart(tmp_path):
             max_retries=5,
             feedback_transcripts=True,
         )
+
+
+def test_compiled_task_factory_path_resolves(tmp_path):
+    """The factory named in the compiled compose file must actually import.
+
+    A stale dotted path fails when the sidecar container starts, not at import,
+    so it is invisible to the type checker and to every other test. Asserting on
+    the rendered artifact rather than on FACTORY_PATH alone means this still
+    holds if someone puts a literal back in the template.
+    """
+    output = compile_harbor_task(_config(tmp_path), tmp_path / "compiled")
+    compose = yaml.safe_load(
+        (output / "environment/docker-compose.yaml").read_text(encoding="utf-8")
+    )
+    command = compose["services"][LAYOUT.sidecar_host]["command"]
+    factory = command[command.index("--factory") + 1]
+
+    assert factory == FACTORY_PATH
+    assert callable(load_factory(factory))
 
 
 def test_load_build_config_resolves_relative_local_paths(tmp_path):

@@ -450,3 +450,12 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
         on_finalized=_finalize_session_telemetry,
     )
     return SidecarComponents(sidecar=sidecar, verifier=verifier, telemetry=telemetry)
+
+
+FACTORY_PATH = f"{build_harbor_components.__module__}:{build_harbor_components.__qualname__}"
+"""Dotted path the compiled task uses to load this factory.
+
+Derived rather than written out, so renaming this module or function cannot leave
+a stale literal in the compose template. A wrong value here would not fail at
+import or in the type checker: it fails when the sidecar container starts.
+"""

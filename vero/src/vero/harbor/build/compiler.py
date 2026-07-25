@@ -490,6 +490,11 @@ def compile_harbor_task(
             raise ValueError(
                 f"output directory {output} overlaps protected source {path}"
             )
+    # Imported here, not at module scope: deployment pulls in the whole runtime
+    # stack, and harbor/__init__ imports this package before it, so a top-level
+    # import would only work by accident of partial-initialization ordering.
+    from vero.harbor.deployment import FACTORY_PATH
+
     gateway_environment: list[str] = []
     credential_sources: list[str] = []
     if config.inference_gateway is not None:
@@ -697,6 +702,7 @@ def compile_harbor_task(
         "inference_gateway_url": INFERENCE_GATEWAY_URL,
         "read_only_paths": config.read_only_paths,
         "local_task_source": local_task_source,
+        "sidecar_factory": FACTORY_PATH,
         "command_harness": config.command_backend is not None,
         "selection_backend": _backend_id(config.selection_partition),
         "evaluation_set_name": config.evaluation_set_name,
