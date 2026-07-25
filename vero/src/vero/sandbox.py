@@ -75,11 +75,6 @@ async def _cleanup_host_process(
         await _terminate_host_process_tree(process)
 
 
-# =============================================================================
-# Data types
-# =============================================================================
-
-
 class FileStat(NamedTuple):
     """Minimal file stat info."""
 
@@ -100,11 +95,6 @@ class SandboxCapabilities:
 
     posix: bool = True
     host_paths: bool = False
-
-
-# =============================================================================
-# Abstract base
-# =============================================================================
 
 
 class Sandbox(ABC):
