@@ -496,3 +496,62 @@ def test_preflight_does_not_block_on_inconclusive_upstream_failures(monkeypatch)
     monkeypatch.delenv("OPENAI_API_KEY")
     harbor_cli._preflight_models(_Build(_Gateway(["a"], ["b"])))
     harbor_cli._preflight_models(_Build(None))
+
+
+def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch):
+    """`optimizer_harbor_args` tunes the OUTER trial, `extra_harbor_args` the nested eval.
+
+    Regression guard for the tau3 teardown failure: the build declared
+    `--ek modal_vm_runtime=true` and it has to reach the `harbor run` that hosts
+    the optimizer, not the `harbor run` that scores a candidate.
+    """
+    from vero.harbor import build as harbor_build
+    from vero.harbor import cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("name: org/task\n", encoding="utf-8")
+
+    class _Config:
+        harbor_requirement = "harbor[modal]==0.20.0"
+        agent_env: dict[str, str] = {}
+        optimizer_harbor_args = ["--ek", "modal_vm_runtime=true"]
+        extra_harbor_args = ["--ek", "app_name=nested-only"]
+
+    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda *a, **k: _Config())
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda config, output: output)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(
+        harbor_cli, "_compiled_run_environment", lambda task, overrides: {}
+    )
+
+    recorded: list[list[str]] = []
+
+    def _record(command, env=None):
+        recorded.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(harbor_cli.subprocess, "run", _record)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "codex",
+            "--model",
+            "gpt-5.3-codex",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded) == 1
+    command = recorded[0]
+    assert "modal_vm_runtime=true" in command
+    # The nested-eval flags stay out of the outer command.
+    assert "app_name=nested-only" not in command
+    # Build-declared flags come first so a command-line `--ek` can override them.
+    assert command.index("modal_vm_runtime=true") < command.index("--yes")

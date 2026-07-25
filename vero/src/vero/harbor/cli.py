@@ -611,6 +611,9 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(_opencode_gateway_args(agent, model, task))
+        # Build-declared outer-trial flags first, so a command-line arg can still
+        # override them (harbor's `--ek` takes the last value for a key).
+        command.extend(config.optimizer_harbor_args)
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(

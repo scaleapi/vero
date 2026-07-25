@@ -164,6 +164,10 @@ class _HarborEvaluationFields(StrictModel):
         expose_attempt_detail: Report per-attempt detail, not just the aggregate.
         extra_harbor_args: Extra flags for the evaluation sub-run. Rejected if
             they override a flag the compiler controls.
+        optimizer_harbor_args: Extra flags for the outer harbor run that hosts
+            the optimizer trial. Distinct from extra_harbor_args, which tunes
+            the nested evaluation sub-run. Rejected if they override a flag
+            `vero harbor run` controls.
         task_agent_timeout_seconds: Wall clock declared for the target agent.
             Grouped here rather than with the other timeouts because it bounds
             the target, which only a Harbor backend runs.
@@ -198,6 +202,13 @@ class _HarborEvaluationFields(StrictModel):
     feedback_max_bytes: int = Field(default=3000, ge=0)
     expose_attempt_detail: bool = False
     extra_harbor_args: list[str] = Field(default_factory=list)
+    # Extra flags for the OUTER `harbor run` that hosts the optimizer trial
+    # (`vero harbor run`). Distinct from `extra_harbor_args`: that one tunes the
+    # nested eval sub-run, this one tunes the environment the optimizer itself
+    # lives in. A build declares here what its optimizer trial needs to survive,
+    # e.g. `--ek modal_vm_runtime=true` for a long trial whose teardown keeps
+    # losing the DinD gRPC stream.
+    optimizer_harbor_args: list[str] = Field(default_factory=list)
     task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     task_environment: dict[str, str] = Field(default_factory=dict)
     task_services_use_upstream: bool = False
@@ -236,6 +247,22 @@ class _HarborEvaluationFields(StrictModel):
         if conflicts:
             raise ValueError(
                 "extra_harbor_args override controlled flags: " + ", ".join(conflicts)
+            )
+        return value
+
+    @field_validator("optimizer_harbor_args")
+    @classmethod
+    def validate_optimizer_harbor_args(cls, value: list[str]) -> list[str]:
+        # `vero harbor run` owns the outer command's task, agent, environment and
+        # model; a build must not fight the CLI over them.
+        controlled = {"-a", "-e", "-m", "-p"}
+        conflicts = [
+            argument for argument in value if argument.split("=", 1)[0] in controlled
+        ]
+        if conflicts:
+            raise ValueError(
+                "optimizer_harbor_args override controlled flags: "
+                + ", ".join(conflicts)
             )
         return value
 
