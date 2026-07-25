@@ -28,11 +28,17 @@ benchmark can be checked against the others at a glance.
   budget-blind ablation: enforcement is unchanged but all budget signal is
   hidden from the agent, including a redaction of `inference_*` metrics from
   agent-facing receipts and context (latency metrics stay visible).
-- **Target model**: `openai/gpt-5.4-mini-2026-03-17` by default (see the
+- **Target model**: `fireworks_ai/deepseek-v4-flash` by default (see the
   per-benchmark table — a benchmark may pin a different evaluated model), fixed
   per run by the gateway's evaluation scope (the `evaluation.allowed_models`
   allow-list, so a candidate cannot swap it). The optimizer uses a separate
-  producer scope bound to `${optimizer_model:-gpt-5.4}`.
+  producer scope bound to `${optimizer_model:-gpt-5.4}`. deepseek-v4-flash was
+  chosen over gpt-oss-120b and gpt-5.4-mini from a 10-trial per-benchmark probe:
+  it matches or beats both on tau3 (0.875) and is ~2–3× gpt-oss on the
+  grounded-reasoning benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss
+  cost — far cheaper than mini. `swe-atlas-qna` is pinned to
+  `fireworks_ai/gpt-oss-120b`, the one benchmark where deepseek is weaker
+  (0.30 vs 0.59 mean rubric) and gpt-oss is both cheaper and stronger.
 - **Execution**: `harbor[modal]==0.20.0`, python 3.12, `n_attempts: 1`,
   `max_retries: 1`, 3 infrastructure attempts at 5s, `aggregate_attempts:
   best`, `max_concurrency: 8`, `error_rate_threshold: 0.1`,
@@ -47,7 +53,7 @@ benchmark can be checked against the others at a glance.
 
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus |
 |---|---|---|---|---|---|
-| target model | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini | gpt-5.4-mini |
+| target model | deepseek-v4-flash | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
