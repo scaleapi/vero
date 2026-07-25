@@ -411,6 +411,54 @@ def test_build_config_requires_pins_and_valid_partition_references(tmp_path):
         _config(tmp_path / "source", task_source="org/unversioned")
 
 
+def test_build_config_requires_requested_models_to_be_allowed_by_their_scope(tmp_path):
+    """A model the gateway would refuse must fail the build, not the run.
+
+    The verification case is the costly one: finalization runs the target agent
+    too, so a target scoring with a model its scope disallows only 403s after
+    search has already spent its whole budget.
+    """
+
+    def gateway(**updates) -> InferenceGatewaySpec:
+        values = {
+            "producer": InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            "evaluation": InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        }
+        values.update(updates)
+        return InferenceGatewaySpec(**values)
+
+    # The matching case builds, and finalization inherits the evaluation policy.
+    assert _config(
+        tmp_path / "ok", model="gpt-target", inference_gateway=gateway()
+    ).model == "gpt-target"
+
+    with pytest.raises(ValidationError, match="evaluation allowed_models"):
+        _config(tmp_path / "search", model="gpt-typo", inference_gateway=gateway())
+
+    # An explicit finalization scope that forgets the task model starves the
+    # target agent during verification.
+    with pytest.raises(ValidationError, match="finalization allowed_models"):
+        _config(
+            tmp_path / "narrowed",
+            model="gpt-target",
+            inference_gateway=gateway(
+                finalization=InferenceBudgetSpec(allowed_models=["gpt-judge"])
+            ),
+        )
+
+    # A per-target override is checked against finalization, not evaluation.
+    with pytest.raises(ValidationError, match="finalization allowed_models"):
+        _config(
+            tmp_path / "override",
+            model="gpt-target",
+            targets=[VerificationTargetSpec(partition="test", model="gpt-other")],
+            inference_gateway=gateway(),
+        )
+
+    # No gateway means no metering, so there is nothing to check against.
+    assert _config(tmp_path / "ungated", model="gpt-anything").model == "gpt-anything"
+
+
 def test_load_build_config_resolves_relative_local_paths(tmp_path):
     target = _target_repo(tmp_path / "target")
     tasks = tmp_path / "tasks"

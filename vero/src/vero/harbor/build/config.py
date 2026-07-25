@@ -676,6 +676,32 @@ class HarborBuildConfig(StrictModel):
                     "inference gateway credentials must not also be sidecar secrets: "
                     + ", ".join(overlap)
                 )
+            # Every model that will actually be requested has to be allowed by the
+            # scope that will actually serve it. Otherwise the mismatch surfaces as
+            # a gateway 403 at run time — and for a verification target, only after
+            # search has already spent its budget.
+            evaluation_models = self.inference_gateway.evaluation.allowed_models
+            if self.model is not None and self.model not in evaluation_models:
+                raise ValueError(
+                    f"model {self.model!r} is not in the inference gateway's "
+                    f"evaluation allowed_models ({', '.join(evaluation_models)})"
+                )
+            # Finalization runs the target agent too, so it must allow the model
+            # each target scores with: its own override, else the task model.
+            finalization_models = (
+                self.inference_gateway.finalization or self.inference_gateway.evaluation
+            ).allowed_models
+            for target in self.targets:
+                scoring_model = target.model or self.model
+                if scoring_model is not None and scoring_model not in (
+                    finalization_models
+                ):
+                    raise ValueError(
+                        f"target {target.partition!r} scores with model "
+                        f"{scoring_model!r}, which is not in the inference gateway's "
+                        f"finalization allowed_models "
+                        f"({', '.join(finalization_models)})"
+                    )
         return self
 
 
