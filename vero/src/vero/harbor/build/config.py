@@ -21,11 +21,29 @@ from vero.evaluation import (
 
 
 class AgentAccessSpec(EvaluationModel):
+    """The optimizer agent's access to one named evaluation partition.
+
+    A build declares one spec per partition; to_access_policy translates it into
+    the runtime EvaluationAccessPolicy the sidecar enforces. This governs what
+    the optimizer may see and spend while searching, as opposed to how the
+    trusted side finally scores a candidate (see VerificationTargetSpec).
+
+    Attributes:
+        partition: Partition this access applies to, e.g. "validation".
+        disclosure: How much of a result the agent sees — aggregate score vs.
+            per-case detail.
+        expose_case_resources: Whether each case's input files are materialized
+            into the agent's workspace.
+        min_aggregate_cases: Smallest number of cases an aggregate score may
+            cover, so the agent cannot request a subset small enough to reveal an
+            individual case's result. Only consulted when disclosure is AGGREGATE.
+        total_runs: Optional cap on evaluation runs against this partition.
+        total_cases: Optional cap on cases scored against this partition.
+    """
+
     partition: str
     disclosure: DisclosureLevel = DisclosureLevel.AGGREGATE
     expose_case_resources: bool = False
-    # k-anonymity floor for aggregate subset evals; 5 by default so an omitted
-    # value is safe rather than an unfloored (single-case) leak.
     min_aggregate_cases: int = Field(default=5, ge=1)
     total_runs: int | None = Field(default=None, ge=0)
     total_cases: int | None = Field(default=None, ge=0)
@@ -47,12 +65,30 @@ class AgentAccessSpec(EvaluationModel):
 
 
 class VerificationTargetSpec(EvaluationModel):
+    """One trusted final scoring pass the verifier runs on a chosen candidate.
+
+    Distinct from the evaluations the optimizer runs during search: after search
+    picks a best candidate on the selection partition, the trusted verifier
+    scores it against these targets (normally the held-out test partition) to
+    produce the final reward. A build declares one spec per pass.
+
+    Attributes:
+        partition: Partition to score on, e.g. "test".
+        reward_key: Metric key in the report that is the reward.
+        model: Optional model override for this pass; passed through as
+            harbor_model_override so final scoring can differ from search.
+        parameters: Extra backend parameters for the pass.
+        failure_value: Score assigned when the pass fails.
+        baseline_reward: Pin the seed's reward on this target to skip scoring
+            the immutable baseline every run.
+        max_attempts: Number of scoring attempts before accepting failure.
+    """
+
     partition: str
     reward_key: str = "reward"
     model: str | None = None
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
     failure_value: float = 0.0
-    # Pin the seed's reward on this target to skip scoring it each run.
     baseline_reward: float | None = None
     max_attempts: int = Field(default=1, ge=1)
 
