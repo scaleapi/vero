@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import vero
@@ -309,3 +310,76 @@ def test_cli_rejects_options_that_do_not_apply(tmp_path: Path):
     assert "are only valid with --produce" in producer_timeout.output
     assert wandb.exit_code == 2
     assert "require --wandb-project" in wandb.output
+
+
+class _Gateway:
+    """Minimal stand-in for InferenceGatewaySpec's preflight-relevant surface."""
+
+    upstream_api_key_env = "OPENAI_API_KEY"
+    upstream_base_url_env = "OPENAI_BASE_URL"
+    default_upstream_base_url = "https://api.openai.com/v1"
+    finalization = None
+
+    def __init__(self, producer, evaluation):
+        self.producer = type("S", (), {"allowed_models": producer})()
+        self.evaluation = type("S", (), {"allowed_models": evaluation})()
+
+
+class _Build:
+    def __init__(self, gateway):
+        self.inference_gateway = gateway
+
+
+def test_preflight_blocks_only_on_a_definitively_missing_deployment(monkeypatch):
+    """A missing deployment is otherwise invisible until a whole trial has burned.
+
+    The upstream 404s, the agent makes no progress, and every case is scored 0.0
+    as an honest-looking task failure.
+    """
+    import click
+
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+    probed: list[str] = []
+
+    def _probe(base_url, api_key, model):
+        probed.append(model)
+        if model == "dead-model":
+            return 404, '{"error": {"code": "DeploymentNotFound"}}'
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_model", _probe)
+
+    with pytest.raises(click.ClickException) as raised:
+        harbor_cli._preflight_models(
+            _Build(_Gateway(["gpt-5.3-codex"], ["dead-model"]))
+        )
+    assert "dead-model (evaluation scope)" in str(raised.value)
+    assert "DeploymentNotFound" in str(raised.value)
+    # The provider prefix is stripped before the gateway sees the name, so the
+    # probe has to use the same form the agent will send.
+    probed.clear()
+    harbor_cli._preflight_models(_Build(_Gateway(["openai/gpt-4o"], ["gpt-4o"])))
+    assert probed == ["gpt-4o"]
+
+
+def test_preflight_does_not_block_on_inconclusive_upstream_failures(monkeypatch):
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+
+    for status, body in ((429, "rate limited"), (503, "unavailable"), (None, "timeout")):
+        monkeypatch.setattr(
+            harbor_cli, "_probe_model", lambda b, k, m, s=status, y=body: (s, y)
+        )
+        # Must not raise: a transient upstream blip cannot be allowed to stop a
+        # run that would have succeeded.
+        harbor_cli._preflight_models(_Build(_Gateway(["a"], ["b"])))
+
+    # No credentials and no gateway are both no-ops rather than errors.
+    monkeypatch.delenv("OPENAI_API_KEY")
+    harbor_cli._preflight_models(_Build(_Gateway(["a"], ["b"])))
+    harbor_cli._preflight_models(_Build(None))

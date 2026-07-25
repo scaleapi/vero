@@ -363,6 +363,79 @@ def build_command(config_path, output, params):
     click.echo(f"Compiled Harbor task: {compiled}")
 
 
+def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, str]:
+    """Ask the upstream for one token from `model`. Returns (status, body)."""
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/responses",
+        data=json.dumps(
+            {"model": model, "input": "ok", "max_output_tokens": 16}
+        ).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            # Azure OpenAI authenticates on api-key; OpenAI ignores it.
+            "api-key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, ""
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace")[:400]
+    except Exception as error:  # network/DNS/timeout: inconclusive, not fatal
+        return None, str(error)
+
+
+def _preflight_models(config) -> None:
+    """Refuse to launch when a configured model is not deployed upstream.
+
+    A missing deployment is invisible until the run is over: the gateway
+    forwards the request, the upstream 404s, the agent makes no progress, and
+    every case is scored 0.0 as an honest-looking task failure. That costs a
+    full optimizer trial to discover. This costs one token per model.
+
+    Only a definitive 404 blocks. Anything else (a timeout, a rate limit, a
+    503) is inconclusive and must not stop a run that would have succeeded.
+    """
+    gateway = getattr(config, "inference_gateway", None)
+    if gateway is None:
+        return
+    api_key = os.environ.get(gateway.upstream_api_key_env)
+    if not api_key:
+        return
+    base_url = gateway.default_upstream_base_url
+    if gateway.upstream_base_url_env:
+        base_url = os.environ.get(gateway.upstream_base_url_env) or base_url
+
+    scopes: dict[str, str] = {}
+    for scope_name in ("producer", "evaluation", "finalization"):
+        scope = getattr(gateway, scope_name, None)
+        if scope is None:
+            continue
+        for name in scope.allowed_models:
+            # Agents strip the provider prefix before calling the gateway.
+            scopes.setdefault(name.removeprefix("openai/"), scope_name)
+
+    missing: list[str] = []
+    for name, scope_name in scopes.items():
+        status, body = _probe_model(base_url, api_key, name)
+        if status == 404:
+            missing.append(f"{name} ({scope_name} scope): {body.strip()}")
+        elif status is not None and status >= 400:
+            click.echo(
+                f"Preflight: {name} returned HTTP {status}; continuing "
+                f"(only a 404 is treated as fatal)"
+            )
+    if missing:
+        raise click.ClickException(
+            "these models are not deployed on "
+            f"{base_url} and every request to them would fail:\n  - "
+            + "\n  - ".join(missing)
+            + "\nNote a model can appear in GET /models (the catalogue) and "
+            "still have no deployment."
+        )
+
+
 @harbor.command(
     "run",
     context_settings={"ignore_unknown_options": True},
@@ -409,6 +482,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
     if model is not None:
         resolved.setdefault("optimizer_model", model)
     config = load_harbor_build_config(config_path, params=resolved)
+    _preflight_models(config)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(
             config,
