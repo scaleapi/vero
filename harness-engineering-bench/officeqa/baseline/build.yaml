@@ -50,7 +50,7 @@ score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: openai/gpt-5.4-mini-2026-03-17
+model: fireworks_ai/deepseek-v4-flash
 environment_name: ${inner_env:-modal}
 # --no-force-build pulls the prebuilt officeqa-corpus image (see task_source
 # note above); the --ek groups inner sandboxes under one dedicated Modal app.
@@ -91,7 +91,7 @@ inference_gateway:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
   evaluation:
-    allowed_models: [gpt-5.4-mini-2026-03-17]
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64

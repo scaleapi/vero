@@ -44,7 +44,7 @@ score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: openai/gpt-5.4-mini-2026-03-17
+model: fireworks_ai/deepseek-v4-flash
 environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
@@ -83,7 +83,7 @@ inference_gateway:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
   evaluation:
-    allowed_models: [gpt-5.4-mini-2026-03-17]
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64

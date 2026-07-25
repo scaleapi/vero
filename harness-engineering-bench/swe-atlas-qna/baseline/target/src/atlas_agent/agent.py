@@ -116,7 +116,17 @@ class AtlasAgent(BaseAgent):
     async def _run_shell(
         self, environment: BaseEnvironment, command: str
     ) -> dict[str, Any]:
-        result = await environment.exec(command, cwd="/app", timeout_sec=180)
+        # exec decodes stdout as UTF-8; a binary file (e.g. `cat`ing an image)
+        # raises UnicodeDecodeError. Surface it as a tool error so the model can
+        # retry a different command instead of crashing the whole trial.
+        try:
+            result = await environment.exec(command, cwd="/app", timeout_sec=180)
+        except UnicodeDecodeError:
+            return {
+                "return_code": 1,
+                "stdout": "",
+                "stderr": "command produced non-UTF-8 (binary) output; avoid reading binary files as text",
+            }
         return {
             "return_code": result.return_code,
             "stdout": self._truncate(result.stdout or ""),
