@@ -10,23 +10,30 @@ class FakeEnvironment:
         return SimpleNamespace(return_code=0, stdout="evidence", stderr="")
 
 
-class FakeResponses:
+class FakeCompletions:
     async def create(self, **kwargs):
         return SimpleNamespace(
-            id="response-1",
-            output=[
+            choices=[
                 SimpleNamespace(
-                    type="function_call",
-                    name="submit_answer",
-                    arguments='{"answer":"See src/example.py:10."}',
-                    call_id="call-1",
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-1",
+                                type="function",
+                                function=SimpleNamespace(
+                                    name="submit_answer",
+                                    arguments='{"answer":"See src/example.py:10."}',
+                                ),
+                            )
+                        ],
+                    )
                 )
             ],
-            output_text="",
             usage=SimpleNamespace(
-                input_tokens=100,
-                output_tokens=12,
-                input_tokens_details=SimpleNamespace(cached_tokens=25),
+                prompt_tokens=100,
+                completion_tokens=12,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=25),
             ),
         )
 
@@ -38,7 +45,9 @@ async def test_agent_writes_wrapped_answer_and_context(tmp_path, monkeypatch):
         logs_dir=tmp_path / "logs",
         model_name="openai/gpt-5.4-mini-2026-03-17",
     )
-    agent._client = SimpleNamespace(responses=FakeResponses())
+    agent._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
     context = SimpleNamespace(
         metadata=None,
         n_input_tokens=None,
