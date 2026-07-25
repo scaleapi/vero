@@ -1,0 +1,848 @@
+{
+  "schema_version": 1,
+  "task_source": "../tasks",
+  "dataset_name": "Tevatron/browsecomp-plus",
+  "dataset_revision": "144cff8e35b5eaef7e526346aa60774a9deb941f",
+  "upstream_repository": "https://github.com/texttron/BrowseComp-Plus.git",
+  "upstream_commit": "046949032b0328319cc9a02663a759ec601d9402",
+  "index_dataset": "Tevatron/browsecomp-plus-indexes",
+  "index_revision": "b3f37f70c33829eb09d04784a54277a31871fd63",
+  "seed": "vero-browsecomp-plus-v1",
+  "ratios": {
+    "development": 0.2,
+    "validation": 0.4,
+    "test": 0.4
+  },
+  "partition_counts": {
+    "development": 33,
+    "validation": 66,
+    "test": 66
+  },
+  "tasks": [
+    {
+      "name": "browsecomp-plus-q0007",
+      "source_id": "7",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0012",
+      "source_id": "12",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0022",
+      "source_id": "22",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0036",
+      "source_id": "36",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0050",
+      "source_id": "50",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0055",
+      "source_id": "55",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0069",
+      "source_id": "69",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0070",
+      "source_id": "70",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0082",
+      "source_id": "82",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0085",
+      "source_id": "85",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0087",
+      "source_id": "87",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0092",
+      "source_id": "92",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0096",
+      "source_id": "96",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0122",
+      "source_id": "122",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0124",
+      "source_id": "124",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0128",
+      "source_id": "128",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0153",
+      "source_id": "153",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0160",
+      "source_id": "160",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0165",
+      "source_id": "165",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0178",
+      "source_id": "178",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0180",
+      "source_id": "180",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0181",
+      "source_id": "181",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0183",
+      "source_id": "183",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0199",
+      "source_id": "199",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0201",
+      "source_id": "201",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0205",
+      "source_id": "205",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0216",
+      "source_id": "216",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0235",
+      "source_id": "235",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0241",
+      "source_id": "241",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0256",
+      "source_id": "256",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0263",
+      "source_id": "263",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0266",
+      "source_id": "266",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0275",
+      "source_id": "275",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0282",
+      "source_id": "282",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0285",
+      "source_id": "285",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0288",
+      "source_id": "288",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0299",
+      "source_id": "299",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0310",
+      "source_id": "310",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0319",
+      "source_id": "319",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0323",
+      "source_id": "323",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0330",
+      "source_id": "330",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0347",
+      "source_id": "347",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0371",
+      "source_id": "371",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0397",
+      "source_id": "397",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0401",
+      "source_id": "401",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0409",
+      "source_id": "409",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0410",
+      "source_id": "410",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0417",
+      "source_id": "417",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0433",
+      "source_id": "433",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0434",
+      "source_id": "434",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0436",
+      "source_id": "436",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0454",
+      "source_id": "454",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0480",
+      "source_id": "480",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0491",
+      "source_id": "491",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0494",
+      "source_id": "494",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0497",
+      "source_id": "497",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0499",
+      "source_id": "499",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0506",
+      "source_id": "506",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0507",
+      "source_id": "507",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0511",
+      "source_id": "511",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0519",
+      "source_id": "519",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0520",
+      "source_id": "520",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0562",
+      "source_id": "562",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0570",
+      "source_id": "570",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0572",
+      "source_id": "572",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0581",
+      "source_id": "581",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0582",
+      "source_id": "582",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0587",
+      "source_id": "587",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0595",
+      "source_id": "595",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0601",
+      "source_id": "601",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0610",
+      "source_id": "610",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0618",
+      "source_id": "618",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0620",
+      "source_id": "620",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0621",
+      "source_id": "621",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0629",
+      "source_id": "629",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0630",
+      "source_id": "630",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0633",
+      "source_id": "633",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0661",
+      "source_id": "661",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0664",
+      "source_id": "664",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0670",
+      "source_id": "670",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0672",
+      "source_id": "672",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0678",
+      "source_id": "678",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0689",
+      "source_id": "689",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0694",
+      "source_id": "694",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0708",
+      "source_id": "708",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0709",
+      "source_id": "709",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0716",
+      "source_id": "716",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0719",
+      "source_id": "719",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0737",
+      "source_id": "737",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0738",
+      "source_id": "738",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0746",
+      "source_id": "746",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0753",
+      "source_id": "753",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0756",
+      "source_id": "756",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0770",
+      "source_id": "770",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0778",
+      "source_id": "778",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0787",
+      "source_id": "787",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0811",
+      "source_id": "811",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0820",
+      "source_id": "820",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0827",
+      "source_id": "827",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0835",
+      "source_id": "835",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0836",
+      "source_id": "836",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0854",
+      "source_id": "854",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0856",
+      "source_id": "856",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0876",
+      "source_id": "876",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0885",
+      "source_id": "885",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0887",
+      "source_id": "887",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0896",
+      "source_id": "896",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0898",
+      "source_id": "898",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0904",
+      "source_id": "904",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0905",
+      "source_id": "905",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0910",
+      "source_id": "910",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0916",
+      "source_id": "916",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0919",
+      "source_id": "919",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0925",
+      "source_id": "925",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q0943",
+      "source_id": "943",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0947",
+      "source_id": "947",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0950",
+      "source_id": "950",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0951",
+      "source_id": "951",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0959",
+      "source_id": "959",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0960",
+      "source_id": "960",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0968",
+      "source_id": "968",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0980",
+      "source_id": "980",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q0986",
+      "source_id": "986",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q0998",
+      "source_id": "998",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1004",
+      "source_id": "1004",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1015",
+      "source_id": "1015",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1018",
+      "source_id": "1018",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1021",
+      "source_id": "1021",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1025",
+      "source_id": "1025",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1030",
+      "source_id": "1030",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1032",
+      "source_id": "1032",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1034",
+      "source_id": "1034",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1035",
+      "source_id": "1035",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1040",
+      "source_id": "1040",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1072",
+      "source_id": "1072",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1078",
+      "source_id": "1078",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1091",
+      "source_id": "1091",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1101",
+      "source_id": "1101",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1106",
+      "source_id": "1106",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1108",
+      "source_id": "1108",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1115",
+      "source_id": "1115",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1117",
+      "source_id": "1117",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1128",
+      "source_id": "1128",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1135",
+      "source_id": "1135",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1139",
+      "source_id": "1139",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1150",
+      "source_id": "1150",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1161",
+      "source_id": "1161",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1167",
+      "source_id": "1167",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1172",
+      "source_id": "1172",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1179",
+      "source_id": "1179",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1194",
+      "source_id": "1194",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1195",
+      "source_id": "1195",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1198",
+      "source_id": "1198",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1200",
+      "source_id": "1200",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1207",
+      "source_id": "1207",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1209",
+      "source_id": "1209",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1216",
+      "source_id": "1216",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1219",
+      "source_id": "1219",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1224",
+      "source_id": "1224",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1227",
+      "source_id": "1227",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1236",
+      "source_id": "1236",
+      "partition": "development"
+    },
+    {
+      "name": "browsecomp-plus-q1240",
+      "source_id": "1240",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1246",
+      "source_id": "1246",
+      "partition": "test"
+    },
+    {
+      "name": "browsecomp-plus-q1262",
+      "source_id": "1262",
+      "partition": "validation"
+    },
+    {
+      "name": "browsecomp-plus-q1265",
+      "source_id": "1265",
+      "partition": "validation"
+    }
+  ]
+}
