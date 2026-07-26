@@ -39,7 +39,7 @@ PRODUCER_BASE_URL = LAYOUT.scope_url('producer', LAYOUT.optimizer_attribution)
 # explicitly, instead of blanking them like every other declared secret. The two
 # halves are one invariant: a name here must be set below, and a name set below
 # must be here, or the rendered compose emits the key twice.
-GATEWAY_ROUTED_CREDENTIALS = frozenset({"OPENAI_API_KEY", "OPENAI_BASE_URL"})
+GATEWAY_ROUTED_CREDENTIALS = frozenset(LAYOUT.routed_credential_envs)
 
 # Container paths and service identities come from the layout, never from a
 # literal here: the templates read the same object, so the two cannot drift.

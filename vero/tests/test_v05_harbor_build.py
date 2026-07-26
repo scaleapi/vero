@@ -23,6 +23,7 @@ from vero.harbor import (
     compile_harbor_task,
     load_harbor_build_config,
 )
+from vero.harbor.build.compiler import GATEWAY_ROUTED_CREDENTIALS
 from vero.harbor.deployment import FACTORY_PATH
 from vero.layout import LAYOUT
 from vero.sidecar.serve import load_factory
@@ -614,6 +615,45 @@ def test_compiled_producer_base_url_matches_the_gateway_route(tmp_path):
     assert expected.endswith(
         LAYOUT.scope_path("producer", LAYOUT.optimizer_attribution)
     )
+
+
+def test_routed_credentials_are_set_not_merely_left_unblanked(tmp_path):
+    """Every name excluded from blanking must be positively set instead.
+
+    The compiler blanks each declared secret in the main container, skipping
+    GATEWAY_ROUTED_CREDENTIALS because the compose template assigns those
+    itself. That exclusion is only safe while the two agree. A name dropped
+    from the blanking loop but never assigned would be neither blanked nor
+    set, so whatever the host exported would survive into the optimizer's
+    container -- which is the one thing the scrub exists to prevent.
+    """
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        ),
+    )
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    compose = yaml.safe_load(
+        (output / "environment/docker-compose.yaml").read_text(encoding="utf-8")
+    )
+    environment = compose["services"]["main"]["environment"]
+
+    assert set(GATEWAY_ROUTED_CREDENTIALS) == set(LAYOUT.routed_credential_envs)
+    for name in GATEWAY_ROUTED_CREDENTIALS:
+        assert name in environment, f"{name} is skipped by the scrub but never set"
+        assert environment[name], f"{name} is set to an empty value"
+
+    # And they carry the scoped values, not the upstream ones.
+    assert environment[LAYOUT.producer_api_key_env] != ""
+    assert environment[LAYOUT.producer_base_url_env] == LAYOUT.scope_url(
+        "producer", LAYOUT.optimizer_attribution
+    )
+    # The raw upstream is blanked in the same container.
+    assert environment[LAYOUT.gateway_upstream_api_key_env] == ""
 
 
 def test_load_build_config_resolves_relative_local_paths(tmp_path):

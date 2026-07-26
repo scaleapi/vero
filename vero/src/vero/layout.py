@@ -48,6 +48,10 @@ class TaskLayout:
         sidecar_port: Port the sidecar listens on.
         gateway_host: Compose service name of the inference gateway.
         gateway_port: Port the gateway listens on.
+        producer_api_key_env: Container-side variable holding the optimizer's
+            scoped gateway token.
+        producer_base_url_env: Container-side variable holding the optimizer's
+            gateway scope URL.
     """
 
     target_repo: str = "/work/agent"
@@ -73,6 +77,14 @@ class TaskLayout:
     gateway_upstream_api_key_env: str = "VERO_INFERENCE_UPSTREAM_API_KEY"
     gateway_upstream_base_url_env: str = "VERO_INFERENCE_UPSTREAM_BASE_URL"
     optimizer_attribution: str = "optimizer"
+    # Container-side names an OpenAI-surface client reads. The compose file sets
+    # both for the optimizer -- key to the producer token, base URL to its
+    # gateway scope -- and the compiler excludes them from the blanking loop so
+    # it does not emit the same YAML key twice. The two must stay in step: a name
+    # excluded from blanking but never set would keep whatever the host passed
+    # in, so routed_credential_envs below is the single list both sides use.
+    producer_api_key_env: str = "OPENAI_API_KEY"
+    producer_base_url_env: str = "OPENAI_BASE_URL"
     # The gateway's proxy route, with the FastAPI parameter names it binds. Both
     # the route the gateway serves and every URL built for it derive from this one
     # string, so a caller cannot construct a path the gateway will not match.
@@ -112,6 +124,11 @@ class TaskLayout:
     @property
     def target_evals(self) -> str:
         return f"{self.target_repo}/.evals"
+
+    @property
+    def routed_credential_envs(self) -> tuple[str, ...]:
+        """Names the compose file sets explicitly, so must not also blank."""
+        return (self.producer_api_key_env, self.producer_base_url_env)
 
     @property
     def sidecar_url(self) -> str:

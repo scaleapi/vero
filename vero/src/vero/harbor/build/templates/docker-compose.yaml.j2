@@ -8,12 +8,12 @@ services:
       {{ secret }}: ""
 {% endfor %}
 {% if inference_gateway %}
-      OPENAI_API_KEY: "{{ producer_inference_token }}"
-      OPENAI_BASE_URL: "{{ producer_base_url }}"
-{% elif "OPENAI_API_KEY" in secrets %}
-      OPENAI_API_KEY: ""
-{% if "OPENAI_BASE_URL" in secrets %}
-      OPENAI_BASE_URL: ""
+      {{ layout.producer_api_key_env }}: "{{ producer_inference_token }}"
+      {{ layout.producer_base_url_env }}: "{{ producer_base_url }}"
+{% elif layout.producer_api_key_env in secrets %}
+      {{ layout.producer_api_key_env }}: ""
+{% if layout.producer_base_url_env in secrets %}
+      {{ layout.producer_base_url_env }}: ""
 {% endif %}
 {% endif %}
     volumes:

@@ -25,7 +25,7 @@ model_provider = "vero_gateway"
 [model_providers.vero_gateway]
 name = "VeRO inference gateway"
 base_url = "{{ producer_base_url }}"
-env_key = "OPENAI_API_KEY"
+env_key = "{{ layout.producer_api_key_env }}"
 wire_api = "responses"
 supports_websockets = false
 TOML
