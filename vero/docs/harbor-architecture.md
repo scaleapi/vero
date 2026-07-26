@@ -78,7 +78,7 @@ Named volumes carry state between services: `agent_repo`, `agent_context`,
   **backend** and records an **`EvaluationRecord`** (`evaluation/models.py`): the
   request (candidate, evaluation_set, limits) + a report (per-case results,
   metrics, diagnostics, artifacts) + an objective value + a **principal**. It
-  enforces the **`BudgetLedger`** (`evaluation/budget.py`) and fires **listeners**
+  enforces the **`BudgetLedger`** (`evaluation/store/budget.py`) and fires **listeners**
   (where the W&B sink hooks in).
 - **`HarborBackend`** (`harbor/backend.py`) is how a candidate is actually
   scored: it runs a *nested* `harbor run` over the tasks (`uv run` the
@@ -93,7 +93,7 @@ Named volumes carry state between services: `agent_repo`, `agent_context`,
 
 ## Disclosure & the anti-cheating contract
 
-Each partition has a **disclosure level** (`harbor/sidecar.py`):
+Each partition has a **disclosure level** (`sidecar/sidecar.py`):
 - **development → FULL**: per-case results shown (the disclosed set to iterate
   on).
 - **validation → AGGREGATE**: only an *average over ≥ k cases* is returned (the
@@ -104,7 +104,7 @@ Each partition has a **disclosure level** (`harbor/sidecar.py`):
 
 ## Selection / finalization (what ships)
 
-`CanonicalVerifier.finalize()` (`harbor/verifier.py`) decides what to ship and
+`CanonicalVerifier.finalize()` (`sidecar/verifier.py`) decides what to ship and
 computes the reward:
 - **Chain**: the agent's explicit `submission` → else `auto_best` (rank
   candidates by *coverage-qualified* validation evals, admin-re-score the top-K
@@ -120,25 +120,27 @@ computes the reward:
 ## The security model (five mechanisms)
 
 1. **Credential isolation** — the gateway's scoped tokens; the raw upstream key
-   lives only in the sidecar. (`harbor/inference.py`, compose template.)
+   lives only in the sidecar. (`gateway/inference.py`, compose template.)
 2. **Harness isolation** — the inner `harbor run` (arbitrary candidate code) runs
    as unprivileged `harness`; the session dir is `0700 root`, case lists `700`,
    `serve.json` `600` — so the candidate cannot read the answer key it is graded
    on. (`harbor/backend.py` `run_as`, `Dockerfile.sidecar.j2`,
    `harbor/deployment.py`.)
 3. **k-anonymity floor** — aggregate subset evals must cover ≥ 5 cases.
-   (`harbor/sidecar.py` `_enforce_aggregate_floor`.)
+   (`sidecar/sidecar.py` `_enforce_aggregate_floor`.)
 4. **Budget metering** — per-scope gateway budgets + a case/run ledger, with a
    *reserved finalization scope* so the mandatory admin re-score can't be starved
-   by the agent's search. (`evaluation/budget.py`, gateway config.)
+   by the agent's search. (`evaluation/store/budget.py`, gateway config.)
 5. **Fail-safe finalization** — never ship an unverified candidate on an infra
-   blip; a session export never fails wholesale. (`harbor/verifier.py`,
-   `harbor/session.py`.)
+   blip; a session export never fails wholesale. (`sidecar/verifier.py`,
+   `sidecar/session.py`.)
 
 ## The build pipeline
 
-`build.yaml` (`HarborBuildConfig`, `harbor/build/config.py`) →
-`compile_harbor_task` (`harbor/build/compiler.py`) renders the whole deployable
+`build.yaml` → `load_harbor_build_config` (`harbor/build/loader.py`) →
+`HarborBuildConfig` (`harbor/build/config.py`, composed from the leaf models in
+`harbor/build/specs.py`) → `compile_harbor_task` (`harbor/build/compiler.py`)
+renders the whole deployable
 task (Dockerfiles + compose + `serve.json` + cases + instructions). `serve.json`
 deserializes into `HarborDeploymentConfig` (`harbor/deployment.py`), which
 `build_harbor_components` turns into the live sidecar + verifier. So a benchmark
@@ -160,9 +162,9 @@ Read outside-in — from *what a benchmark declares* down to *how it runs and st
 honest*. Paths are under `vero/src/vero/` unless noted.
 
 1. **What a benchmark is** — `harness-engineering-bench/gaia/baseline/build.yaml`
-   and `harbor/build/config.py` (`HarborBuildConfig`, `AgentAccessSpec`,
-   `VerificationTargetSpec`). This is the declarative surface; everything else
-   serves it.
+   and `harbor/build/specs.py` (`AgentAccessSpec`, `VerificationTargetSpec`) plus
+   `harbor/build/config.py` (`HarborBuildConfig` and the field groups it is
+   composed from). This is the declarative surface; everything else serves it.
 2. **Compile → deployable task** — `harbor/build/compiler.py`
    (`compile_harbor_task`) and the templates in `harbor/build/templates/`
    (`docker-compose.yaml.j2`, `Dockerfile.sidecar.j2`, `instruction.md.j2`,
@@ -172,20 +174,20 @@ honest*. Paths are under `vero/src/vero/` unless noted.
    a live engine + sidecar + verifier.
 4. **The evaluation core** — `evaluation/models.py` (`EvaluationRecord`,
    `EvaluationPrincipal`, `DisclosureLevel`, `EvaluationSet`), then
-   `evaluation/engine.py` and `evaluation/budget.py`. This is the vocabulary the
+   `evaluation/engine.py` and `evaluation/store/budget.py`. This is the vocabulary the
    rest of the system speaks.
 5. **How a candidate is scored** — `harbor/backend.py` (`HarborBackend`): the
    nested `harbor run`, attempt aggregation, and the infra-vs-candidate taxonomy.
    The most intricate file; skim `_case_result`, `_command`, `_environment`.
-6. **The sidecar** — `harbor/sidecar.py` (access policies, disclosure floor,
-   tracked eval jobs, submission) and `harbor/app.py` (the HTTP surface: agent
+6. **The sidecar** — `sidecar/sidecar.py` (access policies, disclosure floor,
+   tracked eval jobs, submission) and `sidecar/app.py` (the HTTP surface: agent
    `/eval` vs admin `/finalize` `/score/baseline` `/session/export`).
-7. **Selection & finalization** — `harbor/verifier.py` (`CanonicalVerifier`): the
+7. **Selection & finalization** — `sidecar/verifier.py` (`CanonicalVerifier`): the
    submit → auto_best → pick-last chain, coverage-qualified selection, the
    baseline floor + pinning, `measure_baseline`. This decides the shipped number.
 8. **Security specifics** — the five mechanisms: `run_as`/`harness_user` in
    `harbor/backend.py` + `Dockerfile.sidecar.j2`; the gateway in
-   `harbor/inference.py`; the session archive in `harbor/session.py`.
+   `gateway/inference.py`; the session archive in `sidecar/session.py`.
 9. **Observability** — `runtime/wandb.py` (`SidecarWandbSink`).
 10. **The CLI glue** — `harbor/cli.py` (`vero harbor run`, `finalize`,
     `export-session`, `score-baseline`).
