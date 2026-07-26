@@ -13,6 +13,16 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
+def _is_reasoning_model(model: str) -> bool:
+    """Whether `model` is an OpenAI reasoning model.
+
+    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
+    reasoning_effort, and every gpt-5 model rejects max_tokens. Fireworks-served
+    open models match none of these prefixes, so they keep the legacy shape.
+    """
+    name = model.lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
+
 MAX_TURNS = 24
 MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
@@ -172,19 +182,23 @@ class OfficeQaAgent(BaseAgent):
     def _completion_kwargs(
         self, messages: list[dict[str, Any]], *, tools: bool = True
     ) -> dict[str, Any]:
+        # Reasoning models replaced max_tokens with max_completion_tokens and
+        # reject the old name outright ("Unsupported parameter: 'max_tokens'
+        # is not supported with this model"). Same capability test as the
+        # reasoning_effort gate below, so the two stay consistent.
+        _token_limit_key = (
+            "max_completion_tokens"
+            if _is_reasoning_model(self._api_model)
+            else "max_tokens"
+        )
         kwargs: dict[str, Any] = {
             "model": self._api_model,
             "messages": messages,
-            "max_tokens": 8000,
         }
+        kwargs[_token_limit_key] = 8000
         if tools:
             kwargs["tools"] = TOOLS
-        # Only reasoning-capable models accept reasoning_effort. A provider
-        # check is not sufficient: Azure gpt-4o is not Fireworks and still
-        # rejects it with "Unrecognized request argument supplied:
-        # reasoning_effort".
-        _model = self._api_model.lower()
-        if _model.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in _model:
+        if _is_reasoning_model(self._api_model):
             kwargs["reasoning_effort"] = "medium"
         # parallel_tool_calls is a separate axis: Fireworks-served models reject
         # it, but gpt-4o supports it, so this one stays a provider check.
