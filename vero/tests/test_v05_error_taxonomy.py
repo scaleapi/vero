@@ -95,3 +95,62 @@ def test_classify_case_treats_environment_loss_as_infra_not_task_failure():
     )
     # A candidate's own bug is still an informative task failure, unchanged.
     assert classify_case(["ValueError"]) is ErrorCategory.TASK_FAILURE
+
+
+def test_a_missing_upstream_deployment_is_not_a_task_failure():
+    """The 2026-07-25 swe-atlas-qna run's exact terminal exceptions.
+
+    145 of its 469 cases died on a model that is not provisioned. Classified as
+    a task failure, each was recorded as an informative score of 0.0: the
+    harness blaming the candidate for a model that does not exist.
+    """
+    azure = (
+        "Error code: 404 - {'error': {'type': 'invalid_request_error', "
+        "'code': 'DeploymentNotFound', 'message': 'The API deployment for this "
+        "resource does not exist. If you created the deployment within the "
+        "last 5 minutes, please wait a moment and try again.'}}"
+    )
+    assert (
+        classify_signal(azure) is ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+    )
+    assert (
+        classify_signal("model_not_found") is ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+    )
+    assert (
+        classify_case(["NotFoundError", azure])
+        is ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+    )
+
+    unavailable = policy(ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE)
+    assert not unavailable.is_informative_sample
+    assert not unavailable.retryable
+    assert unavailable.terminating
+    assert unavailable.counts_toward_invalidity
+
+    # It outranks a co-occurring sandbox death: the deterministic,
+    # operator-fixable cause is the one worth reporting.
+    assert (
+        classify_case(
+            [
+                "NotFoundError",
+                "Modal Sandbox with container ID ta-01KY not found.",
+                azure,
+            ]
+        )
+        is ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+    )
+
+
+def test_missing_deployment_pattern_does_not_swallow_container_load_failures():
+    """`FetchSpec failed: loading container: file does not exist` is infra.
+
+    It is 102 of that same run's cases, and it also contains "does not exist",
+    so the deployment pattern must not be written loosely enough to claim it.
+    """
+    fetchspec = "FetchSpec failed: loading container: file does not exist\n"
+    assert classify_signal(fetchspec) is ErrorCategory.TRANSIENT_INFRA
+    assert classify_case(["RuntimeError", fetchspec]) is ErrorCategory.TRANSIENT_INFRA
+    assert (
+        classify_case(["AddTestsDirError", "Failed to add tests directory to environment."])
+        is ErrorCategory.TRANSIENT_INFRA
+    )

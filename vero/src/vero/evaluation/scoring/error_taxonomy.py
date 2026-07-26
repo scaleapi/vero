@@ -43,6 +43,11 @@ class ErrorCategory(str, Enum):
     #: Authentication/authorization failed (e.g. a wrong or cycled key). Does
     #: not heal on retry: terminate loudly.
     AUTH_FAILURE = "auth_failure"
+    #: The requested model is not deployed on the configured upstream. A
+    #: permanent misconfiguration, not the candidate's doing: never scored as a
+    #: sample, and terminating, because every remaining case will fail the same
+    #: way and the run has nothing left to measure.
+    UPSTREAM_MODEL_UNAVAILABLE = "upstream_model_unavailable"
     #: Transient external infrastructure (rate limit, timeout, connection, 5xx,
     #: overloaded). Retryable; if it persists it renders the aggregate invalid.
     TRANSIENT_INFRA = "transient_infra"
@@ -90,6 +95,16 @@ _POLICIES: dict[ErrorCategory, CategoryPolicy] = {
         counts_toward_invalidity=False,
         is_informative_sample=False,
         diagnostic_code="auth_failure",
+    ),
+    ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE: CategoryPolicy(
+        retryable=False,
+        terminating=True,
+        # Unlike auth, keep counting these toward invalidity: if the terminating
+        # path is ever bypassed, the aggregate must still come out invalid
+        # rather than silently averaging a shrinking set of survivors.
+        counts_toward_invalidity=True,
+        is_informative_sample=False,
+        diagnostic_code="upstream_model_unavailable",
     ),
     ErrorCategory.TRANSIENT_INFRA: CategoryPolicy(
         retryable=True,
@@ -150,6 +165,21 @@ _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], ErrorCategory]] = [
         ErrorCategory.AUTH_FAILURE,
     ),
     (
+        # A model that is configured but not provisioned upstream. Left
+        # unclassified this is the worst kind of silent failure: the agent's
+        # every call 404s, it writes no answer, and the case is recorded as an
+        # informative task failure: the harness blaming the candidate for a
+        # model that does not exist. Matched on the provider's own error codes
+        # and on the exact Azure sentence, never on a bare "does not exist",
+        # which would also swallow "loading container: file does not exist".
+        re.compile(
+            r"deploymentnotfound|model_not_found|"
+            r"the api deployment for this resource does not exist",
+            re.IGNORECASE,
+        ),
+        ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE,
+    ),
+    (
         re.compile(
             r"rate.?limit|too.?many.?requests|time(?:d.?)?out|connection|"
             r"service.?unavailable|internal.?server|overloaded|"
@@ -205,6 +235,9 @@ def classify_case(signals: list[str]) -> ErrorCategory:
     for category in (
         ErrorCategory.INFERENCE_BUDGET_EXHAUSTED,
         ErrorCategory.AUTH_FAILURE,
+        # Ahead of infra: a case that saw both a dead sandbox and a missing
+        # deployment should report the deterministic, operator-fixable one.
+        ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE,
         ErrorCategory.TRANSIENT_INFRA,
     ):
         if category in categories:
