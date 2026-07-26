@@ -253,15 +253,16 @@ class OfficeQaAgent(BaseAgent):
 
             submitted = False
             for call in calls:
+                image_url = None
+                # The dispatch runs inside the try rather than an else: the
+                # argument lookups are the likelier failure, since the tool
+                # schemas are not strict and the model can return valid JSON
+                # that omits a required key. Feed that back as a tool error
+                # instead of letting a KeyError end the whole trial.
                 try:
                     arguments = json.loads(call.function.arguments)
-                except json.JSONDecodeError as error:
-                    result: dict[str, Any] = {"error": f"invalid arguments: {error}"}
-                    image_url = None
-                else:
-                    image_url = None
                     if call.function.name == "run_shell":
-                        result = await self._run_shell(
+                        result: dict[str, Any] = await self._run_shell(
                             environment, arguments["command"]
                         )
                     elif call.function.name == "read_image":
@@ -274,6 +275,9 @@ class OfficeQaAgent(BaseAgent):
                         submitted = True
                     else:
                         result = {"error": f"unknown tool: {call.function.name}"}
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                    result = {"error": f"invalid arguments: {error}"}
+                    image_url = None
                 self._trace(
                     {"turn": turn, "tool": call.function.name, "result": result}
                 )

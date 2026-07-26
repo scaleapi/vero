@@ -102,7 +102,10 @@ class GaiaAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("GAIA agent requires a Harbor model")
         self._api_model = self.model_name.removeprefix("openai/")
-        self._client = AsyncOpenAI()
+        # Absorb transient 429s in-client: a within-trial infra failure scores
+        # at the failure value for competitive evaluations, so an unretried
+        # rate limit costs a candidate a 0.0.
+        self._client = AsyncOpenAI(max_retries=8)
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:

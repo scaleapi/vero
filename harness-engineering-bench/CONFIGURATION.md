@@ -38,7 +38,11 @@ benchmark can be checked against the others at a glance.
   grounded-reasoning benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss
   cost — far cheaper than mini. `swe-atlas-qna` is pinned to
   `fireworks_ai/gpt-oss-120b`, the one benchmark where deepseek is weaker
-  (0.30 vs 0.59 mean rubric) and gpt-oss is both cheaper and stronger.
+  (0.30 vs 0.59 mean rubric) and gpt-oss is both cheaper and stronger. `gaia` is
+  pinned to `gpt-5.4-mini` for a different reason: it is the one multimodal
+  benchmark, 5 of its 66 held-out tasks send image inputs, and deepseek-v4-flash
+  rejects those outright (`This model does not support image inputs`), capping
+  achievable reward near 0.92 and disguising the shortfall as agent failure.
 - **Execution**: `harbor[modal]==0.20.0`, python 3.12, `n_attempts: 1`,
   `max_retries: 1`, 3 infrastructure attempts at 5s, `aggregate_attempts:
   best`, `max_concurrency: 8`, `error_rate_threshold: 0.1`,
@@ -53,7 +57,7 @@ benchmark can be checked against the others at a glance.
 
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus |
 |---|---|---|---|---|---|
-| target model | deepseek-v4-flash | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash |
+| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash |
 | held-out baseline (K=3) ◆ | — | 0.360 ±0.042 | 0.097 ±0.011 (agg 0.632) | 0.611 ±0.021 | 0.449 ±0.007 |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
@@ -94,6 +98,16 @@ the verifier emitting `agg_score` as a selectable key. Measured with
 deepseek-v4-flash (gpt-oss-120b on swe-atlas); the three deepseek benchmarks
 logged zero exceptions over 945 trials, swe-atlas lost 5/150 to gpt-oss 128k
 context overflow.
+
+◇ gaia is the exception to the deepseek-v4-flash default: it is multimodal and
+that model is text-only. Verified against the same litellm endpoint the gateway
+proxies to — gpt-5.4-mini returns 200 for every request shape the gaia agent
+sends (image input, hosted `web_search`, `reasoning.effort`,
+`parallel_tool_calls`), while deepseek-v4-flash returns
+`400 This model does not support image inputs`. Written unprefixed on purpose:
+each agent sends `model_name.removeprefix("openai/")`, so an `openai/`-prefixed
+name would be allow-listed in one form and requested in another and the gateway
+would deny it.
 
 † Sized from stock-agent probes (codex on the target model, 3 development
 tasks each, full declared timeouts): tau3 trials took 202-211s (900s budget

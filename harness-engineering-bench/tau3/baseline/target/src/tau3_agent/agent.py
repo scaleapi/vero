@@ -20,6 +20,7 @@ import base64
 import json
 import os
 import re
+import shlex
 from typing import Any, override
 
 from harbor.agents.base import BaseAgent
@@ -130,8 +131,13 @@ class Tau3Agent(BaseAgent):
         encoded = base64.b64encode(
             json.dumps(payload, ensure_ascii=False).encode("utf-8")
         ).decode("ascii")
+        # Quoted for the same reason the payload above is base64-encoded: the
+        # session id comes back from the server, and a quote in it would break
+        # out of the surrounding single quotes into the shell.
         session_header = (
-            f"-H 'mcp-session-id: {session_id}' " if session_id is not None else ""
+            f"-H {shlex.quote(f'mcp-session-id: {session_id}')} "
+            if session_id is not None
+            else ""
         )
         command = (
             f"printf '%s' '{encoded}' | base64 -d | "
@@ -341,10 +347,15 @@ class Tau3Agent(BaseAgent):
             )
 
             if calls:
-                # This agent acts one tool at a time; record only the first call
-                # so the assistant turn and its single tool reply stay balanced
-                # (Chat Completions requires a tool message per tool_call id).
-                call = calls[0]
+                # Every call the model made is executed, in order. The target
+                # model does return more than one per turn, and the usual guard
+                # -- parallel_tool_calls: False -- is not available here:
+                # litellm rejects it for fireworks_ai with UnsupportedParamsError.
+                # Acting on only the first would silently skip the rest, which
+                # for a customer-service agent means a verified identity with no
+                # message sent. Chat Completions requires exactly one tool
+                # message per tool_call id, so the assistant turn lists them all
+                # and each gets its reply below.
                 assistant: dict[str, Any] = {
                     "role": "assistant",
                     "tool_calls": [
@@ -356,33 +367,45 @@ class Tau3Agent(BaseAgent):
                                 "arguments": call.function.arguments,
                             },
                         }
+                        for call in calls
                     ],
                 }
                 if message.content:
                     assistant["content"] = message.content
                 messages.append(assistant)
-                try:
-                    arguments = json.loads(call.function.arguments)
-                    result_text = await self._call_tool(
-                        environment, session_id, call.function.name, arguments
+                stop = False
+                for call in calls:
+                    try:
+                        arguments = json.loads(call.function.arguments)
+                        result_text = await self._call_tool(
+                            environment, session_id, call.function.name, arguments
+                        )
+                    except Exception as error:  # noqa: BLE001 - feed failures to model
+                        result_text = json.dumps(
+                            {"error": f"{type(error).__name__}: {error}"}
+                        )
+                    self._trace(
+                        {
+                            "turn": turn,
+                            "tool": call.function.name,
+                            "result": result_text,
+                        }
                     )
-                except Exception as error:  # noqa: BLE001 - feed failures to model
-                    result_text = json.dumps(
-                        {"error": f"{type(error).__name__}: {error}"}
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": result_text,
+                        }
                     )
-                self._trace(
-                    {"turn": turn, "tool": call.function.name, "result": result_text}
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call.id,
-                        "content": result_text,
-                    }
-                )
-                if call.function.name == "end_conversation" or _looks_stopped(
-                    result_text
-                ):
+                    # Note the stop but keep going: leaving a tool_call id
+                    # without a reply would make the next request invalid, and
+                    # the remaining calls were ones the model actually asked for.
+                    if call.function.name == "end_conversation" or _looks_stopped(
+                        result_text
+                    ):
+                        stop = True
+                if stop:
                     break
                 continue
 

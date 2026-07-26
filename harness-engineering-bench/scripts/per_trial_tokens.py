@@ -123,7 +123,9 @@ def load_threads(requests_dir: Path) -> dict[str, dict[str, dict]]:
                     continue
                 if record.get("scope") not in ("evaluation", "finalization"):
                     continue
-                evaluation_id = record.get("attribution")
+                # Salvage copies can lack attribution; a None key would sort
+                # against the real ones and crash the report.
+                evaluation_id = record.get("attribution") or "unattributed"
                 snippet = record.get("root_snippet") or recover_snippet(record)
                 thread_key = record.get("thread_id") or (
                     "snippet:" + normalize(snippet or "")[:160] or "unattributed"
