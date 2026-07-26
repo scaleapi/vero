@@ -16,6 +16,8 @@ from vero.evaluation import (
     BudgetLedger,
     CaseRange,
     ConstraintOperator,
+    DisclosureLevel,
+    EvaluationAccessPolicy,
     EvaluationBudget,
     EvaluationDatabase,
     EvaluationSet,
@@ -132,11 +134,17 @@ async def build(config: dict) -> SidecarComponents:
         access_policies=[
             SidecarEvaluationPolicy(
                 backend_id="cmd", evaluation_set_name=SET, partition="development",
-                disclosure="full", expose_case_resources=True, objective=OBJ,
+                objective=OBJ,
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.FULL, expose_case_resources=True
+                ),
             ),
             SidecarEvaluationPolicy(
                 backend_id="cmd", evaluation_set_name=SET, partition="validation",
-                disclosure="aggregate", min_aggregate_cases=1, objective=OBJ,
+                objective=OBJ,
+                access=EvaluationAccessPolicy(
+                    disclosure=DisclosureLevel.AGGREGATE, min_aggregate_cases=1
+                ),
             ),
         ],
         admin_volume=session_dir / "admin",
