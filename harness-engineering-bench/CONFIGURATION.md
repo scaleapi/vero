@@ -32,7 +32,12 @@ benchmark can be checked against the others at a glance.
   per-benchmark table — a benchmark may pin a different evaluated model), fixed
   per run by the gateway's evaluation scope (the `evaluation.allowed_models`
   allow-list, so a candidate cannot swap it). The optimizer uses a separate
-  producer scope bound to `${optimizer_model:-gpt-5.4}`. deepseek-v4-flash was
+  producer scope bound to `${optimizer_model:-openai/gpt-5.4}`. The gateway
+  matches the requested model against the allow-list as an exact string, so the
+  `-m` the outer trial is launched with has to be spelled the same way as this
+  default (or as whatever `--param optimizer_model=` overrides it with);
+  the router resolves both `gpt-5.4` and `openai/gpt-5.4`, so the prefix is a
+  convention rather than a requirement. deepseek-v4-flash was
   chosen over gpt-oss-120b and gpt-5.4-mini from a 10-trial per-benchmark probe:
   it matches or beats both on tau3 (0.875) and is ~2–3× gpt-oss on the
   grounded-reasoning benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss
