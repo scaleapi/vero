@@ -945,6 +945,54 @@ async def test_finalization_cancels_an_agent_evaluation_after_drain_timeout(
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_the_success_record_still_completes_it(
+    tmp_path: Path,
+):
+    """A charged run must finish being recorded even if the caller goes away.
+
+    The success path was the one _record call not shielded, so a cancellation
+    arriving while it ran abandoned it part-way: the budget stayed charged for
+    an evaluation the engine never finished publishing.
+
+    The cancellable window is the listener loop, not the database write --
+    asyncio.to_thread cannot be interrupted, so that part completes either way.
+    Listeners are where the trusted side mirrors an evaluation to W&B and the
+    session archive, so silently skipping them loses the run from both.
+    """
+    workspace = StubWorkspace(tmp_path / "repo")
+    database = EvaluationDatabase(id="session")
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": StubBackend()}),
+        database=database,
+        authorization_resolver=allow_all_evaluations,
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def slow_listener(record: EvaluationRecord) -> None:
+        entered.set()
+        await release.wait()
+        finished.set()
+
+    engine.listeners.append(slow_listener)
+    evaluation = asyncio.create_task(
+        engine.evaluate_record(backend_id="default", request=request())
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    evaluation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await evaluation
+    # shield lets the caller unwind at once while _record finishes in the
+    # background, so wait for the listener rather than assuming it ran.
+    release.set()
+    await asyncio.wait_for(finished.wait(), timeout=5)
+    assert len(database.evaluations) == 1
+
+
+@pytest.mark.asyncio
 async def test_plan_authorization_separates_agent_and_system_selection_rights(
     tmp_path: Path,
 ):

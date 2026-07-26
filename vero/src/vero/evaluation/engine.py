@@ -390,7 +390,13 @@ class EvaluationEngine:
                     )
                 )
             raise
-        await self._record(record)
+        # Shielded for the same reason as the two handlers above, and one more:
+        # the budget was charged for an evaluation that has now actually run, so
+        # a cancellation landing inside _record would leave the ledger counting
+        # a run the database never indexed. _record is not atomic either -- it
+        # mutates the in-memory database before persisting it -- so an
+        # unshielded cancellation can tear those two apart as well.
+        await asyncio.shield(self._record(record))
         terminating = next(
             (
                 diagnostic
