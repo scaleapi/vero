@@ -49,7 +49,7 @@ score_baseline: true
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: openai/gpt-4o
+model: gpt-4o
 environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
@@ -90,10 +90,10 @@ inference_gateway:
   upstream_base_url_env: OPENAI_BASE_URL
   producer:
     # Both prefixed and bare forms: the gateway model match is prefix-sensitive.
-    allowed_models: ["gpt-5.3-codex", "openai/gpt-5.3-codex"]
+    allowed_models: ["${optimizer_model:-gpt-5.3-codex}"]
     max_concurrency: 8
   evaluation:
-    allowed_models: ["gpt-4o", "openai/gpt-4o"]
+    allowed_models: [gpt-4o]
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64
