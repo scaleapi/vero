@@ -22,7 +22,8 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.gateway.inference import generate_inference_token, token_digest
-from vero.harbor.build.config import HarborBuildConfig, WorkspaceOverlaySpec
+from vero.harbor.build.config import HarborBuildConfig
+from vero.harbor.build.specs import WorkspaceOverlaySpec
 from vero.layout import LAYOUT
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ _VERO_COPY = ("pyproject.toml", "README.md", "uv.lock", "src")
 SESSION_ID = "trial"
 UPSTREAM_API_KEY_ENV = LAYOUT.gateway_upstream_api_key_env
 UPSTREAM_BASE_URL_ENV = LAYOUT.gateway_upstream_base_url_env
-PRODUCER_BASE_URL = LAYOUT.scope_url('producer', LAYOUT.optimizer_attribution)
+PRODUCER_BASE_URL = LAYOUT.scope_url("producer", LAYOUT.optimizer_attribution)
 
 # Credentials the compose template routes through the gateway by setting them
 # explicitly, instead of blanking them like every other declared secret. The two
@@ -299,14 +300,18 @@ def _deployment_config(
                 "passthrough_environment": config.secrets,
                 "environment": config.task_environment,
                 "inference_gateway_url": (
-                    INFERENCE_GATEWAY_URL if config.inference_gateway is not None else None
+                    INFERENCE_GATEWAY_URL
+                    if config.inference_gateway is not None
+                    else None
                 ),
                 "inference_gateway_token": evaluation_inference_token,
                 "inference_gateway_finalization_token": finalization_inference_token,
                 "harness_user": config.harness_user,
                 "task_services_use_upstream": config.task_services_use_upstream,
                 "upstream_api_key_env": (
-                    UPSTREAM_API_KEY_ENV if config.inference_gateway is not None else None
+                    UPSTREAM_API_KEY_ENV
+                    if config.inference_gateway is not None
+                    else None
                 ),
                 "upstream_base_url_env": (
                     UPSTREAM_BASE_URL_ENV
@@ -660,9 +665,7 @@ def compile_harbor_task(
                     ),
                     "upstream_base_url_target": UPSTREAM_BASE_URL_ENV,
                     "producer_api_key": producer_inference_token,
-                    "producer_base_url": (
-                        PRODUCER_BASE_URL
-                    ),
+                    "producer_base_url": (PRODUCER_BASE_URL),
                 },
                 ensure_ascii=False,
                 indent=2,

@@ -24,11 +24,21 @@ from vero.harbor import (
     load_harbor_build_config,
 )
 from vero.harbor.build.compiler import GATEWAY_ROUTED_CREDENTIALS
+from vero.harbor.build.config import (
+    _HARBOR_ONLY_FIELDS,
+    _AgentWorkspaceFields,
+    _EvaluationLimitFields,
+    _HarborEvaluationFields,
+    _SearchAndSelectionFields,
+    _TaskEnvironmentFields,
+    _TaskIdentityFields,
+)
 from vero.harbor.deployment import FACTORY_PATH
 from vero.layout import LAYOUT
 from vero.sidecar.serve import load_factory
 
 _OMIT = object()
+
 
 def test_task_layout_values_are_pinned():
     """The one place the layout's literal values are written down twice.
@@ -83,7 +93,7 @@ def _git(path: Path, *arguments: str) -> str:
 
 
 def test_build_param_substitution_semantics():
-    from vero.harbor.build.config import _substitute_build_param as sub
+    from vero.harbor.build.loader import _substitute_build_param as sub
 
     context = {"A": "x"}
     assert sub("${A}", context) == "x"
@@ -153,7 +163,9 @@ def _config(tmp_path: Path, **updates) -> HarborBuildConfig:
 def test_compiler_bakes_workspace_overlay_into_agent_environment(tmp_path):
     bundle = tmp_path / "bundle"
     (bundle / ".claude" / "agents").mkdir(parents=True)
-    (bundle / ".claude" / "agents" / "insights.md").write_text("# a\n", encoding="utf-8")
+    (bundle / ".claude" / "agents" / "insights.md").write_text(
+        "# a\n", encoding="utf-8"
+    )
     (bundle / "skills" / "insights").mkdir(parents=True)
     (bundle / "skills" / "insights" / "SKILL.md").write_text("# s\n", encoding="utf-8")
 
@@ -280,9 +292,10 @@ def test_compiler_plumbs_task_services_use_upstream(tmp_path, monkeypatch):
     sidecar_env = compose["services"]["eval-sidecar"]["environment"]
     assert "VERO_INFERENCE_UPSTREAM_API_KEY" in sidecar_env
     assert "VERO_INFERENCE_UPSTREAM_BASE_URL" in sidecar_env
-    assert compose["services"]["main"]["environment"][
-        "VERO_INFERENCE_UPSTREAM_API_KEY"
-    ] == ""
+    assert (
+        compose["services"]["main"]["environment"]["VERO_INFERENCE_UPSTREAM_API_KEY"]
+        == ""
+    )
 
 
 def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path):
@@ -307,7 +320,9 @@ def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path)
     assert scopes["finalization"]["allowed_models"] == ["gpt-target"]
     assert scopes["finalization"]["max_tokens"] == 100000000
     # its token is distinct from the evaluation token (optimizer can't drain it)
-    assert scopes["finalization"]["token_sha256"] != scopes["evaluation"]["token_sha256"]
+    assert (
+        scopes["finalization"]["token_sha256"] != scopes["evaluation"]["token_sha256"]
+    )
     # and the sidecar backend carries a finalization token distinct from the eval one
     serve = json.loads(
         (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
@@ -413,9 +428,10 @@ def test_build_config_requires_requested_models_to_be_allowed_by_their_scope(tmp
         return InferenceGatewaySpec(**values)
 
     # The matching case builds, and finalization inherits the evaluation policy.
-    assert _config(
-        tmp_path / "ok", model="gpt-target", inference_gateway=gateway()
-    ).model == "gpt-target"
+    assert (
+        _config(tmp_path / "ok", model="gpt-target", inference_gateway=gateway()).model
+        == "gpt-target"
+    )
 
     with pytest.raises(ValidationError, match="evaluation allowed_models"):
         _config(tmp_path / "search", model="gpt-typo", inference_gateway=gateway())
@@ -519,9 +535,9 @@ def test_deployment_treats_a_backend_without_a_type_as_harbor(tmp_path):
         "selection": {"mode": "submit"},
         "submit_enabled": True,
         # The tag the older compiler never wrote.
-        "backends": {"harbor-validation": backend.model_dump(
-            mode="json", exclude={"type"}
-        )},
+        "backends": {
+            "harbor-validation": backend.model_dump(mode="json", exclude={"type"})
+        },
     }
     parsed = HarborDeploymentConfig.model_validate(legacy)
     assert parsed.backends["harbor-validation"].type == "harbor"
@@ -557,6 +573,62 @@ def test_build_config_keeps_the_two_backend_kinds_apart(tmp_path):
             max_retries=5,
             feedback_transcripts=True,
         )
+
+
+def test_every_harbor_only_field_is_rejected_by_a_command_build(tmp_path):
+    """The rejection list is derived, so this sweep needs no maintenance.
+
+    The previous hand-written frozenset had already drifted: reward_key is
+    Harbor-only in fact -- a command harness reports its own reward -- but was
+    missing from the list, so setting it on a command build passed validation and
+    did nothing. Looping over the group means a field added to
+    _HarborEvaluationFields is covered the day it lands.
+    """
+    assert _HARBOR_ONLY_FIELDS == frozenset(_HarborEvaluationFields.model_fields)
+
+    for index, name in enumerate(sorted(_HARBOR_ONLY_FIELDS)):
+        # Its own default is enough: the check reads model_fields_set, so setting
+        # a field at all is the mistake, whatever the value.
+        default = HarborBuildConfig.model_fields[name].get_default(
+            call_default_factory=True
+        )
+        # Listed last so it overrides the _OMIT when it is one of these two.
+        overrides = {
+            "evaluation_backend": "command",
+            "command_backend": _command_backend(tmp_path / f"h{index}"),
+            "agent_import_path": _OMIT,
+            "task_source": _OMIT,
+            name: default,
+        }
+        with pytest.raises(ValidationError, match="only apply to a harbor") as caught:
+            _config(tmp_path / f"harbor-only-{index}", **overrides)
+        assert name in str(caught.value)
+
+
+def test_field_groups_are_inherited_not_nested():
+    """Grouping must not change the wire format.
+
+    The groups exist so the schema can be read one concern at a time, but a
+    build.yaml is flat and the checked-in benchmark configs depend on that.
+    Turning a group into a sub-object would break every one of them silently, so
+    assert the keys stay top-level -- and that every field belongs to a group,
+    which is what keeps each one documented somewhere.
+    """
+    groups = (
+        _TaskIdentityFields,
+        _HarborEvaluationFields,
+        _SearchAndSelectionFields,
+        _EvaluationLimitFields,
+        _TaskEnvironmentFields,
+        _AgentWorkspaceFields,
+    )
+    top_level = set(HarborBuildConfig.model_fields)
+    for group in groups:
+        assert set(group.model_fields) <= top_level
+
+    grouped = {name for group in groups for name in group.model_fields}
+    # Only the backend choice itself is declared on HarborBuildConfig.
+    assert grouped | {"evaluation_backend", "command_backend"} == top_level
 
 
 def test_compiled_task_factory_path_resolves(tmp_path):
@@ -1106,9 +1178,7 @@ def test_run_command_forwards_agent_env_as_harbor_ae(tmp_path, monkeypatch):
     monkeypatch.setattr(
         harbor_build, "load_harbor_build_config", lambda *a, **k: config
     )
-    monkeypatch.setattr(
-        harbor_build, "compile_harbor_task", lambda cfg, out: out
-    )
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda cfg, out: out)
 
     result = CliRunner().invoke(
         harbor_cli.harbor,
@@ -1132,6 +1202,4 @@ def test_run_command_forwards_agent_env_as_harbor_ae(tmp_path, monkeypatch):
     assert "--ae FOO=bar" in shlex.join(command)
     # Deterministic (sorted-by-key) ordering: FOO before UV_TOOL_BIN_DIR.
     joined = shlex.join(command)
-    assert joined.index("--ae FOO=bar") < joined.index(
-        "--ae UV_TOOL_BIN_DIR="
-    )
+    assert joined.index("--ae FOO=bar") < joined.index("--ae UV_TOOL_BIN_DIR=")
