@@ -219,7 +219,26 @@ class GaiaAgent(BaseAgent):
                     await self._submit(environment, response.output_text)
                     context.metadata = {"turns": turn, "trace": "gaia-trace.jsonl"}
                     break
-                raise RuntimeError("model returned neither an answer nor a tool call")
+                # No custom tool call and no message: the model only reasoned,
+                # ran a hosted web_search, or was truncated at max_output_tokens
+                # this turn. Carry the chain forward with a nudge instead of
+                # crashing; MAX_TURNS + the forced-final below bound the loop.
+                previous_response_id = response.id
+                next_input = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "Continue. When you have the answer, call "
+                                    "submit_answer with the exact answer."
+                                ),
+                            }
+                        ],
+                    }
+                ]
+                continue
 
             next_input = []
             submitted = False
@@ -282,7 +301,45 @@ class GaiaAgent(BaseAgent):
                 break
             previous_response_id = response.id
         else:
-            raise RuntimeError(f"GAIA agent exceeded {MAX_TURNS} turns")
+            # Turn budget exhausted: force one final tool-free answer from what was
+            # gathered rather than crashing, so the case scores best-effort instead
+            # of being lost with no answer recorded.
+            next_input.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "You have used your full research budget. Give your "
+                                "single best exact answer now, based on what you have "
+                                "gathered."
+                            ),
+                        }
+                    ],
+                }
+            )
+            final = await self._client.responses.create(
+                model=self._api_model,
+                instructions=INSTRUCTIONS,
+                input=next_input,
+                reasoning={"effort": "medium"},
+                max_output_tokens=8000,
+                previous_response_id=previous_response_id,
+            )
+            input_tokens += self._usage_value(final.usage, "input_tokens")
+            output_tokens += self._usage_value(final.usage, "output_tokens")
+            cached_tokens += self._usage_value(
+                getattr(final.usage, "input_tokens_details", None), "cached_tokens"
+            )
+            answer = (final.output_text or "").strip() or "unknown"
+            await self._submit(environment, answer)
+            self._trace({"turn": MAX_TURNS, "forced_final_answer": answer})
+            context.metadata = {
+                "turns": MAX_TURNS,
+                "trace": "gaia-trace.jsonl",
+                "forced_final": True,
+            }
 
         context.n_input_tokens = input_tokens
         context.n_output_tokens = output_tokens
