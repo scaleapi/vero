@@ -27,17 +27,7 @@ from vero.harbor.deployment import FACTORY_PATH
 from vero.layout import LAYOUT
 from vero.sidecar.serve import load_factory
 
-BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
-
 _OMIT = object()
-
-# harness-engineering-bench is a separate branch/PR in the stacked split, so
-# skip the benchmark-config tests when it isn't checked out here.
-_requires_benchmarks = pytest.mark.skipif(
-    not BENCHMARK_ROOT.exists(),
-    reason="harness-engineering-bench is not present on this branch",
-)
-
 
 def test_task_layout_values_are_pinned():
     """The one place the layout's literal values are written down twice.
@@ -89,61 +79,6 @@ def _git(path: Path, *arguments: str) -> str:
         capture_output=True,
     )
     return result.stdout.strip()
-
-
-@_requires_benchmarks
-@pytest.mark.parametrize(
-    ("benchmark", "producer_models"),
-    [
-        # gaia parametrizes the producer model via ${optimizer_model}; the
-        # default (no --param) resolves to gpt-5.4.
-        ("gaia", ["gpt-5.4"]),
-        ("swe-atlas-qna", ["gpt-5.4"]),
-        ("tau3", ["gpt-5.4"]),
-    ],
-)
-def test_canonical_benchmarks_isolate_upstream_inference_credentials(
-    benchmark, producer_models
-):
-    # All benchmarks live at the top level of harness-engineering-bench.
-    config = load_harbor_build_config(
-        BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
-    )
-
-    assert config.inference_gateway is not None
-    assert not {
-        "OPENAI_API_KEY",
-        "OPENAI_BASE_URL",
-        "OPENAI_API_BASE",
-    }.intersection(config.secrets)
-    assert config.inference_gateway.upstream_api_key_env == "OPENAI_API_KEY"
-    assert config.inference_gateway.upstream_base_url_env == "OPENAI_BASE_URL"
-    assert config.inference_gateway.producer.allowed_models == producer_models
-    assert config.inference_gateway.producer.max_requests is None
-    assert config.inference_gateway.producer.max_tokens is None
-    assert config.inference_gateway.evaluation.allowed_models == [
-        "gpt-5.4-mini-2026-03-17"
-    ]
-    assert config.inference_gateway.evaluation.max_requests == 15000
-    assert config.inference_gateway.evaluation.max_tokens == 100000000
-
-
-@_requires_benchmarks
-def test_build_params_override_run_time_knobs_without_rebuild():
-    path = BENCHMARK_ROOT / "gaia" / "baseline" / "build.yaml"
-
-    default = load_harbor_build_config(path)
-    assert default.environment_name == "modal"
-    assert default.inference_gateway.producer.allowed_models == ["gpt-5.4"]
-
-    overridden = load_harbor_build_config(
-        path, params={"optimizer_model": "gpt-5.5", "inner_env": "docker"}
-    )
-    assert overridden.environment_name == "docker"
-    assert overridden.inference_gateway.producer.allowed_models == ["gpt-5.5"]
-    # The rest of the measurement substrate is untemplated and stays fixed.
-    assert overridden.model == default.model
-    assert overridden.task_source == default.task_source
 
 
 def test_build_param_substitution_semantics():
