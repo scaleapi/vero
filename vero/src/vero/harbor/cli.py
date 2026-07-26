@@ -401,13 +401,45 @@ def build_command(config_path, output, params):
     click.echo(f"Compiled Harbor task: {compiled}")
 
 
-def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, str]:
-    """Ask the upstream for one token from `model`. Returns (status, body)."""
+#: The two request shapes an OpenAI-compatible upstream may accept. Agents in
+#: this repo use both (gaia is on Responses, the rest are on Chat Completions),
+#: and an upstream is free to implement only one, so a 404 from the first is
+#: not evidence about the model until the second has also been tried.
+_PROBE_ROUTES: tuple[tuple[str, str], ...] = (
+    ("/responses", "input"),
+    ("/chat/completions", "messages"),
+)
+
+
+def _model_is_missing(body: str) -> bool:
+    """True when a 404 body blames the model rather than the route.
+
+    A route-level 404 (the upstream does not implement this path) and a
+    model-level 404 (the deployment does not exist) share a status code and
+    mean opposite things, so the body is the only thing that separates them.
+    Matched on the providers' own error codes, and on the Azure and OpenAI
+    sentences, never on a bare "does not exist".
+    """
+    lowered = body.lower()
+    if "deploymentnotfound" in lowered or "model_not_found" in lowered:
+        return True
+    return "model" in lowered and "does not exist" in lowered
+
+
+def _probe_route(
+    base_url: str, api_key: str, model: str, route: str, input_key: str
+) -> tuple[int | None, str]:
+    """Ask one route for one token from `model`. Returns (status, body)."""
+    payload: dict[str, object] = {"model": model}
+    if input_key == "input":
+        payload["input"] = "ok"
+        payload["max_output_tokens"] = 16
+    else:
+        payload["messages"] = [{"role": "user", "content": "ok"}]
+        payload["max_tokens"] = 16
     request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/responses",
-        data=json.dumps(
-            {"model": model, "input": "ok", "max_output_tokens": 16}
-        ).encode(),
+        f"{base_url.rstrip('/')}{route}",
+        data=json.dumps(payload).encode(),
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
@@ -422,6 +454,26 @@ def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, s
         return error.code, error.read().decode("utf-8", "replace")[:400]
     except Exception as error:  # network/DNS/timeout: inconclusive, not fatal
         return None, str(error)
+
+
+def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, str]:
+    """Ask the upstream for one token from `model`. Returns (status, body).
+
+    Tries each route until one is conclusive. A 404 is only returned when the
+    body names the model; a route-level 404 falls through to the next route,
+    and if every route 404s on the route rather than the model the result is
+    reported as inconclusive so the run proceeds.
+    """
+    last: tuple[int | None, str] = (None, "no route was reachable")
+    for route, input_key in _PROBE_ROUTES:
+        status, body = _probe_route(base_url, api_key, model, route, input_key)
+        if status == 404 and not _model_is_missing(body):
+            # This upstream does not serve this route. Says nothing about the
+            # model; keep the result only as a fallback and try the next one.
+            last = (None, f"{route} is not served by this upstream")
+            continue
+        return status, body
+    return last
 
 
 def _preflight_models(config) -> None:
@@ -451,12 +503,21 @@ def _preflight_models(config) -> None:
         if scope is None:
             continue
         for name in scope.allowed_models:
-            # Agents strip the provider prefix before calling the gateway.
-            scopes.setdefault(name.removeprefix("openai/"), scope_name)
+            scopes.setdefault(name, scope_name)
 
     missing: list[str] = []
     for name, scope_name in scopes.items():
-        status, body = _probe_model(base_url, api_key, name)
+        # A provider prefix is meaningful to a routing proxy and meaningless to
+        # a single-provider endpoint, so try the configured name first and only
+        # fall back to the bare one. Reporting a model missing on the strength
+        # of one spelling would block a run that would have worked.
+        candidates = [name]
+        if "/" in name:
+            candidates.append(name.split("/", 1)[1])
+        for candidate in candidates:
+            status, body = _probe_model(base_url, api_key, candidate)
+            if status != 404:
+                break
         if status == 404:
             missing.append(f"{name} ({scope_name} scope): {body.strip()}")
         elif status is not None and status >= 400:
