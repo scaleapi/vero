@@ -1,8 +1,13 @@
 """Invariants the checked-in benchmark build YAMLs must satisfy.
 
-These read harness-engineering-bench, so they live on the branch that has it and
-carry no skip guard: if the directory is missing the tests fail loudly rather
-than passing vacuously, which is how their predecessors drifted unnoticed.
+These read harness-engineering-bench, so they live on the branch that has it. If
+that directory is missing the tests error rather than pass vacuously, which is
+how their predecessors drifted unnoticed.
+
+The one thing they do skip for is a benchmark whose tasks have not been vendored
+yet -- see _require_vendored_task_source. That is a precondition of the machine,
+not a property of the config, and skipping it names the missing directory rather
+than quietly reporting green.
 
 Assertions are derived from each config wherever possible. Pinning literal model
 names is what broke the earlier version -- a benchmark switched target model and
@@ -15,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from vero.harbor import load_harbor_build_config
 
@@ -27,10 +33,37 @@ BENCHMARKS = ["gaia", "officeqa", "swe-atlas-qna", "tau3", "browsecomp-plus"]
 UPSTREAM_CREDENTIALS = {"OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"}
 
 
+def _require_vendored_task_source(path: Path) -> None:
+    """Skip when a benchmark's task_source names a directory nobody fetched yet.
+
+    officeqa and browsecomp-plus point task_source at a gitignored tasks/ tree
+    built by their own scripts/. The loader only absolutizes a relative
+    task_source when it exists, so on a fresh clone the path stays literal and
+    is rejected as an unpinned registry reference -- these tests would fail on
+    every checkout that had not run the script, which reads as a broken branch
+    rather than a missing prerequisite.
+
+    Deliberately narrower than skipping the whole module when BENCHMARK_ROOT is
+    absent: that blanket guard is what let the earlier version rot.
+    """
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    task_source = document.get("task_source")
+    if not isinstance(task_source, str) or "@" in task_source or "${" in task_source:
+        return  # a registry reference or a build parameter; nothing to vendor
+    resolved = Path(task_source)
+    if not resolved.is_absolute():
+        resolved = path.parent / resolved
+    if not resolved.exists():
+        pytest.skip(
+            f"{path.parent.parent.name} tasks are not vendored: {resolved} is "
+            f"missing; run its scripts/ to fetch them"
+        )
+
+
 def _config(benchmark: str):
-    return load_harbor_build_config(
-        BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
-    )
+    path = BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
+    _require_vendored_task_source(path)
+    return load_harbor_build_config(path)
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
