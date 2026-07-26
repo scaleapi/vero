@@ -224,15 +224,17 @@ class GaiaAgent(BaseAgent):
             next_input = []
             submitted = False
             for call in calls:
+                image_url = None
+                # The dispatch runs inside the try rather than an else, and
+                # OSError is caught alongside the argument errors: read_image
+                # downloads a model-supplied path and then stats and reads it,
+                # so a hallucinated path fails in the filesystem rather than in
+                # json.loads. Uncaught, any of these ends the trial instead of
+                # telling the model its tool call did not work.
                 try:
                     arguments = json.loads(call.arguments)
-                except json.JSONDecodeError as error:
-                    result: dict[str, Any] = {"error": f"invalid arguments: {error}"}
-                    image_url = None
-                else:
-                    image_url = None
                     if call.name == "run_shell":
-                        result = await self._run_shell(
+                        result: dict[str, Any] = await self._run_shell(
                             environment, arguments["command"]
                         )
                     elif call.name == "read_image":
@@ -245,6 +247,15 @@ class GaiaAgent(BaseAgent):
                         submitted = True
                     else:
                         result = {"error": f"unknown tool: {call.name}"}
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                ) as error:
+                    result = {"error": f"invalid arguments: {error}"}
+                    image_url = None
                 self._trace({"turn": turn, "tool": call.name, "result": result})
                 next_input.append(
                     {

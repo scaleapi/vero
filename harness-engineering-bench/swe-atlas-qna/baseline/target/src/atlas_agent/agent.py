@@ -251,7 +251,13 @@ class AtlasAgent(BaseAgent):
                         submitted = True
                     else:
                         result = {"error": f"unknown tool: {call.function.name}"}
-                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    OSError,
+                    TypeError,
+                    ValueError,
+                ) as error:
                     result = {"error": f"invalid arguments: {error}"}
                 self._trace({"turn": turn, "tool": call.function.name, "result": result})
                 messages.append(
