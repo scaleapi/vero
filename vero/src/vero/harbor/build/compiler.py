@@ -21,9 +21,9 @@ from vero.evaluation import (
     EvaluationSet,
     RetryPolicy,
 )
+from vero.gateway.inference import generate_inference_token, token_digest
 from vero.harbor.build.config import HarborBuildConfig, WorkspaceOverlaySpec
-from vero.harbor.inference import generate_inference_token, token_digest
-from vero.harbor.layout import LAYOUT
+from vero.layout import LAYOUT
 
 logger = logging.getLogger(__name__)
 

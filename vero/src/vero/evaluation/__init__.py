@@ -1,14 +1,28 @@
-"""Public evaluation contracts for VeRO."""
+"""Backend-neutral evaluation: what a score is, and how one is produced.
 
-from vero.evaluation.backend import (
+Layered, and the layering is the reading order: ``models``/``exceptions`` define
+the vocabulary; ``scoring`` turns raw results into a trustworthy number;
+``store`` persists records and the budget ledger; ``backends`` execute one case;
+``evaluator`` runs one evaluation; ``engine`` authorizes and orchestrates.
+
+Nothing here knows about containers or trust boundaries — that is
+``vero.sidecar``. Everything below is re-exported here, so the subpackages are an
+internal grouping rather than a public surface.
+"""
+
+from vero.evaluation.backends.base import (
     BackendRegistry,
     CaseResourceExporter,
     CaseStore,
     EvaluationBackend,
     EvaluationContext,
 )
-from vero.evaluation.budget import BudgetLedger
-from vero.evaluation.command import CommandBackend, CommandBackendConfig
+from vero.evaluation.backends.command import CommandBackend, CommandBackendConfig
+from vero.evaluation.backends.python_task import (
+    PythonTaskBackend,
+    PythonTaskBackendConfig,
+    PythonTaskEvaluationConfig,
+)
 from vero.evaluation.engine import (
     AuthorizationResolver,
     EvaluationEngine,
@@ -67,24 +81,20 @@ from vero.evaluation.models import (
     ObjectiveSpec,
     RetryPolicy,
 )
-from vero.evaluation.objective import (
+from vero.evaluation.scoring.objective import (
     compare_evaluation_records,
     evaluate_objective,
     project_evaluation,
     resolve_metric,
     select_best_evaluation,
 )
-from vero.evaluation.persistence import (
+from vero.evaluation.store.budget import BudgetLedger
+from vero.evaluation.store.persistence import (
     CaseCheckpointStore,
     EvaluationDatabase,
     EvaluationManifest,
     EvaluationStore,
     RunningEvaluationManifest,
-)
-from vero.evaluation.python_task import (
-    PythonTaskBackend,
-    PythonTaskBackendConfig,
-    PythonTaskEvaluationConfig,
 )
 
 __all__ = [

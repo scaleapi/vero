@@ -13,10 +13,10 @@ from typing import Any
 from vero.candidate import Candidate
 from vero.candidate_repository import GitCandidateRepository
 from vero.evaluation import EvaluationDatabase
-from vero.harbor.session import HarborSessionManifest
-from vero.harbor.verifier import VerificationResult
 from vero.runtime.events import RuntimeEvent
 from vero.runtime.session import SessionManifest
+from vero.sidecar.session import HarborSessionManifest
+from vero.sidecar.verifier import VerificationResult
 
 _MAX_EMBEDDED_ARTIFACT_BYTES = 5_000_000
 _MAX_EMBEDDED_ARTIFACTS_BYTES = 50_000_000

@@ -21,7 +21,7 @@ from vero.evaluation import (
     ObjectiveResult,
     ObjectiveSpec,
 )
-from vero.harbor import (
+from vero.sidecar import (
     CanonicalVerifier,
     Submission,
     VerificationSelection,

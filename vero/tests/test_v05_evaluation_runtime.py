@@ -9,7 +9,8 @@ from pathlib import Path
 
 import pytest
 
-import vero.evaluation.budget as budget_module
+import vero.evaluation.store.budget as budget_module
+import vero.evaluation.store.persistence as persistence
 from vero.candidate import Candidate
 from vero.evaluation import (
     AgentSelectionMode,
@@ -47,7 +48,6 @@ from vero.evaluation import (
     ObjectiveSpec,
     allow_all_evaluations,
     authorize_evaluation_plan,
-    persistence,
 )
 from vero.workspace import Workspace
 

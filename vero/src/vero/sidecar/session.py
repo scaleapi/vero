@@ -17,9 +17,9 @@ from typing import Literal
 from pydantic import field_validator
 
 from vero.evaluation import BackendProvenance
-from vero.evaluation.persistence import _atomic_write_json
-from vero.harbor.verifier import VerificationSelection, VerificationTarget
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
+from vero.sidecar.verifier import VerificationSelection, VerificationTarget
 
 logger = logging.getLogger(__name__)
 

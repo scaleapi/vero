@@ -10,7 +10,7 @@ default backend.
 Status: interface skeleton. The full wiring (drive a ``harbor run`` for the
 proposal's agent, then import the resulting commit into the session candidate
 repository by object identity) is a follow-on; it reuses the existing
-:class:`~vero.harbor.transport.GitCandidateTransport` and the ``harbor.backend``
+:class:`~vero.sidecar.transport.GitCandidateTransport` and the ``harbor.backend``
 nesting rather than re-hosting Harbor's sidecar/gateway.
 """
 

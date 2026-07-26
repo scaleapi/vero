@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from vero.evaluation.backend import EvaluationContext
+from vero.evaluation.backends.base import EvaluationContext
 from vero.evaluation.models import (
     AllCases,
     BackendProvenance,
@@ -27,7 +27,7 @@ from vero.evaluation.models import (
     EvaluationSet,
     EvaluationStatus,
 )
-from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
+from vero.evaluation.scoring.security import sanitize_evaluation_report, sanitize_text
 from vero.models import StrictModel
 from vero.sandbox import Sandbox
 from vero.staging import SandboxStagingArea

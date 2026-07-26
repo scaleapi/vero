@@ -13,13 +13,13 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveSpec,
 )
-from vero.harbor.session import (
+from vero.sidecar.session import (
     HarborSessionManifest,
     create_harbor_session_archive,
     extract_harbor_session_archive,
     file_sha256,
 )
-from vero.harbor.verifier import VerificationSelection, VerificationTarget
+from vero.sidecar.verifier import VerificationSelection, VerificationTarget
 
 
 def _manifest() -> HarborSessionManifest:

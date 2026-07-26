@@ -21,9 +21,10 @@ from vero.evaluation import (
     EvaluationRequestError,
 )
 from vero.evaluation.exceptions import EvaluationExecutionError
-from vero.harbor.auth import check_admin_token
-from vero.harbor.session import create_harbor_session_archive
-from vero.harbor.sidecar import (
+from vero.models import StrictModel
+from vero.sidecar.auth import check_admin_token
+from vero.sidecar.session import create_harbor_session_archive
+from vero.sidecar.sidecar import (
     EvaluationAccessError,
     EvaluationJobNotFoundError,
     EvaluationJobStatus,
@@ -32,9 +33,8 @@ from vero.harbor.sidecar import (
     SidecarEvaluationResult,
     SubmissionDisabledError,
 )
-from vero.harbor.transport import CandidateTransferError
-from vero.harbor.verifier import CanonicalVerifier
-from vero.models import StrictModel
+from vero.sidecar.transport import CandidateTransferError
+from vero.sidecar.verifier import CanonicalVerifier
 
 if TYPE_CHECKING:
     from vero.runtime.wandb import InferenceTelemetryPoller

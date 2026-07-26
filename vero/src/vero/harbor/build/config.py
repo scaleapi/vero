@@ -152,7 +152,7 @@ class InferenceGatewaySpec(StrictModel):
     only against a non-adversarial optimizer: the scopes share a gateway host and
     are split by URL path, so an optimizer that smuggles its own token into the
     candidate can reach the producer scope from the eval sandbox. See the proxy
-    handler in vero.harbor.inference for the full note.
+    handler in vero.gateway.inference for the full note.
 
     Attributes:
         upstream_api_key_env: Environment variable on the build host holding the

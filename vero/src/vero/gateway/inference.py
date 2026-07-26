@@ -21,8 +21,8 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import Field, field_validator, model_validator
 
-from vero.evaluation.persistence import _atomic_write_json
-from vero.harbor.layout import LAYOUT
+from vero.evaluation.store.persistence import _atomic_write_json
+from vero.layout import LAYOUT
 from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)

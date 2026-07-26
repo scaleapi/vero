@@ -21,19 +21,19 @@ from vero.evaluation import (
     EvaluationRequestError,
     EvaluationStatus,
 )
-from vero.harbor.app import create_app
-from vero.harbor.auth import (
-    check_admin_token,
-    read_admin_token,
-    write_admin_token,
-)
 from vero.harbor.cli import (
     _compiled_run_environment,
     _load_agent_trace,
     _load_env_file,
     harbor,
 )
-from vero.harbor.sidecar import (
+from vero.sidecar.app import create_app
+from vero.sidecar.auth import (
+    check_admin_token,
+    read_admin_token,
+    write_admin_token,
+)
+from vero.sidecar.sidecar import (
     EvaluationAccessError,
     EvaluationJobNotFoundError,
     EvaluationJobStatus,
@@ -42,7 +42,7 @@ from vero.harbor.sidecar import (
     SidecarStatus,
     Submission,
 )
-from vero.harbor.verifier import VerificationResult
+from vero.sidecar.verifier import VerificationResult
 
 
 class FakeSidecar:
@@ -369,7 +369,7 @@ def test_http_app_separates_agent_and_admin_surfaces(tmp_path, monkeypatch):
         destination.write_bytes(b"portable-session")
         return destination
 
-    monkeypatch.setattr("vero.harbor.app.create_harbor_session_archive", create_archive)
+    monkeypatch.setattr("vero.sidecar.app.create_harbor_session_archive", create_archive)
     client = TestClient(
         create_app(
             sidecar=sidecar,

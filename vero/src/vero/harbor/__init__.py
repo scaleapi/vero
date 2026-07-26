@@ -1,4 +1,15 @@
-"""Harbor adapters for canonical VeRO evaluation backends."""
+"""Harbor as VeRO's task substrate: compile a task, and evaluate on it.
+
+``build`` compiles a benchmark's build YAML into a runnable Harbor task
+directory. ``backend`` evaluates one candidate by nesting a ``harbor run`` per
+case — a peer of the backends in ``vero.evaluation.backends``. ``deployment`` is
+the standard sidecar factory, and the one module that binds the trusted runtime
+in ``vero.sidecar`` to a Harbor-backed evaluation; a task with a command backend
+uses the same runtime and no Harbor backend at all.
+
+The trusted runtime itself lives in ``vero.sidecar``, and the inference gateway
+in ``vero.gateway``. Neither is a Harbor concept.
+"""
 
 from vero.harbor.backend import HarborBackend, HarborBackendConfig, HarborCase
 from vero.harbor.build import (
@@ -14,40 +25,12 @@ from vero.harbor.build import (
     load_harbor_build_config,
 )
 from vero.harbor.deployment import HarborDeploymentConfig, build_harbor_components
-from vero.harbor.session import HarborSessionManifest
-from vero.harbor.sidecar import (
-    EvaluationAccessError,
-    EvaluationAccessStatus,
-    EvaluationJobNotFoundError,
-    EvaluationJobStatus,
-    EvaluationSidecar,
-    SidecarEvaluationJob,
-    SidecarEvaluationPolicy,
-    SidecarEvaluationRequest,
-    SidecarEvaluationResult,
-    SidecarStatus,
-    Submission,
-    SubmissionDisabledError,
-)
-from vero.harbor.transport import (
-    CandidateTransferError,
-    CandidateTransport,
-    GitCandidateTransport,
-)
-from vero.harbor.verifier import (
-    CanonicalVerifier,
-    NoCandidateError,
-    VerificationResult,
-    VerificationSelection,
-    VerificationTarget,
-)
 
 __all__ = [
     "HarborBackend",
     "HarborBackendConfig",
     "HarborCase",
     "HarborDeploymentConfig",
-    "HarborSessionManifest",
     "AgentAccessSpec",
     "CommandBackendSpec",
     "HarborBuildConfig",
@@ -56,26 +39,6 @@ __all__ = [
     "VerificationTargetSpec",
     "WandbSpec",
     "WorkspaceOverlaySpec",
-    "CandidateTransferError",
-    "CandidateTransport",
-    "EvaluationAccessError",
-    "EvaluationJobNotFoundError",
-    "EvaluationJobStatus",
-    "SidecarEvaluationPolicy",
-    "EvaluationAccessStatus",
-    "EvaluationSidecar",
-    "SidecarEvaluationJob",
-    "GitCandidateTransport",
-    "SidecarEvaluationRequest",
-    "SidecarEvaluationResult",
-    "SidecarStatus",
-    "Submission",
-    "SubmissionDisabledError",
-    "CanonicalVerifier",
-    "NoCandidateError",
-    "VerificationResult",
-    "VerificationSelection",
-    "VerificationTarget",
     "build_harbor_components",
     "compile_harbor_task",
     "load_harbor_build_config",

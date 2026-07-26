@@ -3,7 +3,7 @@
 Runs inside a throwaway Linux container (the CI/dev host may be macOS, where the
 uid-drop is unavailable) and asserts, against the *real* privilege drop
 (``vero.sandbox.LocalSandbox.run(run_as=...)``) and the *real* provisioning
-commands (``vero.harbor.isolation``), that:
+commands (``vero.sidecar.isolation``), that:
 
 * a candidate checkout under a ``mktemp -d`` (0700 root) parent is UNreachable to
   the dropped user when only the leaf is chowned (the regression sentinel — this
@@ -65,7 +65,7 @@ def _load(name, path):
 
 # Real modules, loaded standalone (stdlib-only) — no vero install needed.
 sbx = _load("_vero_sandbox", "/vero-src/vero/sandbox.py")
-iso = _load("_vero_isolation", "/vero-src/vero/harbor/isolation.py")
+iso = _load("_vero_isolation", "/vero-src/vero/sidecar/isolation.py")
 
 subprocess.run(["useradd", "-m", "-u", "1002", "harness"], check=True)
 sandbox = sbx.LocalSandbox("/")  # run_as drops privileges from this root process

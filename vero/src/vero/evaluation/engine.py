@@ -10,9 +10,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable
 
-from vero.evaluation.backend import BackendRegistry
-from vero.evaluation.budget import BudgetLedger
-from vero.evaluation.error_taxonomy import TERMINATING_DIAGNOSTIC_CODES
+from vero.evaluation.backends.base import BackendRegistry
 from vero.evaluation.evaluator import Evaluator
 from vero.evaluation.exceptions import (
     EvaluationCancelledError,
@@ -35,8 +33,10 @@ from vero.evaluation.models import (
     EvaluationSummary,
     ObjectiveSpec,
 )
-from vero.evaluation.objective import project_evaluation
-from vero.evaluation.persistence import EvaluationDatabase, EvaluationStore
+from vero.evaluation.scoring.error_taxonomy import TERMINATING_DIAGNOSTIC_CODES
+from vero.evaluation.scoring.objective import project_evaluation
+from vero.evaluation.store.budget import BudgetLedger
+from vero.evaluation.store.persistence import EvaluationDatabase, EvaluationStore
 
 logger = logging.getLogger(__name__)
 

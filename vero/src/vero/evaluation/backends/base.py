@@ -1,4 +1,9 @@
-"""Evaluation backend protocol and trusted backend registry."""
+"""Evaluation backend protocol and trusted backend registry.
+
+Implementations: ``command`` and ``python_task`` here, plus ``HarborBackend`` in
+``vero.harbor.backend`` — a peer of those two, kept in that package because it
+depends on Harbor machinery this one must not.
+"""
 
 from __future__ import annotations
 

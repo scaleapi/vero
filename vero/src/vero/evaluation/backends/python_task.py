@@ -9,8 +9,8 @@ from pathlib import Path, PurePosixPath
 
 from pydantic import Field, field_validator, model_validator
 
-from vero.evaluation.backend import EvaluationContext
-from vero.evaluation.command import CommandBackend, CommandBackendConfig
+from vero.evaluation.backends.base import EvaluationContext
+from vero.evaluation.backends.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.models import (
     AllCases,
     BackendProvenance,

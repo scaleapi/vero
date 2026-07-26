@@ -24,14 +24,14 @@ from vero.evaluation import (
     EvaluationSet,
     RetryPolicy,
 )
-from vero.harbor.auth import read_admin_token
-from vero.harbor.layout import LAYOUT
-from vero.harbor.session import (
+from vero.layout import LAYOUT
+from vero.sidecar.auth import read_admin_token
+from vero.sidecar.session import (
     create_harbor_session_archive,
     extract_harbor_session_archive,
     file_sha256,
 )
-from vero.harbor.sidecar import SidecarEvaluationRequest
+from vero.sidecar.sidecar import SidecarEvaluationRequest
 
 
 def _base_url() -> str:
@@ -467,7 +467,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
 @click.option("--port", default=8000, type=click.IntRange(1, 65535), show_default=True)
 def serve_command(factory_path, config_path, admin_token_path, host, port):
     """Serve components built by a trusted deployment factory."""
-    from vero.harbor.serve import serve
+    from vero.sidecar.serve import serve
 
     serve(
         factory_path=factory_path,
@@ -489,7 +489,7 @@ def serve_command(factory_path, config_path, admin_token_path, host, port):
 @click.option("--port", default=8001, type=click.IntRange(1, 65535), show_default=True)
 def inference_gateway_command(config_path, host, port):
     """Serve the credential-isolating, budgeted inference proxy."""
-    from vero.harbor.inference import serve_inference_gateway
+    from vero.gateway.inference import serve_inference_gateway
 
     serve_inference_gateway(config_path=config_path, host=host, port=port)
 

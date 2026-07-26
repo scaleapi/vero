@@ -37,8 +37,7 @@ from vero.evaluation import (
     project_evaluation,
 )
 from vero.evaluation.engine import EvaluationEngine
-from vero.evaluation.persistence import _atomic_write_json
-from vero.harbor.transport import CandidateTransferError, CandidateTransport
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
 from vero.runtime.context import (
     CANDIDATES_SUBDIRECTORY,
@@ -50,6 +49,7 @@ from vero.runtime.context import (
     narrower_disclosure,
 )
 from vero.sandbox import LocalSandbox
+from vero.sidecar.transport import CandidateTransferError, CandidateTransport
 
 
 class EvaluationAccessError(RuntimeError):

@@ -36,7 +36,9 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveSpec,
 )
-from vero.harbor import (
+from vero.runtime.context import context_digest
+from vero.sandbox import LocalSandbox
+from vero.sidecar import (
     EvaluationAccessError,
     EvaluationJobStatus,
     EvaluationSidecar,
@@ -45,8 +47,6 @@ from vero.harbor import (
     SidecarEvaluationRequest,
     SubmissionDisabledError,
 )
-from vero.runtime.context import context_digest
-from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace, Workspace
 
 

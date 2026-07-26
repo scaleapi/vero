@@ -14,7 +14,7 @@ from vero.evaluation.models import (
     EvaluationPrincipal,
     EvaluationSet,
 )
-from vero.evaluation.persistence import _atomic_write_json
+from vero.evaluation.store.persistence import _atomic_write_json
 
 
 class BudgetLedger:

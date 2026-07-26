@@ -29,7 +29,7 @@ from vero.evaluation import (
     EvaluationSummary,
     project_evaluation,
 )
-from vero.evaluation.persistence import _atomic_write_json
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace

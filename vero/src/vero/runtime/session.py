@@ -23,7 +23,7 @@ from vero.evaluation import (
     EvaluationRecord,
     ObjectiveSpec,
 )
-from vero.evaluation.persistence import _atomic_write_json
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
 from vero.optimization import OptimizationResult, Optimizer
 from vero.runtime.artifacts import ArtifactStore

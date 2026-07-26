@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from vero.candidate import Candidate
 from vero.candidate_repository import CandidateRepository
-from vero.evaluation.backend import EvaluationBackend, EvaluationContext
+from vero.evaluation.backends.base import EvaluationBackend, EvaluationContext
 from vero.evaluation.exceptions import (
     EvaluationCancelledError,
     EvaluationExecutionError,
@@ -27,8 +27,8 @@ from vero.evaluation.models import (
     EvaluationStatus,
     ObjectiveSpec,
 )
-from vero.evaluation.objective import evaluate_objective
-from vero.evaluation.persistence import EvaluationStore
+from vero.evaluation.scoring.objective import evaluate_objective
+from vero.evaluation.store.persistence import EvaluationStore
 from vero.sandbox import Sandbox
 from vero.workspace import Workspace
 

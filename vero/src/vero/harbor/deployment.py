@@ -21,20 +21,20 @@ from vero.evaluation import (
     Evaluator,
     ObjectiveSpec,
 )
-from vero.evaluation.command import CommandBackend, CommandBackendConfig
+from vero.evaluation.backends.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
-from vero.harbor.serve import SidecarComponents
-from vero.harbor.session import initialize_harbor_session_manifest
-from vero.harbor.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
-from vero.harbor.transport import GitCandidateTransport
-from vero.harbor.verifier import (
+from vero.models import StrictModel
+from vero.sandbox import LocalSandbox
+from vero.sidecar.serve import SidecarComponents
+from vero.sidecar.session import initialize_harbor_session_manifest
+from vero.sidecar.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
+from vero.sidecar.transport import GitCandidateTransport
+from vero.sidecar.verifier import (
     CanonicalVerifier,
     VerificationSelection,
     VerificationTarget,
 )
-from vero.models import StrictModel
-from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace
 
 logger = logging.getLogger(__name__)

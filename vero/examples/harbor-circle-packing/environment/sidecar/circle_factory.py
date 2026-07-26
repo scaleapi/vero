@@ -24,17 +24,17 @@ from vero.evaluation import (
     MetricSelector,
     ObjectiveSpec,
 )
-from vero.evaluation.command import CommandBackend, CommandBackendConfig
+from vero.evaluation.backends.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.engine import EvaluationEngine
-from vero.harbor.serve import SidecarComponents
-from vero.harbor.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
-from vero.harbor.transport import GitCandidateTransport
-from vero.harbor.verifier import (
+from vero.sandbox import LocalSandbox
+from vero.sidecar.serve import SidecarComponents
+from vero.sidecar.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
+from vero.sidecar.transport import GitCandidateTransport
+from vero.sidecar.verifier import (
     CanonicalVerifier,
     VerificationSelection,
     VerificationTarget,
 )
-from vero.sandbox import LocalSandbox
 from vero.workspace import GitWorkspace
 
 SET = "circle-packing"

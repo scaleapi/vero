@@ -24,8 +24,8 @@ from vero.harbor import (
     load_harbor_build_config,
 )
 from vero.harbor.deployment import FACTORY_PATH
-from vero.harbor.layout import LAYOUT
-from vero.harbor.serve import load_factory
+from vero.layout import LAYOUT
+from vero.sidecar.serve import load_factory
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
 

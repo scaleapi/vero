@@ -6,7 +6,7 @@ import json
 import httpx
 from fastapi.testclient import TestClient
 
-from vero.harbor.inference import (
+from vero.gateway.inference import (
     InferenceGatewayConfig,
     InferenceScopeConfig,
     create_inference_gateway_app,
@@ -372,7 +372,7 @@ def test_gateway_releases_concurrency_reservation_on_upstream_failure(tmp_path):
 
 
 def _logged_config(tmp_path, **kwargs):
-    from vero.harbor.inference import InferenceRequestLogConfig
+    from vero.gateway.inference import InferenceRequestLogConfig
 
     config = _config(tmp_path, **kwargs)
     return config.model_copy(
@@ -461,7 +461,7 @@ def test_gateway_request_log_captures_responses_streams_and_denials(tmp_path):
 
 
 def test_gateway_request_log_truncates_and_rotates(tmp_path):
-    from vero.harbor.inference import InferenceRequestLogConfig
+    from vero.gateway.inference import InferenceRequestLogConfig
 
     config = _config(tmp_path, max_requests=None, max_tokens=None).model_copy(
         update={
@@ -495,7 +495,7 @@ def test_gateway_request_log_truncates_and_rotates(tmp_path):
 
 
 def test_gateway_request_log_rotation_boundary(tmp_path):
-    from vero.harbor.inference import InferenceRequestLog, InferenceRequestLogConfig
+    from vero.gateway.inference import InferenceRequestLog, InferenceRequestLogConfig
 
     log = InferenceRequestLog(
         InferenceRequestLogConfig(
@@ -521,7 +521,7 @@ def test_gateway_request_log_rotation_boundary(tmp_path):
 
 
 def _attributed_config(tmp_path, **kwargs):
-    from vero.harbor.inference import InferenceRequestLogConfig
+    from vero.gateway.inference import InferenceRequestLogConfig
 
     return _config(tmp_path, **kwargs).model_copy(
         update={
@@ -659,7 +659,7 @@ def test_gateway_attribution_never_breaks_proxying(tmp_path):
 
 
 def test_gateway_attribution_disabled_by_default_and_memory_bounded(tmp_path):
-    from vero.harbor.inference import _RequestAttributor
+    from vero.gateway.inference import _RequestAttributor
 
     # default config: no attributor, no thread fields in records
     app = create_inference_gateway_app(

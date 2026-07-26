@@ -22,7 +22,7 @@ from vero.evaluation import (
     RetryPolicy,
 )
 from vero.harbor import HarborBackend, HarborBackendConfig
-from vero.harbor.layout import LAYOUT
+from vero.layout import LAYOUT
 from vero.sandbox import CommandResult, LocalSandbox
 
 

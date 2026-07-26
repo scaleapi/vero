@@ -28,7 +28,7 @@ from vero.evaluation.models import (
     ObjectiveResult,
     ObjectiveSpec,
 )
-from vero.evaluation.objective import select_best_evaluation
+from vero.evaluation.scoring.objective import select_best_evaluation
 from vero.models import StrictModel
 
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 """Tests for the single source of truth error taxonomy."""
 
-from vero.evaluation.error_taxonomy import (
+from vero.evaluation.scoring.error_taxonomy import (
     ErrorCategory,
     classify_case,
     classify_signal,

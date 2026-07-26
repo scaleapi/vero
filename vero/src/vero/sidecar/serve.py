@@ -10,9 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from vero.harbor.auth import generate_admin_token, write_admin_token
-from vero.harbor.sidecar import EvaluationSidecar
-from vero.harbor.verifier import CanonicalVerifier
+from vero.sidecar.auth import generate_admin_token, write_admin_token
+from vero.sidecar.sidecar import EvaluationSidecar
+from vero.sidecar.verifier import CanonicalVerifier
 
 if TYPE_CHECKING:
     from vero.runtime.wandb import InferenceTelemetryPoller
@@ -68,7 +68,7 @@ async def build_app(
     config_path: Path | str,
     admin_token_path: Path | str,
 ):
-    from vero.harbor.app import create_app
+    from vero.sidecar.app import create_app
 
     components = await build_components(
         factory_path=factory_path,

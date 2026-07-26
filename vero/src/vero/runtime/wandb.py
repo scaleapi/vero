@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from vero.evaluation.budget import BudgetLedger
 from vero.evaluation.models import CaseStatus, EvaluationRecord
+from vero.evaluation.store.budget import BudgetLedger
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import RuntimeEvent
 

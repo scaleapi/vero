@@ -6,7 +6,7 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from vero.evaluation.persistence import _atomic_write_json
+from vero.evaluation.store.persistence import _atomic_write_json
 
 
 class ArtifactStore:

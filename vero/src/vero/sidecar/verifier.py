@@ -23,9 +23,9 @@ from vero.evaluation import (
     ObjectiveSpec,
 )
 from vero.evaluation.engine import EvaluationEngine
-from vero.evaluation.persistence import _atomic_write_json
-from vero.harbor.sidecar import Submission
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
+from vero.sidecar.sidecar import Submission
 
 logger = logging.getLogger(__name__)
 

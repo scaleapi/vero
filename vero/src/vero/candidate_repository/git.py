@@ -18,7 +18,7 @@ from pydantic import field_validator
 
 from vero.candidate import Candidate
 from vero.candidate_repository.base import CandidateRepository, CandidateRepositoryError
-from vero.evaluation.persistence import _atomic_write_json
+from vero.evaluation.store.persistence import _atomic_write_json
 from vero.models import StrictModel
 from vero.sandbox import LocalSandbox, Sandbox
 from vero.workspace import GitWorkspace, Workspace

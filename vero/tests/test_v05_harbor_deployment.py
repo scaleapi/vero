@@ -17,11 +17,13 @@ from vero.evaluation import (
 )
 from vero.harbor import (
     HarborBackendConfig,
-    SidecarEvaluationPolicy,
-    VerificationTarget,
     build_harbor_components,
 )
 from vero.report import generate_experiment_report
+from vero.sidecar import (
+    SidecarEvaluationPolicy,
+    VerificationTarget,
+)
 
 
 def _git(path: Path, *arguments: str) -> str:

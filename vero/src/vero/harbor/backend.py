@@ -20,13 +20,7 @@ from typing import Any, Literal
 
 from pydantic import Field, JsonValue, field_validator, model_validator
 
-from vero.evaluation.backend import EvaluationContext
-from vero.evaluation.error_taxonomy import (
-    NO_REWARD_SIGNAL,
-    ErrorCategory,
-    classify_case,
-    policy,
-)
+from vero.evaluation.backends.base import EvaluationContext
 from vero.evaluation.models import (
     AllCases,
     BackendProvenance,
@@ -44,11 +38,17 @@ from vero.evaluation.models import (
     EvaluationSet,
     EvaluationStatus,
 )
-from vero.evaluation.security import sanitize_evaluation_report, sanitize_text
-from vero.harbor.isolation import harness_grant_commands, harness_reachability_probe
-from vero.harbor.layout import LAYOUT
+from vero.evaluation.scoring.error_taxonomy import (
+    NO_REWARD_SIGNAL,
+    ErrorCategory,
+    classify_case,
+    policy,
+)
+from vero.evaluation.scoring.security import sanitize_evaluation_report, sanitize_text
+from vero.layout import LAYOUT
 from vero.models import StrictModel
 from vero.sandbox import CommandResult, Sandbox
+from vero.sidecar.isolation import harness_grant_commands, harness_reachability_probe
 from vero.staging import SandboxStagingArea
 
 logger = logging.getLogger(__name__)
@@ -1319,7 +1319,7 @@ class HarborBackend:
                 if self.config.harness_user is not None:
                     # Hand the harness user its work dirs and make the checkout
                     # reachable (the parent that `mktemp -d` left 0700 root); see
-                    # vero.harbor.isolation for the why.
+                    # vero.sidecar.isolation for the why.
                     for provision_command in harness_grant_commands(
                         self.config.harness_user,
                         chown_paths=[context.workspace.project_path, staging.root],
