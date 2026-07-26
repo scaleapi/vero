@@ -31,6 +31,7 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
+    baseline_reward: 0.5736  # held-out K=3 mean (see CONFIGURATION.md)
     failure_value: 0.0
     max_attempts: 1
 
@@ -41,7 +42,7 @@ objective:
   direction: maximize
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
-score_baseline: true
+score_baseline: false
 rescore_top_k: 3
 rescore_attempts: 1
 
