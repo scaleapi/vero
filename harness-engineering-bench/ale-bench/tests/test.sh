@@ -1,5 +1,0 @@
-#!/bin/sh
-set -eu
-mkdir -p /logs/verifier
-vero harbor finalize --token-file /state/token/admin.token --output /logs/verifier/reward.json
-cat /logs/verifier/reward.json
