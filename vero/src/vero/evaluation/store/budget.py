@@ -17,6 +17,33 @@ from vero.evaluation.models import (
 from vero.evaluation.store.persistence import _atomic_write_json
 
 
+async def _drain_write(
+    task: asyncio.Task[None],
+) -> tuple[BaseException | None, asyncio.CancelledError | None]:
+    """Run a durable write to completion and report both possible outcomes.
+
+    Returns ``(write_error, cancellation)`` and never raises. Draining to
+    completion matters because a write left running in the background could
+    overwrite a later one once the ledger lock is released; returning both
+    outcomes rather than raising one matters because a cancellation must never
+    be swallowed by a write failure. Every call site below got that second part
+    wrong at least once while each was hand-rolling this loop, which is why
+    there is now one copy.
+    """
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except Exception:
+            # The write failed, so the task is done: stop draining and let the
+            # caller decide what the failure means.
+            break
+    write_error = None if task.cancelled() else task.exception()
+    return write_error, cancellation
+
+
 class BudgetLedger:
     """Atomically meter completed evaluations against configured budgets."""
 
@@ -59,6 +86,15 @@ class BudgetLedger:
             (backend_id, evaluation_set.budget_key(backend_id), principal)
         )
 
+    def _write_task(
+        self,
+        state: dict[tuple[str, str, EvaluationPrincipal], EvaluationBudget],
+    ) -> asyncio.Task[None]:
+        """Start a durable write of one ledger state. Drain it with _drain_write."""
+        return asyncio.create_task(
+            asyncio.to_thread(_atomic_write_json, self.path, self._serialize(state))
+        )
+
     async def reserve(
         self,
         backend_id: str,
@@ -93,58 +129,26 @@ class BudgetLedger:
             snapshot = dict(self._budgets)
             snapshot[key] = updated
             if self.path is not None:
-                write = asyncio.create_task(
-                    asyncio.to_thread(
-                        _atomic_write_json,
-                        self.path,
-                        self._serialize(snapshot),
-                    )
+                write_error, cancellation = await _drain_write(
+                    self._write_task(snapshot)
                 )
-                cancellation: asyncio.CancelledError | None = None
-                while not write.done():
-                    try:
-                        await asyncio.shield(write)
-                    except asyncio.CancelledError as error:
-                        cancellation = error
-                write.result()
                 if cancellation is not None:
                     # The run requesting this reservation is being cancelled and
                     # will never use it. Roll the durable charge back so the
                     # reservation is atomic — committed in full or not at all —
                     # and a cancelled reservation never leaks budget. (In-memory
                     # state was never updated, so we rewrite it as the truth.)
-                    # Drain the rollback to completion even if a further
-                    # cancellation arrives, so it cannot linger in the background
-                    # and overwrite a later reservation once the lock is released.
-                    rollback = asyncio.create_task(
-                        asyncio.to_thread(
-                            _atomic_write_json,
-                            self.path,
-                            self._serialize(self._budgets),
+                    # Nothing to roll back if the charge never landed.
+                    if write_error is None:
+                        write_error, _ = await _drain_write(
+                            self._write_task(self._budgets)
                         )
-                    )
-                    while not rollback.done():
-                        try:
-                            await asyncio.shield(rollback)
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            # The rollback write failed; the task is now done,
-                            # so exit the drain and surface it below.
-                            break
-                    # The originating cancellation must propagate even if the
-                    # rollback write itself failed — swallowing CancelledError
-                    # for an OSError would break structured cancellation and
-                    # hide that the run was cancelled. Chain the write error so
-                    # the durable-state inconsistency stays diagnosable.
-                    write_error = (
-                        None if rollback.cancelled() else rollback.exception()
-                    )
-                    if write_error is not None:
-                        raise cancellation from write_error
-                    raise cancellation
-                self._budgets = snapshot
-                return updated
+                    # Chain whichever write failed so the durable-state
+                    # inconsistency stays diagnosable, but always propagate the
+                    # cancellation itself.
+                    raise cancellation from write_error
+                if write_error is not None:
+                    raise write_error
             self._budgets = snapshot
             return updated
 
@@ -181,30 +185,18 @@ class BudgetLedger:
             snapshot = dict(self._budgets)
             snapshot[key] = updated
             if self.path is not None:
-                write = asyncio.create_task(
-                    asyncio.to_thread(
-                        _atomic_write_json,
-                        self.path,
-                        self._serialize(snapshot),
-                    )
+                write_error, cancellation = await _drain_write(
+                    self._write_task(snapshot)
                 )
-                cancellation: asyncio.CancelledError | None = None
-                while not write.done():
-                    try:
-                        await asyncio.shield(write)
-                    except asyncio.CancelledError as error:
-                        cancellation = error
-                    except Exception:
-                        # The write failed; the task is done, exit the drain.
-                        break
-                try:
-                    write.result()
-                except Exception as error:
+                if write_error is not None:
                     # A failed durable refund must not swallow the cancellation
                     # of the run being torn down; chain the write error.
                     if cancellation is not None:
-                        raise cancellation from error
-                    raise
+                        raise cancellation from write_error
+                    raise write_error
+                # Unlike reserve, a refund that landed is never rolled back: it
+                # only ever returns budget, so committing it is safe even for a
+                # run that is going away.
                 self._budgets = snapshot
                 if cancellation is not None:
                     raise cancellation

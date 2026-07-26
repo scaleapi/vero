@@ -669,6 +669,50 @@ async def test_reserve_rollback_write_failure_preserves_cancellation(
 
 
 @pytest.mark.asyncio
+async def test_reserve_charge_write_failure_preserves_cancellation(
+    tmp_path: Path,
+    monkeypatch,
+):
+    # The third of the three durable writes in this module, and the one that
+    # was still hand-rolling the drain loop: if the charge write itself fails
+    # while the run is being cancelled, the caller must still see the
+    # cancellation. Returning OSError instead breaks structured cancellation
+    # and hides that the run went away.
+    evaluation_set = EvaluationSet(name="performance")
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="command",
+                evaluation_set_key=evaluation_set.budget_key("command"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budget.json",
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_failing_write(write_path, value):
+        started.set()
+        assert release.wait(timeout=5)
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(budget_module, "_atomic_write_json", blocking_failing_write)
+    reservation = asyncio.create_task(
+        ledger.reserve("command", evaluation_set, EvaluationCost(runs=1))
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    reservation.cancel()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError) as excinfo:
+        await reservation
+    assert isinstance(excinfo.value.__cause__, OSError)
+    # The charge never landed, so the budget is untouched on both sides.
+    assert ledger.get("command", evaluation_set).remaining_runs == 2
+
+
+@pytest.mark.asyncio
 async def test_refund_write_failure_preserves_cancellation(tmp_path: Path, monkeypatch):
     # A cancellation racing the durable refund write must win over the write's
     # own failure rather than being swallowed.
@@ -1029,6 +1073,8 @@ async def test_engine_selects_backend_persists_and_projects(tmp_path: Path):
     assert summary.metrics == {"value": 2.0}
     assert len(database.evaluations) == 1
     assert database_path.exists()
+
+
 @pytest.mark.asyncio
 async def test_engine_enforces_aggregate_k_anonymity_floor(tmp_path: Path):
     """The floor is a core-engine property, not a sidecar courtesy."""
@@ -1055,9 +1101,7 @@ async def test_engine_enforces_aggregate_k_anonymity_floor(tmp_path: Path):
     def request_with(selection) -> EvaluationRequest:
         return request().model_copy(
             update={
-                "evaluation_set": canonical.model_copy(
-                    update={"selection": selection}
-                )
+                "evaluation_set": canonical.model_copy(update={"selection": selection})
             }
         )
 
