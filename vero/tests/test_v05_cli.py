@@ -358,11 +358,85 @@ def test_preflight_blocks_only_on_a_definitively_missing_deployment(monkeypatch)
         )
     assert "dead-model (evaluation scope)" in str(raised.value)
     assert "DeploymentNotFound" in str(raised.value)
-    # The provider prefix is stripped before the gateway sees the name, so the
-    # probe has to use the same form the agent will send.
+    # A provider prefix routes on a proxy and is meaningless to a single
+    # provider endpoint, so the configured spelling is tried first.
     probed.clear()
     harbor_cli._preflight_models(_Build(_Gateway(["openai/gpt-4o"], ["gpt-4o"])))
-    assert probed == ["gpt-4o"]
+    assert probed == ["openai/gpt-4o", "gpt-4o"]
+
+
+def test_preflight_falls_back_to_the_bare_name_before_calling_a_model_missing(
+    monkeypatch,
+):
+    """One spelling 404ing is not evidence the model is absent.
+
+    Azure serves `gpt-5.3-codex` and 404s `openai/gpt-5.3-codex`; a routing
+    proxy does the reverse. Blocking on the first spelling would refuse a run
+    that would have worked.
+    """
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+    probed: list[str] = []
+
+    def _probe(base_url, api_key, model):
+        probed.append(model)
+        if "/" in model:
+            return 404, '{"error": {"code": "DeploymentNotFound"}}'
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_model", _probe)
+    harbor_cli._preflight_models(_Build(_Gateway(["openai/gpt-5.3-codex"], [])))
+    assert probed == ["openai/gpt-5.3-codex", "gpt-5.3-codex"]
+
+
+def test_probe_model_separates_a_missing_route_from_a_missing_model(monkeypatch):
+    """An upstream that serves only Chat Completions must not read as missing.
+
+    Both failures are HTTP 404 and they mean opposite things, so the body is
+    the only discriminator. gaia's agent uses the Responses API and the rest
+    use Chat Completions, so either route may legitimately be absent.
+    """
+    from vero.harbor import cli as harbor_cli
+
+    seen: list[str] = []
+
+    def _route(base_url, api_key, model, route, input_key):
+        seen.append(route)
+        if route == "/responses":
+            return 404, '{"detail": "Not Found"}'  # the route, not the model
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_route", _route)
+    assert harbor_cli._probe_model("https://x/v1", "k", "m") == (200, "")
+    assert seen == ["/responses", "/chat/completions"]
+
+    # A model-level 404 on the first route is conclusive: do not keep probing.
+    seen.clear()
+    monkeypatch.setattr(
+        harbor_cli,
+        "_probe_route",
+        lambda b, k, m, route, i: (
+            seen.append(route),
+            (404, '{"error": {"code": "DeploymentNotFound"}}'),
+        )[1],
+    )
+    status, _ = harbor_cli._probe_model("https://x/v1", "k", "m")
+    assert status == 404
+    assert seen == ["/responses"]
+
+    # Neither route served: inconclusive, so the run is allowed to proceed.
+    seen.clear()
+    monkeypatch.setattr(
+        harbor_cli,
+        "_probe_route",
+        lambda b, k, m, route, i: (seen.append(route), (404, "<html>404</html>"))[1],
+    )
+    status, body = harbor_cli._probe_model("https://x/v1", "k", "m")
+    assert status is None
+    assert seen == ["/responses", "/chat/completions"]
+    assert "not served by this upstream" in body
 
 
 def test_preflight_does_not_block_on_inconclusive_upstream_failures(monkeypatch):
