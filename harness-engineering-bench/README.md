@@ -36,4 +36,3 @@ promote a task set to the top level once it is ready.
 | [SWE-Atlas-QnA baseline](swe-atlas-qna/baseline/) | Codebase investigation agent | Harbor `scale-ai/swe-atlas-qna` | 20% / 40% / 40% |
 | [tau3 baseline](tau3/baseline/) | MCP customer-service agent | Harbor `sierra-research/tau3-bench` | 20% / 40% / 40% |
 | [BrowseComp-Plus baseline](browsecomp-plus/baseline/) | Fixed-corpus deep-research agent | Pinned local Harbor tasks | 20% / 40% / 40% |
-| [ALE-Bench (ahc011)](ale-bench/) | C++ solver program (component, not an agent) | ALE-Bench AHC problem | public / private seeds |
