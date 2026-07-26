@@ -321,9 +321,12 @@ class Tau3Agent(BaseAgent):
                 "tools": openai_tools,
                 "max_tokens": 8_000,
             }
-            # OpenAI reasoning models accept reasoning_effort; other providers
-            # (e.g. Fireworks-served open models) reject it.
-            if "fireworks" not in self._api_model:
+            # Only reasoning-capable models accept reasoning_effort. A provider
+            # check is not sufficient: Azure gpt-4o is not Fireworks and still
+            # rejects it with "Unrecognized request argument supplied:
+            # reasoning_effort".
+            _model = self._api_model.lower()
+            if _model.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in _model:
                 kwargs["reasoning_effort"] = "medium"
             response = await client.chat.completions.create(**kwargs)
             usage = response.usage
