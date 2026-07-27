@@ -646,6 +646,7 @@ def plan_command(context_path, as_json):
             {
                 "evaluation": evaluation.get("name"),
                 "partition": evaluation.get("partition"),
+                "cases": evaluation.get("cases"),
                 "can_evaluate": evaluation.get("agent_can_evaluate"),
                 "selection": evaluation.get("agent_selection"),
                 "disclosure": evaluation.get("disclosure"),
@@ -661,6 +662,7 @@ def plan_command(context_path, as_json):
         [
             "evaluation",
             "partition",
+            "cases",
             "can_evaluate",
             "selection",
             "disclosure",

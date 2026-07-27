@@ -17,7 +17,7 @@ subcommand.
 ## The loop
 
 ```bash
-evals plan                             # what you may run, rules, remaining budget
+evals plan                             # what you may run, partition sizes, budget
 evals run --backend B --evaluation-set S --partition P   # BLOCKS, returns the result
 evals list --sort score --desc        # every past result, one row each
 evals diff BASELINE_ID CANDIDATE_ID   # which cases improved / regressed
@@ -47,7 +47,8 @@ nothing resumes you.
 
 - **`--start N --stop M`** or repeated **`--case-id ID`** — score a *subset*.
   Iterate on a handful of cases (cheap, fast) before spending budget on the full
-  set.
+  set. A range past the end of the partition is rejected, so read the `cases`
+  column of `evals plan` for the partition's size rather than guessing.
 - **`--seed N`** — backend-dependent, and several backends reject it outright
   (you get an `invalid evaluation request` naming the reason). Where it is
   refused, replicate a noisy comparison by re-running the *identical selection*

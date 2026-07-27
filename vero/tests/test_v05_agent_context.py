@@ -243,3 +243,51 @@ async def test_disclosure_ledger_survives_restart_and_never_broadens(tmp_path: P
         DisclosureLevel.NONE
     )
     assert AgentDisclosureLedger(path).get("evaluation") == DisclosureLevel.NONE
+
+
+@pytest.mark.asyncio
+async def test_evaluation_plan_reports_partition_size(tmp_path: Path):
+    """The plan carries each partition's case count.
+
+    Without it an agent sizing a subset can only guess a `--stop`, and learns the
+    bound from a rejected request — observed live, where an optimizer asked for
+    cases 20-70 of a 49-case partition and lost two evaluations to it.
+    """
+    from vero.evaluation import EvaluationAccessPolicy, EvaluationCost, EvaluationSet
+    from vero.runtime.context import ContextPlanEntry
+
+    class SizedBackend:
+        async def resolve_cost(self, evaluation_set) -> EvaluationCost:
+            return EvaluationCost(cases=49)
+
+    class UncostableBackend:
+        async def resolve_cost(self, evaluation_set):
+            raise RuntimeError("cannot cost this set")
+
+    directory = AgentContextDirectory(
+        sandbox=await LocalSandbox.create(root=tmp_path),
+        root=str(tmp_path / "ctx"),
+        session_dir=tmp_path / "session",
+    )
+    await directory.reset()
+    await directory.write_evaluation_plan(
+        [
+            ContextPlanEntry(
+                backend_id="harbor-development",
+                backend=SizedBackend(),
+                evaluation_set=EvaluationSet(name="bench", partition="development"),
+                access=EvaluationAccessPolicy(agent_can_evaluate=True),
+            ),
+            ContextPlanEntry(
+                backend_id="harbor-validation",
+                backend=UncostableBackend(),
+                evaluation_set=EvaluationSet(name="bench", partition="validation"),
+                access=EvaluationAccessPolicy(agent_can_evaluate=True),
+            ),
+        ]
+    )
+
+    plan = json.loads((tmp_path / "ctx" / "plan.json").read_text(encoding="utf-8"))
+    sizes = {row["partition"]: row["cases"] for row in plan["evaluations"]}
+    # A backend that cannot cost itself degrades to no count, not a broken plan.
+    assert sizes == {"development": 49, "validation": None}

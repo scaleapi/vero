@@ -432,10 +432,22 @@ it into the program: candidate versions that track `.evals` are rejected.
             access = entry.access
             if not access.agent_visible and not access.agent_can_evaluate:
                 continue
+            # Partition size, so the agent can size a subset instead of guessing
+            # a range and learning the bound from a rejected request. Advisory
+            # only: a backend that cannot cost its own base selection just
+            # reports no count rather than failing the whole plan.
+            resolve_cost = getattr(entry.backend, "resolve_cost", None)
+            case_count = None
+            if callable(resolve_cost):
+                try:
+                    case_count = (await resolve_cost(entry.evaluation_set)).cases
+                except Exception:
+                    case_count = None
             evaluations.append(
                 {
                     "name": entry.evaluation_set.name,
                     "partition": entry.evaluation_set.partition,
+                    "cases": case_count,
                     "base_selection": entry.evaluation_set.selection.model_dump(
                         mode="json"
                     ),
