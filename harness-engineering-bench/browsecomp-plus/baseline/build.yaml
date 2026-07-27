@@ -34,6 +34,13 @@ targets:
     baseline_reward: 0.4495  # held-out K=3 mean (see CONFIGURATION.md)
     failure_value: 0.0
     max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the pinned baseline, which was
+    # itself pooled over 3 rounds. Without this the candidate carries ~sqrt(3) more
+    # standard error than the floor it is judged against.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
 
 evaluation_set_name: browsecomp-plus
 objective:

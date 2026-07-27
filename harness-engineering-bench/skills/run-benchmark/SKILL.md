@@ -81,8 +81,10 @@ Notes that bite if you get them wrong:
   `runs/<benchmark>/<optimizer-label>/jobs`.
 - **`--environment`** controls where the *optimizer* runs: `docker` = local,
   fully observable, but the run dies if the machine sleeps; `modal` = survives a
-  local sleep/disconnect, less local visibility. Inner evals are on Modal either
-  way (override with `--param inner_env=docker` only for a local shakedown).
+  local sleep/disconnect, less local visibility. **Inner evals must be on Modal.**
+  `inner_env=docker` fails every case: the inner evaluation runs
+  `harbor run -e docker` inside the sidecar, which has no docker CLI or socket, so
+  harbor produces no trials and the evaluation returns 502.
 
 ## Preflight — confirm BEFORE launching
 
