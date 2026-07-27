@@ -175,3 +175,89 @@ def test_legacy_log_labels_roots_via_tasks_dir_and_residualizes_chains(tmp_path)
     # the empty-bodied follow-ups (ambiguous across two live trials) are the
     # honest residual — exactly the gap gateway-side stamping closes
     assert residual == 3 * 4080
+
+
+def test_analyze_session_stamped_full_coverage_wall_and_reconciliation(tmp_path):
+    evaluation = "eval-1"
+    _trial(tmp_path, evaluation, 0, "org/task-A", "Question about alpha widgets")
+    _trial(tmp_path, evaluation, 1, "org/task-B", "Question about beta gadgets")
+    records = []
+    for thread, question in (
+        ("thA", "Question about alpha widgets"),
+        ("thB", "Question about beta gadgets"),
+    ):
+        records.append(
+            {
+                "scope": "evaluation", "attribution": evaluation,
+                "thread_id": thread, "root_snippet": question,
+                "input_tokens": 1000, "cached_input_tokens": 400,
+                "output_tokens": 50, "total_tokens": 1050,
+                "latency_ms": 100, "ts": "2026-01-01T00:01:00Z",
+            }
+        )
+        for _ in range(2):
+            records.append(
+                {
+                    "scope": "evaluation", "attribution": evaluation,
+                    "thread_id": thread,
+                    "input_tokens": 500, "cached_input_tokens": 200,
+                    "output_tokens": 20, "total_tokens": 520,
+                    "latency_ms": 50, "ts": "2026-01-01T00:02:00Z",
+                }
+            )
+    requests = _write_log(tmp_path, records)
+
+    report = p.analyze_session(tmp_path, requests, [])
+    data = report[evaluation]
+
+    # report schema
+    assert set(data) == {
+        "trials", "gateway_total", "attributed",
+        "agent_reported_total", "residual", "coverage_pct",
+    }
+    # stamped chains attribute fully
+    assert data["coverage_pct"] == 100.0
+    assert data["residual"]["total_tokens"] == 0
+    assert data["gateway_total"] == data["attributed"]
+
+    a = data["trials"]["org/task-A"]
+    # per-trial token triple: root + two follow-ups
+    assert a["input_tokens"] == 1000 + 2 * 500
+    assert a["cached_input_tokens"] == 400 + 2 * 200
+    assert a["output_tokens"] == 50 + 2 * 20
+    assert a["total_tokens"] == 2090
+    assert a["requests"] == 3
+    assert a["latency_ms"] == 100 + 2 * 50
+    assert a["wall_s"] == 300.0  # one trial, 5-minute window, counted once
+    # agent-reported carried per trial and summed across the eval for reconciliation
+    assert a["agent_reported"]["n_input_tokens"] == 100
+    assert data["agent_reported_total"]["n_input_tokens"] == 100 + 101
+
+
+def test_csv_rows_schema_and_residual_row(tmp_path):
+    evaluation = "eval-1"
+    _trial(tmp_path, evaluation, 0, "org/task-A", "alpha")  # window 00:00-00:05
+    records = [
+        {
+            "scope": "evaluation", "attribution": evaluation, "thread_id": "thA",
+            "input_tokens": 10, "cached_input_tokens": 2, "output_tokens": 3,
+            "total_tokens": 13, "latency_ms": 5, "ts": "2026-01-01T00:01:00Z",
+        },
+        # outside the only trial's window and unlabelled -> honest residual
+        {
+            "scope": "evaluation", "attribution": evaluation, "thread_id": "ghost",
+            "input_tokens": 7, "cached_input_tokens": 0, "output_tokens": 1,
+            "total_tokens": 8, "latency_ms": 4, "ts": "2026-01-01T00:10:00Z",
+        },
+    ]
+    requests = _write_log(tmp_path, records)
+
+    report = p.analyze_session(tmp_path, requests, [])
+    rows = list(p.csv_rows("run-1", report))
+
+    assert all(set(row) == set(p._CSV_FIELDS) for row in rows)
+    trial_row = next(r for r in rows if r["task"] == "org/task-A")
+    assert trial_row["run"] == "run-1"
+    assert trial_row["total_tokens"] == 13
+    residual_row = next(r for r in rows if r["task"] == "(unattributed)")
+    assert residual_row["total_tokens"] == 8

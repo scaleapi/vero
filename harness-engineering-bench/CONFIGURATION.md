@@ -28,6 +28,20 @@ benchmark can be checked against the others at a glance.
   budget-blind ablation: enforcement is unchanged but all budget signal is
   hidden from the agent, including a redaction of `inference_*` metrics from
   agent-facing receipts and context (latency metrics stay visible).
+- **Per-trial token/latency accounting**: the trusted gateway meters each
+  evaluation's usage as an input/cached/output/total split
+  (`inference_input_tokens`, `inference_cached_input_tokens`,
+  `inference_output_tokens`, `inference_total_tokens`, `inference_requests`) in
+  `reward_metrics`; each trial's `result.json` also carries agent-self-reported
+  tokens (`agent_reported_*`) and its wall window. With
+  `inference_gateway.request_log_attribution: true` the gateway stamps every
+  request-log record with a `thread_id`, so `scripts/per_trial_tokens.py`
+  attributes gateway tokens to individual trials (trusted, versus a content-match
+  fallback when off) and rolls a run — or a grid of runs — up to a flat CSV.
+  Enabled on officeqa; extended across the suite as the grid rolls out. Because
+  each scope's target model is fixed, **dollar cost is a linear function of the
+  (input, cached, output) token triple** with a per-model rate vector — computed
+  downstream, deliberately not stored anywhere in the run.
 - **Target model**: `fireworks_ai/deepseek-v4-flash` by default (see the
   per-benchmark table — a benchmark may pin a different evaluated model), fixed
   per run by the gateway's evaluation scope (the `evaluation.allowed_models`

@@ -24,13 +24,20 @@ fallback recovers only each conversation's root turn — chained follow-ups
 with empty bodies are unrecoverable and land in the residual. Enable
 attribution at build time for complete coverage.
 
-Usage: per_trial_tokens.py SESSION_DIR [--requests-dir DIR] [--tasks-dir DIR]
-       [--json]
+Pass one session dir for a single run, or several to roll up a grid; ``--csv``
+writes a flat per-trial table across all of them (one row per
+run/evaluation/task) for spreadsheet analysis. Tokens are the reported unit;
+dollars are a downstream linear function of the (input, cached, output) triple
+with a per-model rate vector, so they are deliberately not computed here.
+
+Usage: per_trial_tokens.py SESSION_DIR [SESSION_DIR ...] [--requests-dir DIR]
+       [--tasks-dir DIR] [--json] [--csv OUT.csv]
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -209,30 +216,27 @@ def assign_thread(
     return None
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("session", type=Path)
-    parser.add_argument("--requests-dir", type=Path, default=None)
-    parser.add_argument("--tasks-dir", type=Path, default=None)
-    parser.add_argument("--json", action="store_true", dest="as_json")
-    arguments = parser.parse_args()
+def trial_wall_seconds(trial: dict) -> float | None:
+    started, finished = trial.get("started"), trial.get("finished")
+    if started is None or finished is None:
+        return None
+    return round((finished - started).total_seconds(), 1)
 
-    session = arguments.session
-    requests_dir = (
-        arguments.requests_dir or session / "artifacts" / "inference" / "requests"
-    )
-    if not requests_dir.is_dir():
-        print(f"no request log at {requests_dir}", file=sys.stderr)
-        return 1
 
+def analyze_session(
+    session: Path, requests_dir: Path, task_texts: list[tuple[str, str]]
+) -> dict:
+    """Per evaluation id: per-trial token triples + latency + wall, with the
+    trusted gateway envelope, the attributed sum, the independent agent-reported
+    sum (for reconciliation), and the unattributed residual."""
     trials_by_evaluation = load_trials(session)
     threads_by_evaluation = load_threads(requests_dir)
-    task_texts = load_task_texts(arguments.tasks_dir)
 
-    report = {}
+    report: dict[str, dict] = {}
     for evaluation_id, threads in sorted(threads_by_evaluation.items()):
         trials = trials_by_evaluation.get(evaluation_id, [])
         per_trial: dict[str, dict] = {}
+        seen: dict[str, set] = defaultdict(set)
         residual = {"requests": 0, **{key: 0 for key in TOKEN_KEYS}}
         for thread in threads.values():
             trial = assign_thread(thread, trials, task_texts)
@@ -241,11 +245,13 @@ def main() -> int:
                 for key in TOKEN_KEYS:
                     residual[key] += thread[key]
                 continue
+            task_name = trial["task_name"]
             entry = per_trial.setdefault(
-                trial["task_name"],
+                task_name,
                 {
                     "requests": 0,
                     "latency_ms": 0.0,
+                    "wall_s": 0.0,
                     "agent_reported": trial["agent_reported"],
                     **{key: 0 for key in TOKEN_KEYS},
                 },
@@ -254,32 +260,108 @@ def main() -> int:
             entry["latency_ms"] += thread["latency_ms"]
             for key in TOKEN_KEYS:
                 entry[key] += thread[key]
-        total = {
+            # Wall is a per-trial property, so add each contributing trial once:
+            # repeated passes of one task sum, but a trial's many threads don't
+            # double-count its wall.
+            trial_name = trial.get("trial_name")
+            if trial_name not in seen[task_name]:
+                seen[task_name].add(trial_name)
+                wall = trial_wall_seconds(trial)
+                if wall is not None:
+                    entry["wall_s"] = round(entry["wall_s"] + wall, 1)
+        gateway_total = {
             key: sum(thread[key] for thread in threads.values()) for key in TOKEN_KEYS
         }
         attributed = {
             key: sum(entry[key] for entry in per_trial.values()) for key in TOKEN_KEYS
         }
+        agent_reported_total = {
+            key: sum(
+                entry["agent_reported"].get(key, 0) for entry in per_trial.values()
+            )
+            for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
+        }
         report[evaluation_id] = {
             "trials": per_trial,
-            "gateway_total": total,
+            "gateway_total": gateway_total,
             "attributed": attributed,
+            "agent_reported_total": agent_reported_total,
             "residual": residual,
             "coverage_pct": (
-                round(100.0 * attributed["total_tokens"] / total["total_tokens"], 1)
-                if total["total_tokens"]
+                round(
+                    100.0 * attributed["total_tokens"] / gateway_total["total_tokens"],
+                    1,
+                )
+                if gateway_total["total_tokens"]
                 else None
             ),
         }
+    return report
 
-    if arguments.as_json:
-        print(json.dumps(report, indent=1, default=str))
-        return 0
 
+_CSV_FIELDS = [
+    "run",
+    "evaluation",
+    "task",
+    "requests",
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "latency_ms",
+    "wall_s",
+    "agent_reported_input_tokens",
+    "agent_reported_cache_tokens",
+    "agent_reported_output_tokens",
+]
+
+
+def csv_rows(run_label: str, report: dict):
+    """Flat per-trial rows (plus one residual row per evaluation) for the grid."""
     for evaluation_id, data in report.items():
-        print(f"\n=== evaluation {evaluation_id} ===")
-        header = f"{'task':<44} {'req':>5} {'input':>10} {'cached':>10} {'output':>8} {'agent-reported in/cache/out':>28}"
-        print(header)
+        for task_name, entry in sorted(data["trials"].items()):
+            reported = entry["agent_reported"]
+            yield {
+                "run": run_label,
+                "evaluation": evaluation_id,
+                "task": task_name,
+                "requests": entry["requests"],
+                "input_tokens": entry["input_tokens"],
+                "cached_input_tokens": entry["cached_input_tokens"],
+                "output_tokens": entry["output_tokens"],
+                "total_tokens": entry["total_tokens"],
+                "latency_ms": round(entry["latency_ms"], 1),
+                "wall_s": entry["wall_s"],
+                "agent_reported_input_tokens": reported.get("n_input_tokens"),
+                "agent_reported_cache_tokens": reported.get("n_cache_tokens"),
+                "agent_reported_output_tokens": reported.get("n_output_tokens"),
+            }
+        residual = data["residual"]
+        if residual["requests"]:
+            yield {
+                "run": run_label,
+                "evaluation": evaluation_id,
+                "task": "(unattributed)",
+                "requests": residual["requests"],
+                "input_tokens": residual["input_tokens"],
+                "cached_input_tokens": residual["cached_input_tokens"],
+                "output_tokens": residual["output_tokens"],
+                "total_tokens": residual["total_tokens"],
+                "latency_ms": "",
+                "wall_s": "",
+                "agent_reported_input_tokens": "",
+                "agent_reported_cache_tokens": "",
+                "agent_reported_output_tokens": "",
+            }
+
+
+def print_report(run_label: str, report: dict) -> None:
+    for evaluation_id, data in report.items():
+        print(f"\n=== {run_label} / evaluation {evaluation_id} ===")
+        print(
+            f"{'task':<40} {'req':>5} {'input':>10} {'cached':>10} "
+            f"{'output':>8} {'wall_s':>8} {'agent in/cache/out':>24}"
+        )
         for task_name, entry in sorted(data["trials"].items()):
             reported = entry["agent_reported"]
             reported_text = "/".join(
@@ -287,20 +369,73 @@ def main() -> int:
                 for key in ("n_input_tokens", "n_cache_tokens", "n_output_tokens")
             )
             print(
-                f"{str(task_name)[:44]:<44} {entry['requests']:>5} "
+                f"{str(task_name)[:40]:<40} {entry['requests']:>5} "
                 f"{entry['input_tokens']:>10} {entry['cached_input_tokens']:>10} "
-                f"{entry['output_tokens']:>8} {reported_text:>28}"
+                f"{entry['output_tokens']:>8} {entry['wall_s']:>8} {reported_text:>24}"
             )
         residual = data["residual"]
         print(
-            f"{'(unattributed)':<44} {residual['requests']:>5} "
+            f"{'(unattributed)':<40} {residual['requests']:>5} "
             f"{residual['input_tokens']:>10} {residual['cached_input_tokens']:>10} "
             f"{residual['output_tokens']:>8}"
         )
+        gateway, attributed = data["gateway_total"], data["attributed"]
+        agent = data["agent_reported_total"]
         print(
-            f"coverage: {data['coverage_pct']}% of "
-            f"{data['gateway_total']['total_tokens']} gateway-metered tokens attributed"
+            f"coverage: {data['coverage_pct']}% of {gateway['total_tokens']} "
+            f"gateway-metered tokens attributed to trials"
         )
+        # Reconcile the trusted envelope against the two independent token sources.
+        print(
+            f"  input tokens  gateway {gateway['input_tokens']} | "
+            f"attributed {attributed['input_tokens']} | "
+            f"agent-reported {agent['n_input_tokens']}"
+        )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("sessions", type=Path, nargs="+", help="one or more session dirs")
+    parser.add_argument(
+        "--requests-dir", type=Path, default=None, help="single session only"
+    )
+    parser.add_argument("--tasks-dir", type=Path, default=None)
+    parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument("--csv", type=Path, default=None, help="write a flat per-trial CSV")
+    arguments = parser.parse_args()
+
+    task_texts = load_task_texts(arguments.tasks_dir)
+    grid: dict[str, dict] = {}
+    for session in arguments.sessions:
+        if arguments.requests_dir is not None and len(arguments.sessions) == 1:
+            requests_dir = arguments.requests_dir
+        else:
+            requests_dir = session / "artifacts" / "inference" / "requests"
+        if not requests_dir.is_dir():
+            print(f"no request log at {requests_dir}", file=sys.stderr)
+            continue
+        grid[session.name] = analyze_session(session, requests_dir, task_texts)
+
+    if not grid:
+        return 1
+
+    if arguments.csv is not None:
+        with open(arguments.csv, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=_CSV_FIELDS)
+            writer.writeheader()
+            for run_label, report in grid.items():
+                writer.writerows(csv_rows(run_label, report))
+        print(f"wrote {arguments.csv}", file=sys.stderr)
+
+    if arguments.as_json:
+        # One session keeps the original flat {evaluation: ...} schema; several
+        # nest under their run label.
+        payload = grid[arguments.sessions[0].name] if len(grid) == 1 else grid
+        print(json.dumps(payload, indent=1, default=str))
+        return 0
+
+    for run_label, report in grid.items():
+        print_report(run_label, report)
     return 0
 
 

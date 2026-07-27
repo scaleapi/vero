@@ -178,6 +178,23 @@ each partition's `total_cases`), the optimizer-model session, plus finalization
 (`n_attempts × test_size` case-evaluations; the pinned baseline is not re-scored
 when `score_baseline: false`). Read `budgets.json` in the session for actuals.
 
+The reported unit is tokens, not dollars: the trusted per-evaluation split lands
+in `reward_metrics` as `inference_input_tokens` / `inference_cached_input_tokens`
+/ `inference_output_tokens` / `inference_total_tokens` (→ W&B). Because the target
+model is fixed per benchmark, dollars are a downstream linear function of that
+triple (per-model rate vector) and are not stored. For per-trial breakdowns, run
+the post-hoc aggregator on the exported session:
+
+```bash
+python harness-engineering-bench/scripts/per_trial_tokens.py <session-dir> --json
+# or roll several runs into one flat table:
+python .../per_trial_tokens.py <run1> <run2> ... --csv tokens.csv
+```
+
+Check its `coverage_pct` (should be ~100% and `residual` ~0 when the build sets
+`inference_gateway.request_log_attribution: true`; low coverage means per-trial
+numbers are lower bounds and the per-evaluation totals are the envelope).
+
 ## Per-benchmark gotchas
 
 Don't hardcode assumptions — read `CONFIGURATION.md` and the benchmark's
