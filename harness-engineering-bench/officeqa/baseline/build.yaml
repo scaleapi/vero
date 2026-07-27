@@ -70,12 +70,26 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-timeout_seconds: 7200
+# Sized to be UNREACHABLE, not to a margin: a per-eval timeout destroys work the
+# case budget already authorized, so it must never be the thing that fails.
+# case_timeout caps every case, so the true worst case is
+# ceil(trials / max_concurrency) x case_timeout = ceil(297/24) x 1200 = 15600s,
+# i.e. every one of the 297 finalize trials timing out. 21600 cannot be reached.
+# NOTE: this bound assumes max_concurrency=24. Lowering concurrency raises the
+# wave count and this must be recomputed.
+timeout_seconds: 21600
 case_timeout_seconds: 1200  # raised from 300: baseline p99 ~640s / max ~1076s exceeded 300, killing ~13% of cases
 task_agent_timeout_seconds: 1800
-max_concurrency: 8
+# Raised 8 -> 24 to cut finalize wall time ~3x (297 trials / concurrency x ~400s:
+# ~4.1h at 8, ~1.4h at 24). Derived headroom: run #2 sustained 16 case slots
+# (2 detached evals x 8) at ~181k metered TPM/slot with upstream_errors=0, so 24
+# slots is ~1.5x a proven configuration. Watch upstream_errors in
+# artifacts/inference/usage.json; if it stays 0, there is room to go further.
+max_concurrency: 24
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 25200  # sized for 3x held-out finalize (n_attempts=3) + rescore headroom (~4.5h + margin)
+# Unreachable by the same argument: worst-case finalize (15600) + worst-case
+# validation rescore (rescore_top_k=3 x 98 cases = 294 trials -> 15600) = 31200.
+verifier_timeout_seconds: 43200
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -90,13 +104,16 @@ harness_user: harness
 # BASH_MAX_TIMEOUT_MS (default 600000=10min), which forced the agent into
 # --detach + background-poll + end-turn (it then ended its turn waiting for a
 # notification that never re-wakes a headless --print run). Raise the cap so the
-# agent can block on a whole eval in one Bash call, and disable the background
-# tasks harbor otherwise forces on, so it stays in-loop instead of detaching.
+# agent can block on a whole eval in one Bash call.
+# The background-task vars are kept for defence in depth but do NOT actually
+# disable the Bash tool's run_in_background parameter -- the model can still
+# choose it, and run #2 did. The instruction is what forbids it.
 agent_env:
-  BASH_MAX_TIMEOUT_MS: "3600000"       # 60 min: a full eval fits in one blocking call
-  BASH_DEFAULT_TIMEOUT_MS: "1800000"   # 30 min default, so un-timed eval calls still block
-  ENABLE_BACKGROUND_TASKS: "0"         # remove the detach/background temptation
-  FORCE_AUTO_BACKGROUND_TASKS: "0"     # harbor forces these on; the --ae overlay wins
+  # 3h: above a worst-case full validation eval, ceil(98/24) x 1200 = 6000s.
+  BASH_MAX_TIMEOUT_MS: "10800000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"   # 60 min default, so un-timed eval calls still block
+  ENABLE_BACKGROUND_TASKS: "0"         # gates auto-backgrounding only (see above)
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
 
 wandb:
   project: harness-engineering-bench

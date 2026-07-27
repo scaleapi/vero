@@ -58,14 +58,20 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-timeout_seconds: 14400
+# Unreachable by construction (see officeqa/baseline/build.yaml): worst case is
+# ceil(trials / max_concurrency) x case_timeout = ceil(450/24) x 1200 = 22800s,
+# every one of the 450 finalize trials (150 test x n_attempts=3) timing out.
+# tau3 is the largest held-out set here. Assumes max_concurrency=24.
+timeout_seconds: 28800
 # Tasks declare a 3600s agent timeout (the denominator); case_timeout is the enforced
 # per-case budget. Raised from 900 to 1200: baseline max case wall ~1122s exceeded 900.
 case_timeout_seconds: 1200
 task_agent_timeout_seconds: 3600
-max_concurrency: 8
+max_concurrency: 24  # 8 -> 24; see officeqa for the measured headroom argument
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 43200  # sized for 3x held-out finalize + rescore headroom (~8h + margin)
+# Unreachable: worst-case finalize (22800) + worst-case rescore (3 x 150 = 450
+# trials -> 22800). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 64800
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -109,6 +115,21 @@ task_services_use_upstream: true
 # upstream credential, which uid isolation cannot hide from the harness env.
 # Re-enable once task-service credentials are delivered off the harness env.
 harness_user: null
+# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
+# Claude Code's Bash tool caps a single call at BASH_MAX_TIMEOUT_MS (default
+# 600000=10min), well under one inner eval, which pushed the officeqa optimizer
+# into --detach + background-poll + end-turn -- and a headless --print run is
+# never re-woken, so the search died there. Raise the cap so a whole eval fits in
+# one blocking call. The background-task vars are defence in depth only: they gate
+# *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
+# parameter, which the model can still choose. The instruction forbids that.
+agent_env:
+  # 3h: above this benchmark's worst-case full validation eval.
+  BASH_MAX_TIMEOUT_MS: "10800000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+
 task_environment:
   TAU2_USER_MODEL: openai/gpt-5.4-mini-2026-03-17
   TAU2_NL_ASSERTIONS_MODEL: openai/gpt-5.4-mini-2026-03-17

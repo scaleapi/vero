@@ -92,10 +92,11 @@ benchmark can be checked against the others at a glance.
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
 | gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B |
-| timeout_seconds (per eval) | 3600 | 7200 | 14400 | 14400 | 28800 |
+| max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 | 24 |
+| timeout_seconds (per eval) ‖ | 10800 | 21600 | 18000 | 28800 | 28800 |
 | case_timeout_seconds (enforced) † | 900 | 1200 | 1800 | 1200 | 2100 |
 | task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 |
-| verifier_timeout_seconds ‖ | 10800 | 25200 | 28800 | 43200 | 64800 |
+| verifier_timeout_seconds ‖ | 28800 | 43200 | 36000 | 64800 | 64800 |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index |
@@ -127,18 +128,34 @@ benchmark can be checked against the others at a glance.
   `case_timeout/task_agent_timeout`). `case_timeout` may exceed
   `task_agent_timeout`. Set both explicitly — omitting them silently applies the
   180/600 defaults regardless of what the tasks declare.
-- **`verifier_timeout_seconds`** bounds only finalization (the held-out
-  evaluation of the selected candidate), sized for `n_attempts` × held-out +
-  rescore headroom (‖). A verifier timeout yields no reward (the score is lost,
-  only agent artifacts are salvaged), so it is sized generously.
+- **The verifier must never time out, so its clocks are sized to be
+  unreachable, not merely generous** (‖). A verifier timeout yields no reward at
+  all — the score is lost and only agent artifacts are salvaged — which makes it
+  exactly as destructive as an exhausted finalization budget. Because
+  `case_timeout_seconds` caps every case, there is a hard upper bound available:
+
+      worst-case eval = ceil(trials / max_concurrency) × case_timeout_seconds
+
+  i.e. *every* trial timing out. `timeout_seconds` is set above that, and
+  `verifier_timeout_seconds` above worst-case finalize + worst-case rescore. Both
+  are therefore unreachable rather than tuned. officeqa's run #3 was killed after
+  this was derived: at the previous 7200 s it would have died ~46% through a
+  ~4.3 h finalize.
+- **These bounds are coupled to `max_concurrency` (§).** Lowering concurrency
+  raises the wave count and both timeouts must be recomputed. All five are sized
+  for `max_concurrency: 24` and for `n_attempts: 3` on the held-out target, so
+  raising a benchmark to a 3× finalize needs no timeout change.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
-- **Optimizer `agent_env`** (currently on officeqa; propagate to all): inner
-  evals take 15–30 min, but Claude Code caps a single Bash call at
-  `BASH_MAX_TIMEOUT_MS` (default 600000=10min), which forces the agent into
-  `--detach` + background-poll + end-turn — and in headless `--print` mode,
-  ending the turn ends the run. Set `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS`
-  high and `ENABLE_BACKGROUND_TASKS`/`FORCE_AUTO_BACKGROUND_TASKS=0` so the agent
-  blocks on a whole eval in one call and stays in-loop.
+- **Optimizer `agent_env`** (now on all five): inner evals take 15–30 min, but
+  Claude Code caps a single Bash call at `BASH_MAX_TIMEOUT_MS` (default
+  600000=10min), which forces the agent into `--detach` + background-poll +
+  end-turn — and in headless `--print` mode, ending the turn ends the run. Set
+  `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS` above a worst-case full
+  validation eval so the agent can block on one in a single call.
+  `ENABLE_BACKGROUND_TASKS`/`FORCE_AUTO_BACKGROUND_TASKS=0` are defence in depth
+  only — **they gate *automatic* backgrounding and do not remove the Bash tool's
+  `run_in_background` parameter**, which the model can still choose, and run #2
+  did. Only the optimizer instruction actually forbids it.
 - **`infrastructure_max_attempts: 3`** applies only to trusted finalization
   re-scores. For competitive (agent) evaluations, whole-sub-run infrastructure
   retry is disabled and a within-trial transient-infra failure is scored at the
@@ -184,11 +201,27 @@ share a pool. `max_requests` is 200 000 on both everywhere (a full officeqa
 finalize needs ~12 000, so this is not the binding constraint either). Sizing is
 per benchmark from its own case counts; see each `build.yaml` for the arithmetic.
 
-‖ `verifier_timeout_seconds` sized to ~1.5× a with-rescore finalize
-(`n_attempts=3` × held-out eval + `rescore_top_k=3` × validation eval), for
-salvage headroom even though the validation rescore does not fire in the
-`submit` selection path. Because phases are independent, this covers
-finalization only — not the search.
+§ `max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
+board. It is the throughput lever: finalize wall time is
+`ceil(trials / max_concurrency) × mean case wall`, so officeqa's ~4.1 h finalize
+becomes ~1.4 h. Headroom is measured, not assumed — officeqa run #2 sustained
+**16 case slots** (two detached evals × 8) at ~181 k metered TPM per slot with
+`upstream_errors: 0`, so 24 slots is ~1.5× a proven configuration. Per-slot
+throughput ranges ~181–361 k metered TPM depending on how context-heavy the
+candidate is. When raising further, check `upstream_errors` in
+`artifacts/inference/usage.json` — that measures the provider's ceiling in the
+provider's own accounting, which is the only way to settle whether its quota
+counts cache reads.
+
+‖ Both eval clocks are sized to be **unreachable** given
+`case_timeout_seconds` × the wave count (see Conventions), not to a multiple of
+an expected duration. `timeout_seconds` bounds any single evaluation —
+`evaluation/evaluator.py` wraps each in `asyncio.timeout(limits.timeout_seconds)`
+— and applies to the agent's own evals as well as the finalize.
+`verifier_timeout_seconds` bounds the whole verifier phase: worst-case finalize
+plus worst-case `rescore_top_k=3` validation rescore, which is headroom since the
+rescore does not fire in the `submit` selection path. Because phases are
+independent, neither covers the search.
 
 ‡ Exception to the harness-isolation default: these tasks run LLM services
 (rubric judge, user-simulator/grader, or answer judge) inside their task
