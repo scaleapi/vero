@@ -281,7 +281,27 @@ share a pool. `max_requests` is 200 000 on both everywhere (a full officeqa
 finalize needs ~12 000, so this is not the binding constraint either). Sizing is
 per benchmark from its own case counts; see each `build.yaml` for the arithmetic.
 
-§ `max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
+§ **Running benchmarks concurrently: pair them by target provider, and give each
+run its own credential file.** These are two different constraints and each
+solves a different problem.
+
+*Provider capacity* is the one that actually bites, because the evaluation scope
+is the overwhelming majority of traffic (~2.9 M metered TPM per run vs the
+optimizer's ~4 k). Three benchmarks share `fireworks_ai/deepseek-v4-flash`
+(officeqa, tau3, browsecomp-plus), swe-atlas-qna is Fireworks-but-a-different-model
+(`gpt-oss-120b`), and gaia is the only non-Fireworks target (`gpt-5.4-mini`). So
+**gaia pairs with any of the others at near-zero contention**, while running the
+deepseek trio together stacks demand on one provider. The one `502 upstream_error`
+we have observed (1 in 4 750 requests at 24 slots) came from Fireworks.
+
+*Per-key limits* are separate: a distinct `--env-file` per concurrent run means a
+per-key TPM/RPM throttle on one cannot starve another, and per-workstream spend
+stays attributable. Copy `secrets.env.example` to a `*.secrets.env` name (that
+glob is gitignored; `secrets.2.env` is **not**). Separate keys against the same
+provider account do **not** create new provider capacity — only the pairing above
+does that. Modal sandbox capacity is a third, independent ceiling.
+
+`max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
 board. It is the throughput lever: finalize wall time is
 `ceil(trials / max_concurrency) × mean case wall`, so officeqa's ~4.1 h finalize
 becomes ~1.4 h. Headroom is measured, not assumed — officeqa run #2 sustained
