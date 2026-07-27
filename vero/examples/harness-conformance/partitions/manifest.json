@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "task_source": "../tasks",
+  "dataset_name": "harness-conformance",
+  "seed": "vero-conformance-v1",
+  "partition_counts": {
+    "development": 2,
+    "validation": 2,
+    "test": 2
+  },
+  "tasks": [
+    "conformance-01",
+    "conformance-02",
+    "conformance-03",
+    "conformance-04",
+    "conformance-05",
+    "conformance-06"
+  ]
+}

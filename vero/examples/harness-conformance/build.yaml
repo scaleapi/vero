@@ -1,0 +1,208 @@
+# Harness/model conformance check: the cheapest complete exercise of the path a
+# real experiment takes. Same shape as harness-engineering-bench -- harbor
+# evaluation backend, nested `harbor run` per case, a target agent metered through
+# the inference gateway's evaluation scope, an optimizer metered through the
+# producer scope -- but with six arithmetic tasks that finish in seconds.
+#
+# Run it whenever you introduce a new optimizer harness or model, before spending
+# a real benchmark on it:
+#
+#   cd <repo>/vero
+#   uv run vero harbor run --config examples/harness-conformance/build.yaml \
+#     --env-file secrets.env --environment docker \
+#     --agent claude-code --model claude-sonnet-5 --yes -o /tmp/conformance
+#
+# Swap --agent/--model for the harness under test. `${optimizer_model}` follows
+# --model into the producer allow-list; note some adapters request a different
+# string than they are launched with (see README).
+#
+# Read the outcome from the agent's conformance-report.json (see description), and
+# cross-check the reward: the seed answers addition only, so a working stack
+# scores ~0.5 for the seed and 1.0 for a fixed candidate.
+name: vero/harness-conformance
+description: >-
+  This is a CONFORMANCE CHECK, not a research task. Your job is to work through
+  the checklist below in order and record what you observe, so an operator can
+  tell whether this harness is wired up correctly. Being thorough and literal
+  matters more than being clever.
+
+
+  Write your findings to `conformance-report.json` at the repository root as you
+  go, so partial progress survives. Use one entry per step:
+  `{"step_3_persistence": {"ok": true, "detail": "..."}}`. Commit it.
+
+
+  STEP 1 — gateway is scoped. Print `$OPENAI_BASE_URL` and confirm it points at
+  the compose-internal gateway, not a public provider endpoint. Check that
+  `$OPENAI_API_KEY` is non-empty WITHOUT printing or recording its value.
+  Record the host and path you see. If the URL is a public endpoint, stop and
+  report that loudly: it means the optimizer is unmetered.
+
+
+  STEP 2 — plan is legible. Run `evals plan`. Confirm you can see: two
+  partitions you may evaluate, a case count for each, the disclosure level of
+  each, and how much run/case budget remains. Record all of it. If the case
+  count is missing you cannot size a subset, which is a bug worth reporting.
+
+
+  STEP 3 — exposed cases. List `.evals/tasks/`. Confirm the development
+  partition's task resources are readable and that validation's are NOT
+  present. Record which partitions are exposed.
+
+
+  STEP 4 — baseline evaluation. Run the full development partition in the
+  FOREGROUND and record the score, the per-case wall time, and how long the call
+  blocked. Expect roughly 0.5: the seed harness answers addition tasks and
+  abandons multiplication ones.
+
+
+  STEP 5 — persistence. Without re-running anything, recover that same result
+  from disk: `evals list`, then `evals show ID`, then `evals cases ID`. Confirm
+  the score you read back matches the score that was printed, and that per-case
+  scores are visible. Record both numbers. This is the check that proves you
+  never need to re-run an evaluation to recover output you truncated.
+
+
+  STEP 6 — disclosure is enforced. Evaluate the validation partition, then try
+  `evals cases` on that result. It MUST refuse, because validation is
+  aggregate-only. Record the refusal. A success here is a disclosure leak and
+  the most important thing on this list to report.
+
+
+  STEP 7 — budget accounting. Run `evals plan` again and compare with STEP 2.
+  Confirm remaining runs and cases decreased by the amount you actually spent.
+  Record before and after.
+
+
+  STEP 8 — the edit loop works. Fix the target harness so it answers
+  multiplication tasks as well as addition ones (find the early return that
+  gives up), commit, and re-evaluate the SAME development selection. Confirm the
+  score rises to 1.0. Record before and after, and confirm `evals diff` between
+  the two evaluations attributes the gain to the multiplication cases.
+
+
+  STEP 9 — submit. Write the `summary` entry described below, commit the report,
+  and ONLY THEN nominate your candidate with `evals submit`. Order matters: a
+  report committed after submitting is not part of the submitted candidate and
+  an operator will never see it. Confirm the submission was accepted and record
+  the commit.
+
+
+  The `summary` entry: which steps passed, which failed, and any error text
+  verbatim. Anything you noticed that would handicap an optimizer -- a confusing
+  message, a missing number, a command that behaved unexpectedly -- belongs in
+  it. Then `cat conformance-report.json` as your last action, so the findings
+  survive in the transcript even if the commit does not.
+
+agent_repo: target
+task_source: tasks
+task_manifest: partitions/manifest.json
+agent_import_path: conformance_agent.agent:ConformanceAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: partitions/development.json
+  validation: partitions/validation.json
+  test: partitions/test.json
+
+# Deliberately mirrors the benchmark suite: development full-disclosure with task
+# resources exposed, validation aggregate-only. STEP 6 depends on that asymmetry,
+# so min_aggregate_cases is 2 (the whole partition) rather than the usual 5.
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 20
+    total_cases: 40
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 2
+    total_runs: 20
+    total_cases: 40
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # A correct stack lands on 0.5 for the seed and 1.0 for a fixed candidate, so
+    # there is no measurement noise to average away and nothing to pin.
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: conformance
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit
+baseline_floor: false
+score_baseline: false
+rescore_top_k: 1
+rescore_attempts: 1
+
+model: ${target_model:-fireworks_ai/deepseek-v4-flash}
+# modal, matching the benchmarks. `inner_env=docker` does NOT work: the inner
+# evaluation shells out to `harbor run -e docker` from inside the sidecar
+# container, which has no docker CLI or socket, and every case fails with
+# "Docker is not installed or not on PATH" -> 0 trial groups -> 502.
+environment_name: ${inner_env:-modal}
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 2
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 8000
+expose_attempt_detail: false
+# Every clock is derived the same way as the benchmark suite (see
+# harness-engineering-bench/CONFIGURATION.md), just small: case_timeout equals the
+# tasks' declared [agent] timeout_sec so harbor's multiplier is exactly 1.0, and
+# each ceiling sits above ceil(trials / max_concurrency) x case_timeout.
+timeout_seconds: 900
+case_timeout_seconds: 120
+task_agent_timeout_seconds: 120
+max_concurrency: 6
+error_rate_threshold: 0.5
+verifier_timeout_seconds: 1800
+# Passed through to the evaluation backend. The Modal tokens are REQUIRED, not
+# optional: inner evals run on Modal (see environment_name), and without them
+# harbor exits with "Modal requires authentication", produces 0 trial groups, and
+# every evaluation 502s.
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+harness_user: harness
+
+# Same loop protections as the benchmarks: a single blocking eval must fit in one
+# Bash call, or the optimizer detaches and a headless run dies waiting.
+agent_env:
+  BASH_MAX_TIMEOUT_MS: "1800000"
+  BASH_DEFAULT_TIMEOUT_MS: "1800000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+
+wandb:
+  project: vero-conformance
+  group: conformance
+  name: ${wandb_run:-conformance}
+  mode: ${wandb_mode:-disabled}  # off by default; a smoke test should not need W&B
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    max_concurrency: 4
+  evaluation:
+    allowed_models: ["${target_model:-fireworks_ai/deepseek-v4-flash}"]
+    max_requests: 2000
+    max_tokens: 20000000
+    max_concurrency: 8
+instruct_multifidelity: false
+instruct_exhaust_budget: false
