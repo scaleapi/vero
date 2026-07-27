@@ -48,6 +48,21 @@ class FakeCompletions:
         )
 
 
+class FakeClient:
+    """Stands in for `AsyncOpenAI`, including the per-call options wrapper.
+
+    `_complete` sets its timeout (and sometimes `max_retries`) through
+    `with_options`, so a fake without it fails on attribute access before any
+    request is made.
+    """
+
+    def __init__(self, completions):
+        self.chat = SimpleNamespace(completions=completions)
+
+    def with_options(self, **_kwargs):
+        return self
+
+
 def json_response(value: str) -> str:
     import json
 
@@ -61,9 +76,7 @@ async def test_agent_submits_response_and_populates_context(tmp_path, monkeypatc
         logs_dir=tmp_path / "logs",
         model_name="openai/gpt-5.4-mini-2026-03-17",
     )
-    agent._client = SimpleNamespace(
-        chat=SimpleNamespace(completions=FakeCompletions())
-    )
+    agent._client = FakeClient(FakeCompletions())
     environment = FakeEnvironment()
     context = SimpleNamespace(
         metadata=None,
@@ -85,6 +98,161 @@ async def test_agent_submits_response_and_populates_context(tmp_path, monkeypatc
         "turns": 1,
         "trace": "browsecomp-plus-trace.jsonl",
     }
+
+
+TRUNCATED_REASONING = "So the candidate could be either one, unless " * 900
+
+
+class TruncatedThenAnswer:
+    """First turn is cut off mid-thought; the second gives the real answer."""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+
+    async def create(self, **kwargs):
+        # Snapshot: the agent keeps mutating the same `messages` list, so a
+        # stored reference would only ever show the final state.
+        self.requests.append({**kwargs, "messages": list(kwargs["messages"])})
+        first = len(self.requests) == 1
+        message = SimpleNamespace(
+            content=TRUNCATED_REASONING if first else None,
+            tool_calls=None
+            if first
+            else [
+                SimpleNamespace(
+                    id="call-1",
+                    type="function",
+                    function=SimpleNamespace(
+                        name="submit_response",
+                        arguments=json_response(
+                            "Explanation: Evidence [12].\n"
+                            "Exact Answer: 42\n"
+                            "Confidence: 100%"
+                        ),
+                    ),
+                )
+            ],
+        )
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=message,
+                    finish_reason="length" if first else "tool_calls",
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=1,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_truncated_reasoning_is_never_submitted_as_the_answer(
+    tmp_path, monkeypatch
+):
+    """A `length` finish means truncated thinking, not an answer.
+
+    Regression test for the scoring bug: the agent used to submit `content`
+    verbatim whenever a turn produced no tool calls, so 42k-52k characters of
+    mid-sentence reasoning went to the judge and scored 0, indistinguishable
+    from a genuinely wrong answer.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    agent = BrowseCompPlusAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="openai/gpt-5.4-mini-2026-03-17",
+    )
+    completions = TruncatedThenAnswer()
+    agent._client = FakeClient(completions)
+    environment = FakeEnvironment()
+    context = SimpleNamespace(
+        metadata=None,
+        n_input_tokens=None,
+        n_output_tokens=None,
+        n_cache_tokens=None,
+    )
+
+    await agent.run("Find the answer.", environment, context)
+
+    assert len(environment.uploads) == 1
+    submitted = environment.uploads[0][0].read_text(encoding="utf-8")
+    assert "Exact Answer: 42" in submitted
+    assert "unless" not in submitted, "truncated reasoning must not be submitted"
+
+    # The truncated turn is recovered, not fatal: the model is asked for just
+    # the labeled lines, and the unfinished thinking is what it replaces.
+    assert len(completions.requests) == 2
+    nudge = completions.requests[1]["messages"][-1]
+    assert nudge["role"] == "user"
+    assert "cut off mid-thought" in nudge["content"]
+
+
+class AlwaysTruncated:
+    """Truncated every turn, then a clean answer on the forced-final call."""
+
+    def __init__(self):
+        self.calls = 0
+        self.tool_free_calls = 0
+
+    async def create(self, **kwargs):
+        self.calls += 1
+        if "tools" not in kwargs:
+            self.tool_free_calls += 1
+            content = (
+                "Explanation: best effort.\nExact Answer: 42\nConfidence: 10%"
+            )
+            finish = "stop"
+        else:
+            content = TRUNCATED_REASONING
+            finish = "length"
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=content, tool_calls=None),
+                    finish_reason=finish,
+                )
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=10,
+                completion_tokens=1,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_repeated_truncation_is_reported_as_empty_retries(tmp_path, monkeypatch):
+    """`forced_final_reason` must separate this from MAX_TURNS exhaustion.
+
+    A post-hoc conservative score uses that field to pick out the trials the
+    pre-fix agent would have lost, so a trial that gave up on turn 4 after three
+    truncated turns cannot be labelled the same as one that used all 32 turns.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    agent = BrowseCompPlusAgent(
+        logs_dir=tmp_path / "logs",
+        model_name="openai/gpt-5.4-mini-2026-03-17",
+    )
+    completions = AlwaysTruncated()
+    agent._client = FakeClient(completions)
+    environment = FakeEnvironment()
+    context = SimpleNamespace(
+        metadata=None,
+        n_input_tokens=None,
+        n_output_tokens=None,
+        n_cache_tokens=None,
+    )
+
+    await agent.run("Find the answer.", environment, context)
+
+    assert context.metadata["forced_final"] is True
+    assert context.metadata["forced_final_reason"] == "empty_retries"
+    # Bounded: three nudged turns, then exactly one tool-free forced final.
+    assert completions.tool_free_calls == 1
+    assert completions.calls == 4
+    assert "Exact Answer: 42" in environment.uploads[0][0].read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
