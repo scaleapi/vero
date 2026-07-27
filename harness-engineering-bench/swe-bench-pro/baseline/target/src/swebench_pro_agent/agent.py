@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import random
+from pathlib import PurePosixPath
 from typing import Any, override
 
 from harbor.agents.base import BaseAgent
@@ -24,16 +25,33 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
+
+class _BinaryOutputError(Exception):
+    """A shell stream could not be decoded as UTF-8."""
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Whether `model` is an OpenAI reasoning model.
+
+    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
+    `reasoning`, and every gpt-5 model accepts it. Fireworks-served open models
+    match none of these prefixes, so they keep the legacy shape.
+    """
+    name = model.lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
+
+
 # SWE-bench-Pro tasks build a real repository and run its test suite, so the agent
 # needs more turns than a short-answer benchmark like GAIA.
 MAX_TURNS = 50
 MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_FILE_READ_CHARS = 60_000
 
-# Repository checkout location inside the task environment. SWE-bench-Pro task
-# packages check the target project out here; adjust in one place if the pinned
-# task source uses a different mount.
-REPO_DIR = "/app/repo"
+# Repository checkout location inside the task environment. The pinned
+# swebenchpro task images set `WORKDIR /app` and reset the project's git
+# checkout in place there, and the task instruction says so verbatim ("I've
+# uploaded a code repository in the directory /app").
+REPO_DIR = "/app"
 
 # Retry policy for the Responses API. The GAIA baseline scored 0.0 in the first
 # VeRO run because a single transient error on ``responses.create`` crashed the
@@ -273,10 +291,36 @@ class SweBenchProAgent(BaseAgent):
         with trace_path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
 
+    async def _exec(
+        self, environment: BaseEnvironment, command: str, timeout_sec: int
+    ) -> Any:
+        """`environment.exec`, but a non-UTF-8 stream is a tool error, not a crash.
+
+        Harbor decodes the command's stdout/stderr as strict UTF-8. These are real
+        repositories, so a model that cats or greps a binary (an image fixture, a
+        compiled artifact) raises UnicodeDecodeError out of `exec` and kills the
+        whole trial -- observed on 5 of the first 49 held-out trials. The task is
+        graded on the repository state, so a bad read must degrade to a message
+        the model can react to.
+        """
+        try:
+            return await environment.exec(
+                command, cwd=REPO_DIR, timeout_sec=timeout_sec
+            )
+        except UnicodeDecodeError as error:
+            raise _BinaryOutputError(str(error)) from error
+
     async def _run_shell(
         self, environment: BaseEnvironment, command: str, timeout_sec: int = 300
     ) -> dict[str, Any]:
-        result = await environment.exec(command, cwd=REPO_DIR, timeout_sec=timeout_sec)
+        try:
+            result = await self._exec(environment, command, timeout_sec)
+        except _BinaryOutputError as error:
+            return {
+                "error": "command produced non-UTF-8 output (binary file?): "
+                f"{error}. Re-run it filtered through `strings`, `head -c`, or "
+                "`file` instead."
+            }
         return {
             "return_code": result.return_code,
             "stdout": self._truncate(result.stdout or ""),
@@ -290,10 +334,17 @@ class SweBenchProAgent(BaseAgent):
         start_line: int | None,
         end_line: int | None,
     ) -> dict[str, Any]:
+        try:
+            path = self._repo_relative(path)
+        except ValueError as error:
+            return {"error": str(error)}
         # `cat -A`-free read via shell so we do not need a download round-trip.
-        result = await environment.exec(
-            f"cat -- {json.dumps(path)}", cwd=REPO_DIR, timeout_sec=60
-        )
+        try:
+            result = await self._exec(
+                environment, f"cat -- {json.dumps(path)}", timeout_sec=60
+            )
+        except _BinaryOutputError as error:
+            return {"error": f"{path} is not UTF-8 text ({error})"}
         if result.return_code != 0:
             return {"error": self._truncate(result.stderr or "could not read file")}
         lines = (result.stdout or "").splitlines()
@@ -306,9 +357,35 @@ class SweBenchProAgent(BaseAgent):
             body = body[:MAX_FILE_READ_CHARS] + "\n...[truncated]..."
         return {"path": path, "start_line": lo, "end_line": hi, "content": body}
 
+    @staticmethod
+    def _repo_relative(path: str) -> str:
+        """Normalize a model-supplied path to a safe repo-relative one.
+
+        The tool schema documents these as repo-relative, but models routinely
+        answer with the absolute path they just saw in shell output. That is not
+        merely cosmetic: ``Path(a) / "/app/x.py"`` discards ``a`` entirely, so an
+        absolute path made ``_write_file`` stage onto the HOST root instead of
+        under ``logs_dir`` and crashed the whole trial with
+        ``OSError [Errno 30] Read-only file system: '/app'`` (seen on 2 of the
+        first 12 held-out trials). Strip the repo prefix, refuse traversal.
+        """
+        cleaned = path.strip()
+        if cleaned == REPO_DIR:
+            cleaned = ""
+        elif cleaned.startswith(f"{REPO_DIR}/"):
+            cleaned = cleaned[len(REPO_DIR) + 1 :]
+        cleaned = cleaned.lstrip("/")
+        if not cleaned or ".." in PurePosixPath(cleaned).parts:
+            raise ValueError(f"expected a repo-relative path under {REPO_DIR}")
+        return cleaned
+
     async def _write_file(
         self, environment: BaseEnvironment, path: str, content: str
     ) -> dict[str, Any]:
+        try:
+            path = self._repo_relative(path)
+        except ValueError as error:
+            return {"error": str(error)}
         local_path = self.logs_dir / "staged" / path
         local_path.parent.mkdir(parents=True, exist_ok=True)
         local_path.write_text(content, encoding="utf-8")
@@ -382,10 +459,13 @@ class SweBenchProAgent(BaseAgent):
                 "instructions": INSTRUCTIONS,
                 "input": next_input,
                 "tools": TOOLS,
-                "reasoning": {"effort": "high"},
                 "max_output_tokens": 12_000,
                 "parallel_tool_calls": False,
             }
+            # Only reasoning models accept `reasoning`; sending it to gpt-4o or
+            # gpt-4.1 is a hard 400 on the very first turn.
+            if _is_reasoning_model(self._api_model):
+                request["reasoning"] = {"effort": "high"}
             if previous_response_id is not None:
                 request["previous_response_id"] = previous_response_id
             response = await self._responses_create(**request)
@@ -465,7 +545,19 @@ class SweBenchProAgent(BaseAgent):
                 break
             previous_response_id = response.id
         else:
-            raise RuntimeError(f"SWE-bench-Pro agent exceeded {MAX_TURNS} turns")
+            # Exhausting the turn budget is NOT a trial failure. The reward comes
+            # from the task's hidden suite run against whatever the agent left in
+            # the repository, exactly as in the "model stopped calling tools"
+            # branch above. Raising here instead discarded real edits, errored the
+            # trial, and made harbor re-run the whole thing -- 9 of the first 49
+            # held-out trials -- and would have scored a hard 0 for a fix that may
+            # well have been correct. Record it and let the verifier grade.
+            self._trace({"event": "turn_budget_exhausted", "turns": MAX_TURNS})
+            context.metadata = {
+                "turns": MAX_TURNS,
+                "turn_budget_exhausted": True,
+                "trace": "swe-bench-pro-trace.jsonl",
+            }
 
         context.n_input_tokens = input_tokens
         context.n_output_tokens = output_tokens
