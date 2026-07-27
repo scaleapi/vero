@@ -48,8 +48,10 @@ nothing resumes you.
 - **`--start N --stop M`** or repeated **`--case-id ID`** — score a *subset*.
   Iterate on a handful of cases (cheap, fast) before spending budget on the full
   set.
-- **`--seed N`** — fix the seed to *reproduce a noisy comparison exactly* (the
-  cleanest way to "replicate before acting").
+- **`--seed N`** — backend-dependent, and several backends reject it outright
+  (you get an `invalid evaluation request` naming the reason). Where it is
+  refused, replicate a noisy comparison by re-running the *identical selection*
+  instead — same `--start/--stop` or same `--case-id` set.
 - **`--max-concurrency`**, **`--case-timeout`**, **`--timeout`** — override
   parallelism and wall budgets for a run. Note the final held-out evaluation
   always uses the configured per-case budget, so don't loosen `--case-timeout`
@@ -88,8 +90,8 @@ are enforced by the evaluator; `evals plan` shows what remains.
   then `--span N`, then windowed chars; artifacts are files — `grep` them.
 - Confusing ids: evaluation ids come from `evals list`; case ids from
   `evals cases`; job ids only from `evals run --detach`.
-- Scores may be noisy: replicate an important comparison before acting on it
-  (`--seed N` reproduces one exactly).
+- Scores may be noisy: replicate an important comparison before acting on it, by
+  re-running the identical case selection.
 - Ending your turn to "wait" for a `--detach`ed job — nothing resumes you. Block
   on `evals run` instead, or keep polling `evals status` within your turn.
 - Finishing without `evals submit`: your best candidate must be nominated

@@ -735,6 +735,9 @@ def compile_harbor_task(
         "sidecar_factory": FACTORY_PATH,
         "producer_base_url": PRODUCER_BASE_URL,
         "command_harness": config.command_backend is not None,
+        # The Harbor backend hard-rejects request.seed, so only advertise the
+        # flag when the build evaluates through a command backend.
+        "seed_supported": config.command_backend is not None,
         "selection_backend": _backend_id(config.selection_partition),
         "evaluation_set_name": config.evaluation_set_name,
         "selection_partition": config.selection_partition,

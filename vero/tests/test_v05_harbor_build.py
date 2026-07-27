@@ -1267,3 +1267,33 @@ def test_instruction_omits_retired_insights_paragraph(tmp_path):
     instruction = (output / "instruction.md").read_text(encoding="utf-8")
     assert "insights-generator" not in instruction
     assert "skills/insights/" not in instruction
+
+
+def test_instruction_advertises_seed_only_where_the_backend_accepts_it(tmp_path):
+    # HarborBackend.validate_request rejects request.seed outright, so telling a
+    # Harbor-scored optimizer to "pass --seed N to reproduce a comparison" sends
+    # it into a guaranteed 400. Observed live: the optimizer followed that advice
+    # and burned a round trip on `invalid evaluation request`.
+    harbor = compile_harbor_task(
+        _config(tmp_path), tmp_path / "harbor", vero_root=Path(__file__).parents[1]
+    )
+    instruction = (harbor / "instruction.md").read_text(encoding="utf-8")
+    assert "--seed" in instruction  # still named, so the rejection is not a surprise
+    assert "rejects `--seed`" in instruction
+    assert "re-run the identical selection" in instruction
+
+    # A command backend does its own sampling and accepts the seed.
+    command = compile_harbor_task(
+        _config(
+            tmp_path / "cmd-config",
+            evaluation_backend="command",
+            command_backend=_command_backend(tmp_path / "cmd"),
+            agent_import_path=_OMIT,
+            task_source=_OMIT,
+        ),
+        tmp_path / "command",
+        vero_root=Path(__file__).parents[1],
+    )
+    instruction = (command / "instruction.md").read_text(encoding="utf-8")
+    assert "reproduce a noisy comparison exactly" in instruction
+    assert "rejects `--seed`" not in instruction

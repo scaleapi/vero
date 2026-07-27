@@ -27,8 +27,14 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 
    An evaluation can take many minutes — that is expected; let the call block
    and read the result it returns. Iterate cheaply on a subset first
-   (`--start 0 --stop N`, or repeated `--case-id ID`); pass `--seed N` to
-   reproduce a noisy comparison exactly. Run `evals run --help` for every option.
+   (`--start 0 --stop N`, or repeated `--case-id ID`).
+   {% if seed_supported %}
+   Pass `--seed N` to reproduce a noisy comparison exactly.
+   {% else %}
+   To replicate a noisy comparison, re-run the identical selection; this backend
+   fixes its own sampling and rejects `--seed`.
+   {% endif %}
+   Run `evals run --help` for every option.
 
    Add `--detach` **only** to run several evaluations at once: it returns a
    `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks

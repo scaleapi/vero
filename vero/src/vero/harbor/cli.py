@@ -543,7 +543,11 @@ def inference_gateway_command(config_path, host, port):
 )
 @click.option(
     "--seed", type=int,
-    help="Seed for case sampling / evaluation, so a noisy comparison can be reproduced exactly.",
+    help=(
+        "Seed for case sampling / evaluation. Backend-dependent: a backend that "
+        "fixes its own sampling rejects this with 'invalid evaluation request'. "
+        "To replicate elsewhere, re-run the identical case selection."
+    ),
 )
 @click.option(
     "--detach",

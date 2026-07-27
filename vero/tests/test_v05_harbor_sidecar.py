@@ -878,3 +878,20 @@ def test_access_policy_defaults_to_safe_k_anonymity_floor():
     aggregate = EvaluationAccessPolicy(disclosure=DisclosureLevel.AGGREGATE)
     assert aggregate.min_aggregate_cases == 5
     assert EvaluationAccessPolicy().min_aggregate_cases == 1
+
+
+def test_detached_job_error_names_the_reason_a_request_was_rejected():
+    # The detached path mirrors the blocking one (sidecar/app.py): a request
+    # rejection must say *what* the backend refused, or a polling agent sees
+    # only "invalid evaluation request" and cannot reissue a valid call.
+    # Denials stay opaque on purpose — they are policy, not capability.
+    from vero.evaluation import EvaluationRequestError
+
+    describe = EvaluationSidecar._evaluation_job_error
+    assert describe(EvaluationRequestError("backend does not support the seed")) == (
+        "invalid evaluation request: backend does not support the seed"
+    )
+    assert describe(EvaluationRequestError("")) == "invalid evaluation request"
+    assert describe(EvaluationDeniedError("private policy detail")) == (
+        "evaluation denied"
+    )

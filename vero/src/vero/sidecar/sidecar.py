@@ -455,7 +455,12 @@ class EvaluationSidecar:
         if isinstance(error, (EvaluationDeniedError, EvaluationAccessError)):
             return "evaluation denied"
         if isinstance(error, EvaluationRequestError):
-            return "invalid evaluation request"
+            # Same reasoning as the blocking path in sidecar/app.py: the message
+            # names the backend capability that rejected the request, which the
+            # agent needs in order to reissue it correctly.
+            return f"invalid evaluation request: {error}" if str(error) else (
+                "invalid evaluation request"
+            )
         if isinstance(error, CandidateTransferError):
             return "candidate version could not be imported"
         # Unmapped failure: include the exception type (a class name, so no

@@ -479,8 +479,11 @@ def test_http_app_maps_backend_request_rejection_to_400():
         },
     )
 
+    # The reason is passed through: an agent told only "invalid" cannot repair
+    # its request, and these messages state a backend capability, not policy.
+    # Contrast test_http_app_redacts_access_denial_details, which stays opaque.
     assert response.status_code == 400
-    assert response.json() == {"error": "invalid evaluation request"}
+    assert response.json() == {"error": "invalid evaluation request: unknown case"}
 
 
 def test_harbor_cli_builds_canonical_selection(monkeypatch):

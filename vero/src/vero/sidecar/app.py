@@ -50,12 +50,15 @@ class ScoreBaselineRequest(StrictModel):
     replicates: int = 1
 
 
-def _error(status_code: int, message: str):
+def _error(status_code: int, message: str, *, detail: bool = False):
     async def handler(_request, error):
-        return JSONResponse(
-            status_code=status_code,
-            content={"error": message or str(error)},
-        )
+        text = message or str(error)
+        # `detail` opts a category into appending the raised message. Use it only
+        # where the message states a backend capability the agent must know to
+        # fix its own request — never for denials, whose whole point is opacity.
+        if detail and message and str(error):
+            text = f"{message}: {error}"
+        return JSONResponse(status_code=status_code, content={"error": text})
 
     return handler
 
@@ -92,7 +95,11 @@ def create_app(
     app.add_exception_handler(EvaluationDeniedError, _error(403, "evaluation denied"))
     app.add_exception_handler(EvaluationAccessError, _error(403, "evaluation denied"))
     app.add_exception_handler(
-        EvaluationRequestError, _error(400, "invalid evaluation request")
+        EvaluationRequestError,
+        # The agent cannot repair a request it is only told is "invalid": these
+        # messages are backend-authored capability statements (an unsupported
+        # flag, a fixed limit), so pass them through.
+        _error(400, "invalid evaluation request", detail=True),
     )
     app.add_exception_handler(
         CandidateTransferError,
