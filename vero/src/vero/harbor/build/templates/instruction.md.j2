@@ -71,15 +71,6 @@ case plus the complete Harbor trial records: exact failure results, exception
 tracebacks, trial logs, and target-agent artifacts. Use these files to inspect
 successful as well as failed trajectories without putting long traces into the
 CLI response.
-{% if overlay_present %}
-Your workspace also includes analysis subagents under `.claude/agents/` and a
-corpus-analysis skill under `skills/insights/`. These mine the entire
-`.evals/results/` trace corpus for recurring, cross-case failure patterns that
-are invisible in any single trace. After running at least one full-disclosure
-evaluation, dispatch the `insights-generator` subagent (via the Task tool,
-pointing it at the `.evals` corpus) to get evidence-grounded findings, then let
-those findings guide your next candidate edit. Re-run it as the corpus grows.
-{% endif %}
 {% endif %}
 ## Rules
 

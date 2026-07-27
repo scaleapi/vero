@@ -1254,3 +1254,16 @@ def test_build_rejects_n_attempts_override_on_agent_partition(tmp_path):
             tmp_path,
             targets=[VerificationTargetSpec(partition="validation", n_attempts=3)],
         )
+
+
+def test_instruction_omits_retired_insights_paragraph(tmp_path):
+    # The insights-generator subagent / skills/insights overlay was retired; the
+    # rendered optimizer instruction must not advertise it (it did whenever the
+    # always-baked evals skill made overlay_present true).
+    config = _config(tmp_path)
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    instruction = (output / "instruction.md").read_text(encoding="utf-8")
+    assert "insights-generator" not in instruction
+    assert "skills/insights/" not in instruction
