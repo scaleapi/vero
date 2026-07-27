@@ -268,6 +268,20 @@ def _deployment_config(
                 },
             }
     else:
+        # A target may override attempts-per-case on its own (held-out) partition
+        # without touching search/selection. Backends are per-partition, so the
+        # override is injected into that partition's backend at compile time; a
+        # config validator forbids overriding an agent-evaluable partition.
+        target_n_attempts = {
+            target.partition: target.n_attempts
+            for target in config.targets
+            if target.n_attempts is not None
+        }
+        target_aggregate = {
+            target.partition: target.aggregate_attempts
+            for target in config.targets
+            if target.aggregate_attempts is not None
+        }
         for partition in config.partitions:
             backends[_backend_id(partition)] = {
                 "type": "harbor",
@@ -283,7 +297,7 @@ def _deployment_config(
                 "case_timeout_seconds": config.case_timeout_seconds,
                 "task_agent_timeout_seconds": config.task_agent_timeout_seconds,
                 "default_index": config.default_index,
-                "n_attempts": config.n_attempts,
+                "n_attempts": target_n_attempts.get(partition, config.n_attempts),
                 "max_retries": config.max_retries,
                 "retry_wait_multiplier": config.retry_wait_multiplier,
                 "retry_min_wait_seconds": config.retry_min_wait_seconds,
@@ -293,7 +307,9 @@ def _deployment_config(
                     config.infrastructure_retry_delay_seconds
                 ),
                 "reward_key": config.reward_key,
-                "aggregate_attempts": config.aggregate_attempts,
+                "aggregate_attempts": target_aggregate.get(
+                    partition, config.aggregate_attempts
+                ),
                 "feedback_transcripts": config.feedback_transcripts,
                 "feedback_max_bytes": config.feedback_max_bytes,
                 "expose_attempt_detail": config.expose_attempt_detail,

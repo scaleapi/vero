@@ -557,6 +557,36 @@ class HarborBuildConfig(
         return self
 
     @model_validator(mode="after")
+    def validate_target_attempt_overrides(self) -> HarborBuildConfig:
+        """A per-target n_attempts/aggregate_attempts override is only honorable
+        on a held-out target: backends are per-partition, so overriding an
+        agent-evaluable partition (search or selection) would silently change
+        those runs too, and a command backend has no attempts to override."""
+        overriding = [
+            target
+            for target in self.targets
+            if target.n_attempts is not None or target.aggregate_attempts is not None
+        ]
+        if not overriding:
+            return self
+        if self.evaluation_backend == "command":
+            raise ValueError(
+                "per-target n_attempts/aggregate_attempts only apply to a harbor "
+                "evaluation_backend"
+            )
+        shared = {access.partition for access in self.agent_access} | {
+            self.selection_partition
+        }
+        bad = sorted({t.partition for t in overriding} & shared)
+        if bad:
+            raise ValueError(
+                "per-target n_attempts/aggregate_attempts cannot override an "
+                "agent-evaluable partition (its backend is shared with search/"
+                f"selection): {', '.join(bad)}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_task_manifest_agreement(self) -> HarborBuildConfig:
         """The manifest and the partitions must describe the same task set."""
         if self.task_manifest is None or self.task_source is None:

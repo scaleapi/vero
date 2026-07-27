@@ -1203,3 +1203,54 @@ def test_run_command_forwards_agent_env_as_harbor_ae(tmp_path, monkeypatch):
     # Deterministic (sorted-by-key) ordering: FOO before UV_TOOL_BIN_DIR.
     joined = shlex.join(command)
     assert joined.index("--ae FOO=bar") < joined.index("--ae UV_TOOL_BIN_DIR=")
+
+
+def _serve_backends(tmp_path: Path, **updates) -> dict:
+    config = _config(tmp_path, **updates)
+    output = compile_harbor_task(
+        config, tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    serve = json.loads(
+        (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    return serve["backends"]
+
+
+def test_verification_target_spec_defaults_n_attempts_none():
+    target = VerificationTargetSpec(partition="test")
+    assert target.n_attempts is None
+    assert target.aggregate_attempts is None
+
+
+def test_compiler_applies_per_target_n_attempts_override(tmp_path):
+    # Only the held-out test backend gets 3x/mean; validation (search/selection)
+    # keeps the global n_attempts=1.
+    backends = _serve_backends(
+        tmp_path,
+        n_attempts=1,
+        targets=[
+            VerificationTargetSpec(
+                partition="test", n_attempts=3, aggregate_attempts="mean"
+            )
+        ],
+    )
+    assert backends["harbor-test"]["n_attempts"] == 3
+    assert backends["harbor-test"]["aggregate_attempts"] == "mean"
+    assert backends["harbor-validation"]["n_attempts"] == 1
+
+
+def test_compiler_defaults_target_n_attempts_to_global(tmp_path):
+    backends = _serve_backends(tmp_path, n_attempts=2)
+    # No per-target override -> every backend inherits the global (backward-compat).
+    assert backends["harbor-test"]["n_attempts"] == 2
+    assert backends["harbor-validation"]["n_attempts"] == 2
+
+
+def test_build_rejects_n_attempts_override_on_agent_partition(tmp_path):
+    # validation is agent-evaluable + the selection partition; its backend is
+    # shared with search, so an override there must be rejected.
+    with pytest.raises(ValidationError, match="agent-evaluable partition"):
+        _config(
+            tmp_path,
+            targets=[VerificationTargetSpec(partition="validation", n_attempts=3)],
+        )

@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, JsonValue, field_validator
 
@@ -79,6 +80,13 @@ class VerificationTargetSpec(StrictModel):
         baseline_reward: Pin the seed's reward on this target to skip scoring
             the immutable baseline every run.
         max_attempts: Number of scoring attempts before accepting failure.
+        n_attempts: Optional per-target override of the global attempts-per-case;
+            None inherits the global. Set >1 to score each held-out case several
+            times and combine them (with aggregate_attempts), e.g. 3 to average a
+            noisy final eval over 3 scorings. Only meaningful on a harbor target
+            whose partition is not agent-evaluable (see the config validator).
+        aggregate_attempts: Optional per-target override of how repeat attempts
+            combine ("best"/"mean"); None inherits the global ("mean").
     """
 
     partition: str
@@ -88,6 +96,8 @@ class VerificationTargetSpec(StrictModel):
     failure_value: float = 0.0
     baseline_reward: float | None = None
     max_attempts: int = Field(default=1, ge=1)
+    n_attempts: int | None = Field(default=None, ge=1)
+    aggregate_attempts: Literal["best", "mean"] | None = None
 
     @field_validator("partition", "reward_key")
     @classmethod
