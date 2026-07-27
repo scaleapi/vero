@@ -299,9 +299,10 @@ def evals() -> None:
     resources), `candidates/` (prior program versions), and `plan.json`
     (what you may evaluate, and remaining budget).
 
-    Typical loop: `evals plan` -> edit + commit -> `evals run --detach` ->
-    `evals status JOB` -> `evals list` -> `evals diff BASELINE CANDIDATE` ->
-    `evals cases ID --sort score` -> `evals trace ID CASE`.
+    Typical loop: `evals plan` -> edit + commit -> `evals run` (blocks and
+    returns the result) -> `evals diff BASELINE CANDIDATE` ->
+    `evals cases ID --sort score` -> `evals trace ID CASE`. Add `--detach` only
+    to run several evaluations at once, then poll `evals status JOB`.
     """
 
 

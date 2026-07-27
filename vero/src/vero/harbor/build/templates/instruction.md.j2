@@ -14,27 +14,40 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 
 1. Inspect and edit `{{ layout.target_repo }}`.
 2. Commit each candidate with Git.
-3. Evaluate the current commit on the selection set:
+3. Evaluate the current commit on the selection set. By default `evals run`
+   **blocks** until scoring finishes and prints the result — one call, no
+   polling, no job to track:
 
    ```bash
    evals run \
      --backend {{ selection_backend }} \
      --evaluation-set {{ evaluation_set_name }} \
-     --partition {{ selection_partition }} \
-     --detach
+     --partition {{ selection_partition }}
    ```
 
-   Record the returned `job_id`. Continue inspecting or editing while it runs,
-   then use `evals status JOB_ID` and `evals result JOB_ID` to retrieve its
-   durable result. Track every outstanding job and do not claim an improvement
-   before its comparison baseline has completed.
+   An evaluation can take many minutes — that is expected; let the call block
+   and read the result it returns. Iterate cheaply on a subset first
+   (`--start 0 --stop N`, or repeated `--case-id ID`); pass `--seed N` to
+   reproduce a noisy comparison exactly. Run `evals run --help` for every option.
+
+   Add `--detach` **only** to run several evaluations at once: it returns a
+   `job_id` immediately instead of blocking. Then poll `evals status JOB_ID`
+   until it reports `complete` and read `evals result JOB_ID`. Never end your
+   turn waiting on a detached job — nothing will wake a headless run. Do not
+   claim an improvement before its comparison baseline has been scored on the
+   same cases.
 
 4. Use `evals status` to inspect evaluation jobs and allowed evaluation
    sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
    Navigate finished results with `evals list`, `evals diff`, `evals cases`,
    and `evals trace` (see `evals --help` and `skills/evals/SKILL.md`).
 {% if submit_enabled %}
-5. When finished, nominate the chosen commit with `evals submit`.
+5. Before finishing, commit and nominate your **best** candidate with
+   `evals submit` — this is the commit that ships. Measure the baseline and
+   submit only a candidate you have confirmed beats it on the same cases. If you
+   never submit, VeRO falls back to auto-best over validation and then your last
+   commit, so an unvetted or half-finished edit can ship by default — submit
+   deliberately.
 {% else %}
 5. VeRO automatically pools your measurements, re-scores a shortlist with the
    trusted evaluator, and selects the best candidate. The unmodified baseline is
@@ -83,6 +96,10 @@ CLI response.
 - Scores may be noisy; compare candidates on the same selection whenever possible.
 - Reusing the same cases removes case-sampling differences, but target-model
   randomness remains. Replicate important comparisons before assigning causality.
+- Each case has a wall-clock limit: a case that runs past it is stopped and
+  scores the failure value. A change that is more thorough but slower can
+  therefore score *worse* by pushing cases over the limit — treat per-case
+  latency as a real constraint, not only accuracy.
 {% if exhaust_budget and disclose_budget %}
 - Unspent evaluation budget is wasted. Use remaining calls to re-measure the
   strongest candidate or try another plausible change.

@@ -495,34 +495,60 @@ def inference_gateway_command(config_path, host, port):
 
 
 @harbor.command("eval")
-@click.option("--backend", "backend_id", required=True)
-@click.option("--evaluation-set", "evaluation_set_name", required=True)
-@click.option("--partition")
-@click.option("--version", help="Candidate version; defaults to agent repository HEAD.")
-@click.option("--case-id", "case_ids", multiple=True)
-@click.option("--start", type=click.IntRange(min=0))
-@click.option("--stop", type=click.IntRange(min=1))
-@click.option("--parameter", multiple=True, help="Evaluation parameter as NAME=JSON.")
-@click.option("--timeout", type=click.FloatRange(min=0, min_open=True))
-@click.option("--case-timeout", type=click.FloatRange(min=0, min_open=True))
-@click.option("--max-concurrency", type=click.IntRange(min=1))
+@click.option(
+    "--backend", "backend_id", required=True,
+    help="Evaluation backend to score against (e.g. the selection partition's backend; see `evals plan`).",
+)
+@click.option(
+    "--evaluation-set", "evaluation_set_name", required=True,
+    help="Name of the evaluation set to score on.",
+)
+@click.option(
+    "--partition",
+    help="Partition within the evaluation set (e.g. development or validation).",
+)
+@click.option("--version", help="Candidate version to score; defaults to the agent repository's HEAD commit.")
+@click.option(
+    "--case-id", "case_ids", multiple=True,
+    help="Score only these case ids (repeatable) — a cheap subset for fast iteration. Cannot combine with --start/--stop.",
+)
+@click.option(
+    "--start", type=click.IntRange(min=0),
+    help="Subset start index (with --stop): score cases [start, stop) for cheap iteration on a slice.",
+)
+@click.option("--stop", type=click.IntRange(min=1), help="Subset stop index (exclusive); requires --start.")
+@click.option("--parameter", multiple=True, help="Evaluation parameter as NAME=JSON (repeatable).")
+@click.option(
+    "--timeout", type=click.FloatRange(min=0, min_open=True),
+    help="Override the whole-evaluation wall timeout, in seconds.",
+)
+@click.option(
+    "--case-timeout", type=click.FloatRange(min=0, min_open=True),
+    help="Override the per-case wall budget for THIS run, in seconds. A case that exceeds it is stopped and scores the failure value; the final held-out evaluation always uses the configured budget, so keep search runs comparable.",
+)
+@click.option("--max-concurrency", type=click.IntRange(min=1), help="Override how many cases run in parallel.")
 @click.option(
     "--error-rate-threshold",
     type=click.FloatRange(min=0, max=1, min_open=True),
+    help="Abort the evaluation if the fraction of errored cases exceeds this.",
 )
-@click.option("--retry-max-attempts", type=click.IntRange(min=1))
-@click.option("--retry-initial-delay", type=click.FloatRange(min=0))
-@click.option("--retry-maximum-delay", type=click.FloatRange(min=0))
-@click.option("--retry-multiplier", type=click.FloatRange(min=1))
+@click.option("--retry-max-attempts", type=click.IntRange(min=1), help="Max attempts per case on transient failure.")
+@click.option("--retry-initial-delay", type=click.FloatRange(min=0), help="Initial retry backoff delay, in seconds.")
+@click.option("--retry-maximum-delay", type=click.FloatRange(min=0), help="Maximum retry backoff delay, in seconds.")
+@click.option("--retry-multiplier", type=click.FloatRange(min=1), help="Retry backoff growth multiplier.")
 @click.option(
     "--retry-on-timeout/--no-retry-on-timeout",
     default=None,
+    help="Whether a per-case timeout counts as a retryable failure.",
 )
-@click.option("--seed", type=int)
+@click.option(
+    "--seed", type=int,
+    help="Seed for case sampling / evaluation, so a noisy comparison can be reproduced exactly.",
+)
 @click.option(
     "--detach",
     is_flag=True,
-    help="Start a durable evaluation job and return without waiting for its result.",
+    help="Run several evaluations at once: start a durable job and return a job_id immediately instead of blocking. Poll `evals status JOB` until complete, then read `evals result JOB`. Omit to block and get the result in one call.",
 )
 def evaluate_command(
     backend_id,
@@ -618,9 +644,19 @@ def evaluation_result_command(job_id):
 
 
 @harbor.command("submit")
-@click.option("--version", help="Candidate version; defaults to agent repository HEAD.")
+@click.option(
+    "--version",
+    help="Candidate version to nominate; defaults to the agent repository's HEAD commit.",
+)
 def submit_command(version):
-    """Nominate a candidate for submit-based finalization."""
+    """Nominate your best candidate as the one to ship.
+
+    This is the deliberate selection that finalization scores on the held-out
+    set. Submit only a candidate you have confirmed beats the baseline on the
+    same cases. If you never submit, VeRO falls back to auto-best over
+    validation and then your last commit, so an unvetted edit can ship by
+    default -- submit on purpose.
+    """
     click.echo(
         json.dumps(_request("POST", "/submit", payload={"version": version}), indent=2)
     )
