@@ -2,9 +2,10 @@
 name = "swebench-pro-agent"
 version = "0.1.0"
 description = "Editable Harbor-native SWE-bench-Pro baseline for VeRO"
-# Cap below 3.14: an uncapped ">=3.11" lets uv resolve to 3.14, whose litellm/pyo3
-# build fails. Keep this bounded until the toolchain supports 3.14.
-requires-python = ">=3.11,<3.14"
+# Floor at 3.12 (harbor 0.20.0 requires it; ">=3.11" made the package's own
+# `uv run pytest` unresolvable). Cap below 3.14: an uncapped range lets uv
+# resolve to 3.14, whose litellm/pyo3 build fails.
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "harbor==0.20.0",
     "openai==2.46.0",

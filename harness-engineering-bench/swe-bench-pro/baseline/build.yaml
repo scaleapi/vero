@@ -4,11 +4,12 @@ description: >-
   interface. The target must edit a checked-out repository so the task's hidden
   test suite passes; the task-source verifier runs the suite for the reward.
 agent_repo: target
-# TODO: pin the real SWE-bench-Pro Harbor task source (see README). This is a
-# clearly-marked placeholder, NOT a real digest, and will fail to resolve until
-# replaced with the actual `scale-ai/swe-bench-pro@sha256:<digest>` from the
-# Harbor task registry.
-task_source: scale-ai/swe-bench-pro@sha256:REPLACE_WITH_REAL_DIGEST  # TODO: pin the real SWE-bench-Pro Harbor task source (see README)
+# SWE-bench-Pro ships as the `swebenchpro` dataset in the DEFAULT Harbor registry
+# (731 instances), not as an `<org>/<name>@sha256:<digest>` package like
+# swe-atlas-qna or tau3. Its tasks resolve to git-backed task ids under
+# laude-institute/harbor-datasets at commit c8e8f3fac7097accaacf261d74c3d6f441de45b1,
+# so the version pin is the registry version rather than a content digest.
+task_source: swebenchpro@1.0
 task_manifest: ../partitions/manifest.json
 agent_import_path: swebench_pro_agent.agent:SweBenchProAgent
 harbor_requirement: harbor[modal]==0.20.0
@@ -18,18 +19,21 @@ partition_files:
   validation: ../partitions/validation.json
   test: ../partitions/test.json
 
-# TODO: set real disclosure counts once the partitions are regenerated from the
-# pinned task list. total_cases below are placeholders scaled to the stub sizes.
 agent_access:
   - partition: development
     disclosure: full
-    expose_case_resources: true
-    total_cases: 0
+    # false, unlike the sibling benchmarks: VeRO materializes case resources via
+    # PackageDatasetClient, which only accepts `<org>/<name>` package refs. A
+    # registry dataset such as swebenchpro@1.0 cannot be exposed that way.
+    expose_case_resources: false
+    total_runs: 100
+    total_cases: 146
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
     min_aggregate_cases: 5
-    total_cases: 0
+    total_runs: 100
+    total_cases: 292
 
 selection_partition: validation
 targets:
@@ -65,9 +69,12 @@ expose_attempt_detail: false
 # Timeouts are bumped well above the GAIA baseline: SWE-bench-Pro tasks build a
 # real repository and run its (often slow) test suite, so both the per-case and
 # the verifier budgets need substantially more headroom than a short-answer task.
+# task_agent_timeout_seconds mirrors the task package's own `[agent] timeout_sec
+# = 3000`; case_timeout_seconds is the tighter budget VeRO enforces on top, so
+# the baseline runner's --agent-timeout-multiplier is 1800/3000 = 0.6.
 timeout_seconds: 28800
 case_timeout_seconds: 1800
-task_agent_timeout_seconds: 3600
+task_agent_timeout_seconds: 3000
 max_concurrency: 8
 error_rate_threshold: 0.1
 verifier_timeout_seconds: 28800

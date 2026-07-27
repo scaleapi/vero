@@ -1,22 +1,15 @@
 #!/usr/bin/env python3
 """Create and verify the committed SWE-bench-Pro development/validation/test split.
 
-STUB STATUS
------------
-This script is a faithful adaptation of ``gaia/scripts/partition_gaia.py`` for
-SWE-bench-Pro, but it cannot produce real partitions until the SWE-bench-Pro
-Harbor task source is pinned. Two constants and one reader must be confirmed
-against the real task package before running without ``--check``:
-
-  1. ``DATASET_DIGEST`` — the real content digest (see baseline/build.yaml).
-  2. ``TOTAL_TASKS`` / ``TARGET_COUNTS`` — the real task count and split sizes.
-  3. ``_read_tasks`` — how each task exposes its canonical name and the field
-     used to stratify (assumed here to be the source repository). Adjust the
-     TOML keys once the pinned task.toml layout is known.
+The task source is the ``swebenchpro`` dataset in the default Harbor registry
+(731 instances, version 1.0). Unlike swe-atlas-qna, it is a *registry* dataset
+rather than an ``<org>/<name>@sha256:<digest>`` package: its tasks resolve to
+``GitTaskId``s under ``laude-institute/harbor-datasets`` at a pinned commit, so
+the version pin here is ``swebenchpro@1.0`` and the recorded ref is the pinned
+git commit plus the task's path within that repository.
 
 The deterministic, sha256-keyed stratified split and the ``--check`` mode mirror
-the GAIA script exactly, so once the constants are correct the committed split is
-reproducible and verifiable.
+the GAIA script exactly, so the committed split is reproducible and verifiable.
 """
 
 from __future__ import annotations
@@ -25,16 +18,14 @@ import argparse
 import asyncio
 import hashlib
 import json
-import tomllib
 from collections import Counter, defaultdict
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
-DATASET_NAME = "scale-ai/swe-bench-pro"
-# TODO: replace with the real content digest once the task source is pinned.
-DATASET_DIGEST = "REPLACE_WITH_REAL_DIGEST"
-TASK_SOURCE = f"{DATASET_NAME}@sha256:{DATASET_DIGEST}"
+DATASET_NAME = "swebenchpro"
+DATASET_VERSION = "1.0"
+TASK_SOURCE = f"{DATASET_NAME}@{DATASET_VERSION}"
 SEED = "vero-swe-bench-pro-v1"
 PARTITIONS = ("development", "validation", "test")
 RATIOS = {
@@ -43,11 +34,12 @@ RATIOS = {
     "test": Fraction(2, 5),
 }
 
-# TODO: set to the real task count and split sizes (dev/val/test) once the task
-# source is pinned. These placeholders keep the arithmetic self-consistent
-# (20/40/40 of TOTAL_TASKS) but are NOT the real dataset size.
-TOTAL_TASKS = 0
-TARGET_COUNTS = {"development": 0, "validation": 0, "test": 0}
+# 731 instances split 20/40/40. The exact ratios are 146.2/292.4/292.4, so the
+# leftover case goes by largest remainder; the .4/.4 tie between validation and
+# test breaks towards test, matching how the sibling benchmarks resolved the
+# same tie (officeqa 246 -> 49/98/99, swe-atlas-qna 124 -> 25/49/50).
+TOTAL_TASKS = 731
+TARGET_COUNTS = {"development": 146, "validation": 292, "test": 293}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -84,26 +76,22 @@ def _task_root(path: Path) -> Path:
 def _read_tasks(path: Path) -> list[dict[str, str]]:
     """Read the exported tasks and the field used to stratify.
 
-    STUB: the exact task.toml layout for SWE-bench-Pro is not yet known. This
-    reader assumes each task exposes a canonical ``[task].name`` and a source
-    repository under ``[metadata].repository`` (or a ``repo:<name>`` tag). Adjust
-    the key lookups below to match the real package before generating partitions.
+    SWE-bench-Pro's ``task.toml`` carries no ``[task].name``: Harbor derives a
+    task's canonical name from its directory (``instance_<owner>__<repo>-<sha>``),
+    which is what ``-i`` matches against. The stratification key is the upstream
+    project, recorded verbatim as ``repo`` in each task's ``tests/config.json``.
     """
     tasks: list[dict[str, str]] = []
     for task_dir in sorted(_task_root(path).iterdir()):
         if not task_dir.is_dir():
             continue
-        config = tomllib.loads((task_dir / "task.toml").read_text(encoding="utf-8"))
-        canonical_name = config.get("task", {}).get("name")
-        if not canonical_name:
-            raise ValueError(f"{task_dir.name} has no [task].name")
-        metadata = config.get("metadata", {})
-        repository = metadata.get("repository")
+        config = json.loads(
+            (task_dir / "tests" / "config.json").read_text(encoding="utf-8")
+        )
+        repository = config.get("repo")
         if not repository:
-            tags = metadata.get("tags", [])
-            repo_tags = [t for t in tags if t.startswith("repo:")]
-            repository = repo_tags[0].removeprefix("repo:") if repo_tags else "unknown"
-        tasks.append({"name": canonical_name, "repository": repository})
+            raise ValueError(f"{task_dir.name} has no tests/config.json repo")
+        tasks.append({"name": task_dir.name, "repository": repository})
     if len(tasks) != TOTAL_TASKS:
         raise ValueError(f"expected {TOTAL_TASKS} tasks, found {len(tasks)}")
     return tasks
@@ -111,14 +99,19 @@ def _read_tasks(path: Path) -> list[dict[str, str]]:
 
 async def _fetch_registry_refs() -> tuple[str, dict[str, str]]:
     try:
-        from harbor.registry.client.package import PackageDatasetClient
+        from harbor.registry.client.factory import RegistryClientFactory
     except ImportError as error:
         raise RuntimeError(
             "--fetch-registry requires the exactly pinned Harbor package"
         ) from error
 
-    metadata = await PackageDatasetClient().get_dataset_metadata(TASK_SOURCE)
-    refs = {task.get_name(): str(task.ref) for task in metadata.task_ids}
+    metadata = await RegistryClientFactory.create().get_dataset_metadata(TASK_SOURCE)
+    # Registry tasks are git-backed: pin the commit and the in-repo path, which
+    # together identify the exact task content the way a package digest would.
+    refs = {
+        task.get_name(): f"{task.git_commit_id}:{task.path.as_posix()}"
+        for task in metadata.task_ids
+    }
     return str(metadata.version), refs
 
 
@@ -243,12 +236,6 @@ def _render(
 
 
 def main() -> None:
-    if DATASET_DIGEST == "REPLACE_WITH_REAL_DIGEST" or TOTAL_TASKS == 0:
-        raise SystemExit(
-            "STUB: pin the real DATASET_DIGEST and TOTAL_TASKS/TARGET_COUNTS "
-            "(and confirm _read_tasks against the real task.toml) before running. "
-            "See the module docstring and ../../README.md."
-        )
     args = _parse_args()
     tasks = _read_tasks(args.tasks_dir)
     args.output_dir = args.output_dir.expanduser().resolve()
