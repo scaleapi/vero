@@ -63,6 +63,15 @@ description: >-
   never need to re-run an evaluation to recover output you truncated.
 
 
+  STEP 5b — traces. `evals cases` prints a `trace` column; confirm it is true,
+  then run `evals trace ID CASE_ID` on the case that scored WORST and record the
+  span count and each span's phase and duration. Read one span with
+  `--span N`. Confirm the timings are plausible for what the harness actually
+  did — a case that never called a model should show a near-zero
+  `agent_execution` span. If the column says false, or the trace is empty, say so:
+  it means per-case debugging information is not reaching the optimizer.
+
+
   STEP 6 — disclosure is enforced. Evaluate the validation partition, then try
   `evals cases` on that result. It MUST refuse, because validation is
   aggregate-only. Record the refusal. A success here is a disclosure leak and

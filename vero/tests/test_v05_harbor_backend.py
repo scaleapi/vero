@@ -1129,3 +1129,95 @@ async def test_harbor_backend_reports_median_for_skewed_cost_distributions(tmp_p
     assert report.metrics["median_case_agent_reported_output_tokens"] == 10.0
     assert report.metrics["max_case_agent_reported_output_tokens"] == 150.0
     assert report.metrics["median_case_agent_reported_cached_input_tokens"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_case_result_carries_a_phase_execution_trace(tmp_path: Path):
+    """Harbor trial phases are lifted into CaseResult.execution_trace.
+
+    Without this the whole trace surface is inert on the only backend the
+    benchmarks use: `evals cases` reports trace=False for every case and
+    `evals trace ID CASE` has nothing to read, so an agent that wants to know
+    why a case failed has to walk artifacts/harbor/jobs/** with raw file tools.
+    Observed live in a conformance run, where the optimizer correctly skipped
+    `evals trace` because the interface told it there was nothing there.
+    """
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "trial_name": "alpha__abc",
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:01:30Z",
+                    "agent_info": {"name": "seed", "version": "0.1.0"},
+                    "agent_result": {"n_input_tokens": 10, "rollout_details": ["turn"]},
+                    "environment_setup": {
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:10Z",
+                    },
+                    "agent_setup": {
+                        "started_at": "2026-01-01T00:00:10Z",
+                        "finished_at": "2026-01-01T00:00:20Z",
+                    },
+                    "agent_execution": {
+                        "started_at": "2026-01-01T00:00:20Z",
+                        "finished_at": "2026-01-01T00:01:20Z",
+                    },
+                    "verifier": {
+                        "started_at": "2026-01-01T00:01:20Z",
+                        "finished_at": "2026-01-01T00:01:30Z",
+                    },
+                }
+            ],
+            # A case that died: the exception has to reach the trace too, since
+            # that is the case an agent most needs to inspect.
+            "example/beta": [
+                {
+                    "trial_name": "beta__xyz",
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:30Z",
+                    "environment_setup": {
+                        "started_at": "2026-01-01T00:00:00Z",
+                        "finished_at": "2026-01-01T00:00:05Z",
+                    },
+                    "exception_info": {
+                        "exception_type": "TimeoutError",
+                        "message": "agent exceeded its clock",
+                    },
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a", "case-b"])),
+    )
+    by_id = {case.case_id: case for case in report.cases}
+
+    scored = by_id["case-a"].execution_trace
+    assert [span["phase"] for span in scored] == [
+        "environment_setup",
+        "agent_setup",
+        "agent_execution",
+        "verifier",
+    ]
+    assert [span["seconds"] for span in scored] == [10.0, 10.0, 60.0, 10.0]
+    assert {span["attempt"] for span in scored} == {0}
+    assert {span["trial_name"] for span in scored} == {"alpha__abc"}
+    # The harness's own turn-by-turn record rides on the agent_execution span,
+    # which is why the CLI windows spans rather than printing them whole.
+    agent_span = next(s for s in scored if s["phase"] == "agent_execution")
+    assert agent_span["detail"]["agent_result"]["rollout_details"] == ["turn"]
+    assert agent_span["detail"]["agent_info"]["name"] == "seed"
+    verifier_span = next(s for s in scored if s["phase"] == "verifier")
+    assert verifier_span["detail"]["rewards"] == {"reward": 1.0}
+    # Uniform key set across spans keeps `evals trace`'s shape summary legible.
+    assert len({tuple(sorted(span)) for span in scored}) == 1
+
+    failed = by_id["case-b"].execution_trace
+    assert [span["phase"] for span in failed] == ["environment_setup", "exception"]
+    assert failed[-1]["detail"]["exception_type"] == "TimeoutError"

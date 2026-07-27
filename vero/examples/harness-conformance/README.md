@@ -44,6 +44,7 @@ step-through — see `description` in `build.yaml`.
 | 3 | development task resources are mounted under `.evals/tasks/`; validation's are not |
 | 4 | an evaluation runs, blocks in the foreground, and returns a score |
 | 5 | **persistence** — the same result is recoverable from `.evals/results/` via `evals list` / `show` / `cases`, so truncated output is never lost |
+| 5b | **traces** — `evals cases` reports `trace: true` and `evals trace ID CASE` returns per-phase spans with plausible durations |
 | 6 | **disclosure is enforced** — `evals cases` refuses on an aggregate-only partition |
 | 7 | budget accounting decrements by what was actually spent |
 | 8 | the edit → commit → re-evaluate loop moves the score, and `evals diff` attributes it |

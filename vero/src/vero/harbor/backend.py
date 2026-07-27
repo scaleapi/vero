@@ -1002,6 +1002,81 @@ class HarborBackend:
         return max(durations) if durations else None
 
     @staticmethod
+    def _phase_seconds(phase: Any) -> float | None:
+        if not isinstance(phase, dict):
+            return None
+        started, finished = phase.get("started_at"), phase.get("finished_at")
+        if not isinstance(started, str) or not isinstance(finished, str):
+            return None
+        try:
+            delta = datetime.fromisoformat(
+                finished.replace("Z", "+00:00")
+            ) - datetime.fromisoformat(started.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        seconds = delta.total_seconds()
+        return seconds if seconds >= 0 else None
+
+    # Harbor's own phase names, in the order a trial runs them.
+    _TRIAL_PHASES = ("environment_setup", "agent_setup", "agent_execution", "verifier")
+
+    def _execution_trace(self, attempts: list[dict[str, Any]]) -> list[JsonValue]:
+        """One span per trial phase, so `evals trace` has something to show.
+
+        Harbor already records a start/finish window per phase and the agent's own
+        rollout details; without lifting them into ``CaseResult.execution_trace``
+        the whole trace surface (`evals cases` reporting a trace, `evals trace
+        ID CASE`, `--span N`) is inert on this backend and an agent has to go
+        spelunking in ``artifacts/harbor/jobs/**`` with raw file tools instead.
+
+        Every span carries the same keys so the summary's shape grouping stays
+        legible; anything phase-specific and potentially large (rollout details,
+        tracebacks) goes under ``detail``, which the CLI windows by span.
+        """
+
+        spans: list[JsonValue] = []
+        for index, attempt in enumerate(attempts):
+            trial_name = attempt.get("trial_name")
+
+            def span(phase: str, seconds: float | None, detail: Any) -> None:
+                source = attempt.get(phase) if phase in self._TRIAL_PHASES else None
+                spans.append(
+                    {
+                        "attempt": index,
+                        "trial_name": trial_name,
+                        "phase": phase,
+                        "started_at": (source or {}).get("started_at")
+                        if isinstance(source, dict)
+                        else attempt.get("started_at"),
+                        "finished_at": (source or {}).get("finished_at")
+                        if isinstance(source, dict)
+                        else attempt.get("finished_at"),
+                        "seconds": seconds,
+                        "detail": detail,
+                    }
+                )
+
+            for phase in self._TRIAL_PHASES:
+                if not isinstance(attempt.get(phase), dict):
+                    continue
+                detail: dict[str, Any] = {}
+                if phase == "agent_execution":
+                    detail["agent_info"] = attempt.get("agent_info")
+                    # rollout_details is the harness's own turn-by-turn record
+                    # when it reports one; large by nature, hence span windowing.
+                    detail["agent_result"] = attempt.get("agent_result")
+                elif phase == "verifier":
+                    detail["rewards"] = (
+                        attempt.get("verifier_result") or {}
+                    ).get("rewards")
+                span(phase, self._phase_seconds(attempt.get(phase)), detail or None)
+
+            failure = attempt.get("exception_info")
+            if isinstance(failure, dict) and failure:
+                span("exception", None, failure)
+        return spans
+
+    @staticmethod
     def _agent_reported_tokens(attempts: list[dict[str, Any]]) -> dict[str, float]:
         """Sum the agent-self-reported token counts across a case's attempts.
 
@@ -1060,6 +1135,7 @@ class HarborBackend:
         trusted: bool = False,
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
+        trace = self._execution_trace(attempts)
         wall_seconds = self._case_wall_seconds(attempts)
         reported_tokens = self._agent_reported_tokens(attempts)
         attempt_detail = [
@@ -1125,6 +1201,7 @@ class HarborBackend:
                             else None
                         ),
                         artifacts=trial_artifacts,
+                        execution_trace=trace,
                     ),
                     score,
                 )
@@ -1161,6 +1238,7 @@ class HarborBackend:
                         else None
                     ),
                     artifacts=trial_artifacts,
+                    execution_trace=trace,
                 ),
                 score,
             )
@@ -1235,6 +1313,7 @@ class HarborBackend:
                     feedback=self._transcript_feedback(attempts),
                     metadata={"error_category": category.value},
                     artifacts=trial_artifacts,
+                    execution_trace=trace,
                 ),
                 self.config.failure_score,
             )
@@ -1252,6 +1331,7 @@ class HarborBackend:
                 feedback=self._transcript_feedback(attempts),
                 metadata={"error_category": category.value},
                 artifacts=trial_artifacts,
+                execution_trace=trace,
                 errors=[
                     CaseError(
                         message=message,
