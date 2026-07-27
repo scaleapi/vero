@@ -65,21 +65,22 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Unreachable by construction (see officeqa/baseline/build.yaml): worst case is
-# ceil(trials / max_concurrency) x case_timeout = ceil(198/24) x 900 = 8100s,
-# every one of the 198 finalize trials (66 test x n_attempts=3) timing out.
-# Assumes max_concurrency=24; recompute if that drops.
-timeout_seconds: 10800
-# case_timeout raised from 180: baseline p99 case wall ~608s (agent's own MAX_TURNS
-# cap) exceeded 180, killing ~9% of cases. task_agent_timeout is the task-declared
-# denominator; the enforced per-case cap is case_timeout_seconds.
-case_timeout_seconds: 900
+# Unreachable: worst case is ceil(198/24) x 600 = 5400s, every
+# finalize trial (66 held-out x n_attempts=3) hitting its own cap. Assumes
+# max_concurrency=24; recompute if that drops.
+timeout_seconds: 7200
+# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
+# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
+# clock the benchmark intends. Harbor times agent setup, environment build and
+# verification on separate clocks with separate multipliers, so none of them
+# eat into this budget and no buffer is warranted.
+case_timeout_seconds: 600
 task_agent_timeout_seconds: 600
 max_concurrency: 24  # 8 -> 24; see officeqa for the measured headroom argument
 error_rate_threshold: 0.1
-# verifier phase is separate from the (unbounded) agent phase. Unreachable:
-# worst-case finalize (8100) + worst-case rescore (3 x 66 = 198 trials -> 8100).
-verifier_timeout_seconds: 28800
+# Unreachable: worst-case finalize (5400) + worst-case rescore_top_k=3
+# validation rescore (5400). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 14400
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -97,9 +98,10 @@ harness_user: harness
 # *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
 # parameter, which the model can still choose. The instruction forbids that.
 agent_env:
-  # 3h: above this benchmark's worst-case full validation eval.
-  BASH_MAX_TIMEOUT_MS: "10800000"
-  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  # Above this benchmark's widest single eval: a full validation pass is
+  # ceil(66/24) x 600 = 1800s worst case.
+  BASH_MAX_TIMEOUT_MS: "3600000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"  # same as max: an un-timed eval must still block
   ENABLE_BACKGROUND_TASKS: "0"
   FORCE_AUTO_BACKGROUND_TASKS: "0"
 

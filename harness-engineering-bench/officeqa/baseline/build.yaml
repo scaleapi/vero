@@ -70,26 +70,28 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Sized to be UNREACHABLE, not to a margin: a per-eval timeout destroys work the
-# case budget already authorized, so it must never be the thing that fails.
-# case_timeout caps every case, so the true worst case is
-# ceil(trials / max_concurrency) x case_timeout = ceil(297/24) x 1200 = 15600s,
-# i.e. every one of the 297 finalize trials timing out. 21600 cannot be reached.
-# NOTE: this bound assumes max_concurrency=24. Lowering concurrency raises the
-# wave count and this must be recomputed.
-timeout_seconds: 21600
-case_timeout_seconds: 1200  # raised from 300: baseline p99 ~640s / max ~1076s exceeded 300, killing ~13% of cases
+# Unreachable: worst case is ceil(297/24) x 1800 = 23400s, every
+# finalize trial (99 held-out x n_attempts=3) hitting its own cap. Assumes
+# max_concurrency=24; recompute if that drops.
+timeout_seconds: 28800
+# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
+# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
+# clock the benchmark intends. Harbor times agent setup, environment build and
+# verification on separate clocks with separate multipliers, so none of them
+# eat into this budget and no buffer is warranted.
+case_timeout_seconds: 1800
 task_agent_timeout_seconds: 1800
-# Raised 8 -> 24 to cut finalize wall time ~3x (297 trials / concurrency x ~400s:
-# ~4.1h at 8, ~1.4h at 24). Derived headroom: run #2 sustained 16 case slots
+# Raised 8 -> 24 to cut finalize wall time ~3x (297 trials / concurrency x the
+# ~400s measured mean case wall: ~4.1h at 8, ~1.4h at 24 -- the mean, not the
+# 1800s cap above). Derived headroom: run #2 sustained 16 case slots
 # (2 detached evals x 8) at ~181k metered TPM/slot with upstream_errors=0, so 24
 # slots is ~1.5x a proven configuration. Watch upstream_errors in
 # artifacts/inference/usage.json; if it stays 0, there is room to go further.
 max_concurrency: 24
 error_rate_threshold: 0.1
-# Unreachable by the same argument: worst-case finalize (15600) + worst-case
-# validation rescore (rescore_top_k=3 x 98 cases = 294 trials -> 15600) = 31200.
-verifier_timeout_seconds: 43200
+# Unreachable: worst-case finalize (23400) + worst-case rescore_top_k=3
+# validation rescore (23400). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 54000
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -109,9 +111,10 @@ harness_user: harness
 # disable the Bash tool's run_in_background parameter -- the model can still
 # choose it, and run #2 did. The instruction is what forbids it.
 agent_env:
-  # 3h: above a worst-case full validation eval, ceil(98/24) x 1200 = 6000s.
+  # Above this benchmark's widest single eval: a full validation pass is
+  # ceil(98/24) x 1800 = 9000s worst case.
   BASH_MAX_TIMEOUT_MS: "10800000"
-  BASH_DEFAULT_TIMEOUT_MS: "3600000"   # 60 min default, so un-timed eval calls still block
+  BASH_DEFAULT_TIMEOUT_MS: "10800000"  # same as max: an un-timed eval must still block
   ENABLE_BACKGROUND_TASKS: "0"         # gates auto-backgrounding only (see above)
   FORCE_AUTO_BACKGROUND_TASKS: "0"
 

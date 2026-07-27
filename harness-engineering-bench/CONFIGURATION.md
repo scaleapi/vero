@@ -93,10 +93,13 @@ benchmark can be checked against the others at a glance.
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
 | gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B |
 | max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 | 24 |
-| timeout_seconds (per eval) ‖ | 10800 | 21600 | 18000 | 28800 | 28800 |
-| case_timeout_seconds (enforced) † | 900 | 1200 | 1800 | 1200 | 2100 |
+| timeout_seconds (per eval) ‖ | 7200 | 28800 | 90000 | 79200 | 39600 |
+| case_timeout_seconds = declared † | 600 | 1800 | 10800 | 3600 | 3600 |
 | task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 |
-| verifier_timeout_seconds ‖ | 28800 | 43200 | 36000 | 64800 | 64800 |
+| declared `[verifier] timeout_sec` | 300 | 300 | 900 | 300 | 300 |
+| declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 |
+| verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 |
+| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index |
@@ -122,12 +125,27 @@ benchmark can be checked against the others at a glance.
   `inference_budget_exhausted`. An optimizer exhausting its *own* evaluation
   budget is a legitimate result; trusted finalization failing on budget is an
   infrastructure bug.
-- **`case_timeout_seconds` is the enforced per-case wall cap**;
-  `task_agent_timeout_seconds` is the task-declared agent timeout used only as
-  the rescale denominator (Harbor's per-case timeout = declared ×
-  `case_timeout/task_agent_timeout`). `case_timeout` may exceed
-  `task_agent_timeout`. Set both explicitly — omitting them silently applies the
-  180/600 defaults regardless of what the tasks declare.
+- **Use each dataset's declared per-case timeout; do not invent one** (†).
+  `case_timeout_seconds` is not an independently enforced wall — vero's *only*
+  use of it is deriving `--agent-timeout-multiplier =
+  case_timeout / task_agent_timeout` for `harbor run`. So it is a *scale factor on
+  the dataset's own agent clock*, and setting it equal to the declared
+  `[agent] timeout_sec` makes the multiplier exactly **1.0**: the target agent
+  gets precisely the clock the benchmark intends. Every benchmark now does this.
+  Set both keys explicitly — omitting them silently applies harbor's 180/600
+  defaults regardless of what the tasks declare.
+- **No buffer above 1.0 is warranted**, because harbor runs **four independent
+  clocks per trial**, each with its own multiplier (`trial/trial.py`): the agent
+  phase (declared `[agent] timeout_sec`), agent **setup**
+  (`_AGENT_SETUP_TIMEOUT_SEC = 360`), **environment build** (declared
+  `build_timeout_sec`), and **verification** (declared `[verifier] timeout_sec`).
+  Container start, venv install, image build and scoring therefore *cannot* eat
+  into the agent's budget, so there is no translation loss for a 1.1 to absorb;
+  it would simply be 10% more lenient than the benchmark declares. Note the
+  consequence for reading measurements: `mean_case_wall_seconds` is *whole-case*
+  wall including setup and verify, so it is not directly comparable to this cap.
+  `_resolve_timeout_sec` is `min(base, max_sec or ∞) × multiplier`, and
+  `max_timeout_sec` defaults to `None`, so nothing clamps a large declared value.
 - **The verifier must never time out, so its clocks are sized to be
   unreachable, not merely generous** (‖). A verifier timeout yields no reward at
   all — the score is lost and only agent artifacts are salvaged — which makes it
@@ -186,14 +204,34 @@ each agent sends `model_name.removeprefix("openai/")`, so an `openai/`-prefixed
 name would be allow-listed in one form and requested in another and the gateway
 would deny it.
 
-† Sized from the **held-out baseline** per-case wall-time distributions (the seed
-target agent on each benchmark's target model), set at or above each benchmark's
-observed max: gaia p99≈608/max≈609 → 900; officeqa p99≈640/max≈1076 → 1200;
-swe-atlas p99≈1163/max≈1278 → 1800 (unchanged); tau3 p99≈643/max≈1122 → 1200;
-browsecomp p99≈1479/max≈1771 → 2100. This replaces the earlier codex-probe
-sizing, which was too tight for the real target agents — the prior caps
-(180/300/900) would have killed ~9/13/26% of gaia/officeqa/browsecomp candidate
-cases, scoring candidates far harsher than the leniently-measured baselines.
+† **Taken from the dataset, not chosen by us.** Each value is that dataset's
+declared `[agent] timeout_sec`, read from its `task.toml` — the hub packages under
+`~/.cache/harbor/tasks/packages/` for gaia (`gaia/gaia`), swe-atlas-qna
+(`scale-ai`) and tau3 (`sierra-research`), and the vendored task dirs for officeqa
+and browsecomp-plus. Every dataset declares **uniformly** across its tasks (246
+officeqa tasks all at 1800, 830 browsecomp tasks all at 3600), so a single value
+per benchmark loses nothing.
+
+This supersedes two earlier rounds of sizing-by-measurement. The first was a
+codex probe, far too tight for the real target agents. The second used
+held-out-baseline wall-time distributions (gaia p99≈608 → 900; officeqa
+p99≈640/max≈1076 → 1200; swe-atlas → 1800; tau3 p99≈643/max≈1122 → 1200;
+browsecomp p99≈1479/max≈1771 → 2100), which fixed the unfairness — the prior
+180/300/900 caps would have killed ~9/13/26% of gaia/officeqa/browsecomp candidate
+cases — but still second-guessed the benchmark. The deviations were large and
+inconsistent in direction: swe-atlas ran at **0.17×** its declared clock while
+gaia ran at **1.5×**. Adopting the declared value makes gaia *tighter* (900 → 600,
+newly clipping ~1% of cases whose p99 sat at 608); that is the benchmark's
+intent, and suggestively the gaia agent's own `MAX_TURNS` cap lands right at
+~608 s, i.e. it was written against the declared 600.
+
+¤ Bash tool cap for the optimizer, set above that benchmark's widest single
+blocking eval — a full validation pass, `ceil(val_cases / 24) × case_timeout`
+worst case. `BASH_DEFAULT_TIMEOUT_MS` is set equal to it so an eval invoked
+without an explicit `timeout` still blocks rather than being truncated: a
+truncated eval is what pushed run #2's optimizer into backgrounding and ended the
+run. The agent additionally wraps its own calls (`timeout 1750`, `timeout 3000`
+observed), so this is a ceiling, not the expected duration.
 
 ¶ `evaluation` and `finalization` each get this cap independently — they are
 separate scopes with separate tokens and separate ledgers, so the numbers do not
