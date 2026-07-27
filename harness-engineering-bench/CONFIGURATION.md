@@ -281,25 +281,37 @@ share a pool. `max_requests` is 200 000 on both everywhere (a full officeqa
 finalize needs ~12 000, so this is not the binding constraint either). Sizing is
 per benchmark from its own case counts; see each `build.yaml` for the arithmetic.
 
-§ **Running benchmarks concurrently: pair them by target provider, and give each
-run its own credential file.** These are two different constraints and each
-solves a different problem.
+§ **Concurrency: the binding ceiling is the target provider's generated-token
+limit, not the LiteLLM key.** Both are real, they sit at different layers, and the
+numbers are measurable rather than a matter of opinion — LiteLLM returns its own
+key limits and passes the provider's through on every response:
 
-*Provider capacity* is the one that actually bites, because the evaluation scope
-is the overwhelming majority of traffic (~2.9 M metered TPM per run vs the
-optimizer's ~4 k). Three benchmarks share `fireworks_ai/deepseek-v4-flash`
-(officeqa, tau3, browsecomp-plus), swe-atlas-qna is Fireworks-but-a-different-model
-(`gpt-oss-120b`), and gaia is the only non-Fireworks target (`gpt-5.4-mini`). So
-**gaia pairs with any of the others at near-zero contention**, while running the
-deepseek trio together stacks demand on one provider. The one `502 upstream_error`
-we have observed (1 in 4 750 requests at 24 slots) came from Fireworks.
+| layer | limit | scope |
+|---|---|---|
+| LiteLLM key (`x-litellm-key-{tpm,rpm}-limit`) | 10 M TPM, 5 000 RPM | per key |
+| Fireworks account (`llm_provider-x-ratelimit-limit-tokens-*`) | 216 k generated/min, 2.25 M uncached prompt, 14.06 M total prompt | behind the key |
 
-*Per-key limits* are separate: a distinct `--env-file` per concurrent run means a
-per-key TPM/RPM throttle on one cannot starve another, and per-workstream spend
-stays attributable. Copy `secrets.env.example` to a `*.secrets.env` name (that
-glob is gitignored; `secrets.2.env` is **not**). Separate keys against the same
-provider account do **not** create new provider capacity — only the pairing above
-does that. Modal sandbox capacity is a third, independent ceiling.
+One officeqa run at `max_concurrency: 24` draws 2.90 M metered TPM — 347 k fresh
+prompt + 2.47 M cache reads + **82 k generated** — at ~182 peak RPM. Dividing
+through: LiteLLM TPM allows 3.4 runs, LiteLLM RPM 27, Fireworks uncached prompt
+6.5, Fireworks total prompt 5.0, and **Fireworks generated tokens only 2.6**. That
+last one binds, and because it is an *account* limit reached through the key,
+**adding keys does not raise it** — only a key routing to a different provider
+account would.
+
+Practical consequences: the deepseek trio (officeqa, tau3, browsecomp-plus) is
+capped near **2 concurrent runs** however many keys are in play, while **gaia is
+free** — `gpt-5.4-mini` never touches Fireworks, so it pairs with anything at no
+cost on the binding axis. The single `502 upstream_error` seen so far (1 in 4 750
+requests at 24 slots) was Fireworks.
+
+A distinct `--env-file` per run is still worth having for independent LiteLLM
+TPM/RPM and attributable spend: copy `secrets.env.example` to a `*.secrets.env`
+name (that glob is gitignored; `secrets.2.env` is **not**). Modal sandbox capacity
+is a third, independent ceiling. Note that Fireworks meters cached and uncached
+prompt tokens against separate limits (14.06 M vs 2.25 M), which is why a
+workload that is ~90% cache reads sits far below its prompt ceiling while its
+generated tokens are the scarce resource.
 
 `max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
 board. It is the throughput lever: finalize wall time is
