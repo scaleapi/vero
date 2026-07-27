@@ -37,9 +37,11 @@ By default `evals run` **blocks** until scoring finishes and returns the result
 expected, so let it block. This is what you want almost always.
 
 Use `--detach` **only** to run several evaluations concurrently: it returns a
-`job_id` immediately instead of blocking. Then poll `evals status JOB_ID` until
-it reports `complete` and read `evals result JOB_ID`. Never end your turn to
-"wait" for a detached job — nothing resumes you.
+`job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks until
+that job finishes and prints its result; or poll `evals status JOB_ID`, which
+now also reports `elapsed_seconds` (and `requested_cases` for a subset) so you
+can see it is progressing. Never end your turn to "wait" for a detached job —
+nothing resumes you.
 
 ## Run options worth knowing (`evals run --help` for all)
 

@@ -9,7 +9,7 @@ import pytest_asyncio
 from click.testing import CliRunner
 
 from vero.candidate import Candidate
-from vero.evals_cli import evals
+from vero.evals_cli import _enrich_job, evals
 from vero.evaluation import (
     BackendProvenance,
     CaseResult,
@@ -262,3 +262,99 @@ async def test_context_is_discovered_from_workspace(context_dir: Path, monkeypat
     result = CliRunner().invoke(evals, ["list", "--json"], catch_exceptions=False)
     assert result.exit_code == 0
     assert len(json.loads(result.output)) == 3
+
+
+def test_enrich_job_adds_elapsed_and_requested_cases():
+    # terminal job: elapsed from created->completed, exactly.
+    done = _enrich_job(
+        {
+            "job_id": "j",
+            "status": "complete",
+            "created_at": "2026-01-01T00:00:00Z",
+            "completed_at": "2026-01-01T00:05:00Z",
+        }
+    )
+    assert done["elapsed_seconds"] == 300.0
+    # subset range run: requested_cases = stop - start.
+    ranged = _enrich_job(
+        {
+            "job_id": "j",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "evaluation_set": {"selection": {"start": 0, "stop": 8}},
+        }
+    )
+    assert ranged["requested_cases"] == 8
+    assert ranged["elapsed_seconds"] >= 0
+    # explicit case ids -> len; whole-partition run -> no requested_cases.
+    assert _enrich_job({"evaluation_set": {"selection": {"ids": ["a", "b"]}}})[
+        "requested_cases"
+    ] == 2
+    assert "requested_cases" not in _enrich_job(
+        {"status": "running", "evaluation_set": {"name": "v"}}
+    )
+
+
+def test_status_job_output_is_enriched(monkeypatch):
+    import vero.harbor.cli as harbor_cli
+
+    monkeypatch.setattr(
+        harbor_cli,
+        "_request",
+        lambda method, path, **kw: {
+            "job_id": "j",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "evaluation_set": {"selection": {"start": 0, "stop": 10}},
+        },
+    )
+    result = CliRunner().invoke(evals, ["status", "j"], catch_exceptions=False)
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["requested_cases"] == 10
+    assert "elapsed_seconds" in payload
+
+
+def test_wait_blocks_until_complete_then_prints_result(monkeypatch):
+    import vero.harbor.cli as harbor_cli
+
+    statuses = iter(["running", "running", "complete"])
+    calls: list[str] = []
+
+    def fake_request(method, path, **kw):
+        calls.append(path)
+        if path.endswith("/result"):
+            return {"result": {"objective": {"value": 0.5}}}
+        return {"job_id": "j", "status": next(statuses), "created_at": "2026-01-01T00:00:00Z"}
+
+    monkeypatch.setattr(harbor_cli, "_request", fake_request)
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    result = CliRunner().invoke(
+        evals, ["wait", "j", "--poll-interval", "1"], catch_exceptions=False
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output)["result"]["objective"]["value"] == 0.5
+    assert calls[-1] == "/eval/jobs/j/result"  # result fetched only after terminal
+
+
+def test_wait_timeout_returns_still_running_and_enriched(monkeypatch):
+    import vero.harbor.cli as harbor_cli
+
+    monkeypatch.setattr(
+        harbor_cli,
+        "_request",
+        lambda method, path, **kw: {
+            "job_id": "j",
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "evaluation_set": {"selection": {"ids": ["a", "b", "c"]}},
+        },
+    )
+    monkeypatch.setattr("time.sleep", lambda _seconds: None)
+    result = CliRunner().invoke(
+        evals, ["wait", "j", "--timeout", "0"], catch_exceptions=False
+    )
+    assert result.exit_code == 0  # clean exit, not Exit 143
+    payload = json.loads(result.output)
+    assert payload["status"] == "running"
+    assert payload["requested_cases"] == 3

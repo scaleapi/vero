@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -306,18 +308,117 @@ def evals() -> None:
     """
 
 
+def _parse_ts(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _requested_cases(job: dict) -> int | None:
+    """How many cases the run requested, when it named a subset.
+
+    A whole-partition run carries no selection, so the total is not known
+    client-side; return None rather than guess.
+    """
+    selection = _dig(job, "evaluation_set", "selection")
+    if not isinstance(selection, dict):
+        return None
+    ids = selection.get("ids")
+    if isinstance(ids, list):
+        return len(ids)
+    start, stop = selection.get("start"), selection.get("stop")
+    if isinstance(start, int) and isinstance(stop, int):
+        return max(0, stop - start)
+    return None
+
+
+def _enrich_job(job: object) -> object:
+    """Add client-derived elapsed time and requested-case count to a job status.
+
+    A polling agent otherwise sees only `status: running` with no sense of how
+    long it has run or how large the evaluation is.
+    """
+    if not isinstance(job, dict):
+        return job
+    created = _parse_ts(job.get("created_at"))
+    if created is not None:
+        ended = _parse_ts(job.get("completed_at")) or datetime.now(timezone.utc)
+        job["elapsed_seconds"] = round((ended - created).total_seconds(), 1)
+    requested = _requested_cases(job)
+    if requested is not None:
+        job["requested_cases"] = requested
+    return job
+
+
+def _sidecar_request():
+    try:
+        from vero.harbor.cli import _request
+    except ImportError as error:  # pragma: no cover - exercised via CLI
+        raise click.ClickException(
+            f"this command needs the evaluation sidecar client (vero[harbor]): {error}"
+        )
+    return _request
+
+
 @evals.command("status")
 @click.argument("job_id", required=False)
 def status_command(job_id):
-    """Show evaluation access and budgets, or one detached job's status."""
-    try:
-        from vero.harbor.cli import _request
-    except ImportError as error:
-        raise click.ClickException(
-            f"`evals status` needs the evaluation sidecar client (vero[harbor]): {error}"
-        )
-    path = f"/eval/jobs/{job_id}" if job_id else "/status"
-    click.echo(json.dumps(_request("GET", path), indent=2))
+    """Show evaluation access and budgets, or one detached job's status.
+
+    For a specific job this also reports `elapsed_seconds` (how long it has run)
+    and, for a subset run, `requested_cases` — so a poll shows progress, not just
+    `running`.
+    """
+    request = _sidecar_request()
+    if job_id:
+        click.echo(json.dumps(_enrich_job(request("GET", f"/eval/jobs/{job_id}")), indent=2))
+    else:
+        click.echo(json.dumps(request("GET", "/status"), indent=2))
+
+
+@evals.command("wait")
+@click.argument("job_id")
+@click.option(
+    "--poll-interval",
+    default=15.0,
+    show_default=True,
+    type=click.FloatRange(min=1),
+    help="Seconds between status polls.",
+)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0),
+    help="Optional max seconds to wait. On expiry, print the current "
+    "(still-running) status and exit 0 so you can simply call `evals wait` "
+    "again. Default: wait until the job finishes.",
+)
+def wait_command(job_id, poll_interval, timeout):
+    """Block until a detached job finishes, then print its result.
+
+    The blocking companion to `evals run --detach`: one call that waits, so you
+    never hand-roll a poll loop. Idempotent — safe to call again if it returns
+    while the job is still running (only happens when --timeout is set).
+    """
+    request = _sidecar_request()
+    terminal = {"complete", "failed", "cancelled"}
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        job = request("GET", f"/eval/jobs/{job_id}")
+        status = job.get("status") if isinstance(job, dict) else None
+        if status in terminal:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            click.echo(json.dumps(_enrich_job(job), indent=2))
+            return
+        time.sleep(poll_interval)
+    if status == "complete":
+        click.echo(json.dumps(request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
+    else:
+        click.echo(json.dumps(_enrich_job(job), indent=2))
 
 
 @evals.command("list")

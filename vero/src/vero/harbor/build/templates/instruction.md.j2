@@ -31,11 +31,11 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    reproduce a noisy comparison exactly. Run `evals run --help` for every option.
 
    Add `--detach` **only** to run several evaluations at once: it returns a
-   `job_id` immediately instead of blocking. Then poll `evals status JOB_ID`
-   until it reports `complete` and read `evals result JOB_ID`. Never end your
-   turn waiting on a detached job — nothing will wake a headless run. Do not
-   claim an improvement before its comparison baseline has been scored on the
-   same cases.
+   `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks
+   until that job finishes and prints its result (or poll `evals status JOB_ID`,
+   which also shows elapsed time). Never end your turn waiting on a detached job
+   — nothing will wake a headless run. Do not claim an improvement before its
+   comparison baseline has been scored on the same cases.
 
 4. Use `evals status` to inspect evaluation jobs and allowed evaluation
    sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
