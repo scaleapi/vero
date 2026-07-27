@@ -40,8 +40,12 @@ Use `--detach` **only** to run several evaluations concurrently: it returns a
 `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks until
 that job finishes and prints its result; or poll `evals status JOB_ID`, which
 now also reports `elapsed_seconds` (and `requested_cases` for a subset) so you
-can see it is progressing. Never end your turn to "wait" for a detached job —
-nothing resumes you.
+can see it is progressing. To wait on two jobs, wait the first, then the second.
+
+Run every `evals` call in the **foreground**. If you are a headless single-shot
+run, nothing can wake you: putting a long call in a background task, scheduling
+a wake-up, or promising to "report back when it finishes" ends the run right
+there. A call that blocks for half an hour is working correctly.
 
 ## Run options worth knowing (`evals run --help` for all)
 
@@ -93,8 +97,9 @@ are enforced by the evaluator; `evals plan` shows what remains.
   `evals cases`; job ids only from `evals run --detach`.
 - Scores may be noisy: replicate an important comparison before acting on it, by
   re-running the identical case selection.
-- Ending your turn to "wait" for a `--detach`ed job — nothing resumes you. Block
-  on `evals run` instead, or keep polling `evals status` within your turn.
+- Backgrounding the wait. Putting `evals run`/`evals wait` in a background task
+  (or scheduling a wake-up) looks like waiting but ends a headless run: the
+  notification you are counting on never arrives. Block in the foreground.
 - Finishing without `evals submit`: your best candidate must be nominated
   deliberately, or a fallback (auto-best, then your last commit) ships instead.
 - Optimizing accuracy while ignoring per-case latency: a slower candidate can be

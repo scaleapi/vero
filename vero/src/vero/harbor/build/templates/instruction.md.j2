@@ -39,9 +39,16 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    Add `--detach` **only** to run several evaluations at once: it returns a
    `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks
    until that job finishes and prints its result (or poll `evals status JOB_ID`,
-   which also shows elapsed time). Never end your turn waiting on a detached job
-   — nothing will wake a headless run. Do not claim an improvement before its
-   comparison baseline has been scored on the same cases.
+   which also shows elapsed time).
+
+   **Run every `evals` call in the foreground.** You are a single-shot headless
+   run: nothing exists to deliver a notification or wake you later. If you put a
+   long call in a background task, schedule a wake-up, or say you will "report
+   back when it finishes", the run simply ends there and whatever you have not
+   submitted is lost. A foreground call that blocks for half an hour is working
+   correctly — let it block. To wait on two jobs, `evals wait` the first, then
+   the second. Do not claim an improvement before its comparison baseline has
+   been scored on the same cases.
 
 4. Use `evals status` to inspect evaluation jobs and allowed evaluation
    sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
