@@ -306,8 +306,12 @@ class _EvaluationLimitFields(StrictModel):
         build_timeout_seconds: Wall clock for building the task's images.
         verifier_timeout_seconds: Wall clock for the trusted verifier. Falls back
             to timeout_seconds.
-        evaluation_drain_timeout_seconds: Grace period for in-flight evaluations
-            to finish. Falls back to timeout_seconds.
+        evaluation_drain_timeout_seconds: Grace period for finalization to wait
+            on already-running agent evaluations before cancelling them.
+            Defaults to 600s. Deliberately independent of timeout_seconds, which
+            is sized to be unreachable: inheriting it would let one hung sub-run
+            stall the held-out score for hours. Expiry is safe — cancellation
+            persists terminal records and refunds budgets.
     """
 
     timeout_seconds: float = Field(default=1800.0, gt=0)

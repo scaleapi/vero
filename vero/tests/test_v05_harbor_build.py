@@ -941,7 +941,11 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert serve["selection"]["backend_id"] == "harbor-validation"
     assert serve["targets"][0]["backend_id"] == "harbor-test"
     assert serve["targets"][0]["reward_scale"] == 1.0
-    assert serve["evaluation_drain_timeout_seconds"] == config.timeout_seconds
+    # A grace period, not a ceiling — and explicitly NOT timeout_seconds, which is
+    # sized to be unreachable. Inheriting it stalled officeqa run #4's
+    # finalization for hours behind a sub-run that had already finished its work.
+    assert serve["evaluation_drain_timeout_seconds"] == 600.0
+    assert serve["evaluation_drain_timeout_seconds"] != config.timeout_seconds
     assert serve["backends"]["harbor-test"]["task_source"] == LAYOUT.task_source
     assert serve["backends"]["harbor-test"]["python_version"] == "3.12"
     assert serve["backends"]["harbor-test"]["case_timeout_seconds"] == 180.0
@@ -1297,3 +1301,35 @@ def test_instruction_advertises_seed_only_where_the_backend_accepts_it(tmp_path)
     instruction = (command / "instruction.md").read_text(encoding="utf-8")
     assert "reproduce a noisy comparison exactly" in instruction
     assert "rejects `--seed`" not in instruction
+
+
+def test_drain_timeout_is_independent_of_the_unreachable_eval_ceiling(tmp_path):
+    # timeout_seconds is deliberately set above ceil(trials/concurrency) x
+    # case_timeout so it can never fire. The drain is the opposite kind of clock:
+    # it decides how long finalization waits on already-running agent evaluations
+    # before cancelling them, and cancellation is graceful. Tying the two makes a
+    # hung sub-run cost hours of held-out scoring, which is what happened.
+    default = compile_harbor_task(
+        _config(tmp_path / "cfg-default", timeout_seconds=90000.0),
+        tmp_path / "default",
+        vero_root=Path(__file__).parents[1],
+    )
+    serve = json.loads(
+        (default / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    assert serve["evaluation_drain_timeout_seconds"] == 600.0
+
+    # An explicit value still wins, for a benchmark that genuinely wants to wait.
+    explicit = compile_harbor_task(
+        _config(
+            tmp_path / "cfg-explicit",
+            timeout_seconds=90000.0,
+            evaluation_drain_timeout_seconds=1800.0,
+        ),
+        tmp_path / "explicit",
+        vero_root=Path(__file__).parents[1],
+    )
+    serve = json.loads(
+        (explicit / "environment/sidecar/serve.json").read_text(encoding="utf-8")
+    )
+    assert serve["evaluation_drain_timeout_seconds"] == 1800.0

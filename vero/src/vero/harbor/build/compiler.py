@@ -59,6 +59,13 @@ INFERENCE_STATE = LAYOUT.inference_state
 INFERENCE_REQUEST_LOG_DIR = LAYOUT.inference_request_log_dir
 INFERENCE_GATEWAY_URL = LAYOUT.gateway_url
 
+# How long finalization waits for already-running agent evaluations before
+# cancelling them. A grace period, not a ceiling: expiry is graceful (the
+# evaluator's cancellation path persists terminal records and refunds budgets),
+# so waiting longer buys nothing and only delays the held-out score. Matches
+# harbor/deployment.py's own default.
+DEFAULT_EVALUATION_DRAIN_SECONDS = 600.0
+
 
 def _backend_id(partition: str) -> str:
     return f"harbor-{partition}"
@@ -445,8 +452,15 @@ def _deployment_config(
         "wandb": (
             config.wandb.model_dump(mode="json") if config.wandb is not None else None
         ),
+        # Must NOT inherit timeout_seconds: that is deliberately sized to be
+        # unreachable (every trial hitting its per-case cap), so inheriting it
+        # turns one hung sub-run into a finalization stall of the same order.
+        # officeqa run #4 sat 6h in exactly that state -- its agent evaluation
+        # had finished writing results two hours earlier, but the subprocess
+        # never exited and the drain was waiting out an inherited 21600s.
         "evaluation_drain_timeout_seconds": (
-            config.evaluation_drain_timeout_seconds or config.timeout_seconds
+            config.evaluation_drain_timeout_seconds
+            or DEFAULT_EVALUATION_DRAIN_SECONDS
         ),
         "inference_usage_path": (
             INFERENCE_STATE if config.inference_gateway is not None else None
