@@ -97,27 +97,58 @@ benchmark can be checked against the others at a glance.
   `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` at the producer scope, and the model
   string it requests matches `--model` as spelled.
 
-  **`--agent opencode` requires two flags, and getting it wrong silently defeats
-  credential isolation.** Harbor's adapter injects a `baseURL` into
-  `~/.config/opencode/opencode.json` **only when the provider half of
-  `provider/model` is `openai`** (`agents/installed/opencode.py`); with
-  `anthropic/claude-sonnet-5` it writes no baseURL, so opencode calls
-  `api.anthropic.com` directly — unmetered, outside the allow-list, and holding a
-  credential the optimizer is never supposed to see. It also *requires* the
-  `provider/` form and raises `ValueError` without it. But it registers the model
-  under the provider as the bare id, so that is what the gateway receives, while
-  `${optimizer_model}` would put the prefixed form in the allow-list → 403
-  `model_denied`. Launch it as:
+  **`--agent opencode` requires two flags and the provider-native prefix.** It
+  *requires* the `provider/model` form and raises `ValueError` without it, but
+  registers the model under that provider as the **bare id**, so the bare id is
+  what the gateway receives while `${optimizer_model}` would put the prefixed form
+  in the allow-list → 403 `model_denied`. Launch a Claude model as:
 
-      --agent opencode --model openai/claude-sonnet-5 \
+      --agent opencode --model anthropic/claude-sonnet-5 \
         --param optimizer_model=claude-sonnet-5
 
   `--param` wins over the `--model`-derived default (`setdefault` in
-  `harbor/cli.py`), so the prefixed form reaches opencode while the bare form
-  reaches the allow-list. **Verify on every new harness** by checking the gateway
-  request log for `403 model_denied` and confirming the producer scope's request
-  count is non-zero — a zero producer count with a working optimizer means it
-  found another way out.
+  `harbor/cli.py`), so the prefixed form reaches opencode and the bare form
+  reaches the allow-list. Measured on `vero/examples/harness-conformance`: reward
+  1.0 over 39 steps, 39 metered `messages` calls.
+
+  **Use the provider-native prefix, not `openai/`, for non-OpenAI models.**
+  Harbor's adapter injects a `baseURL` into `~/.config/opencode/opencode.json`
+  only when the provider half is `openai` (`agents/installed/opencode.py`), and
+  opencode ignores `ANTHROPIC_BASE_URL`, so `anthropic/…` used to escape the
+  gateway entirely. vero now supplies the missing baseURL itself via
+  `--ak opencode_config=…` for any non-`openai` provider (`harbor/cli.py`), which
+  the adapter deep-merges last. Two consequences:
+
+  - `openai/claude-sonnet-5` **crashes** — do not reach for it as a workaround. It
+    forces the Responses API, and litellm's Anthropic→Responses translation emits
+    three id namespaces in one stream (a `resp_` id, Anthropic `msg_`/`toolu_`
+    item ids, and a stray `chatcmpl-` id); opencode dies resolving a text part
+    under an id it never registered. All six main-model calls returned `200`, so
+    the gateway is not at fault.
+  - Escaping the gateway **fails closed; it does not leak.** The optimizer only
+    ever holds a scoped producer token, so a direct call to a provider's public
+    endpoint returns `401 invalid x-api-key` and the run dies. The upstream
+    credential never leaves the gateway container. An earlier revision of this
+    note claimed such a run would hold a credential the optimizer should not see;
+    that was wrong.
+
+  **Allow a second producer model.** opencode also issues an auxiliary
+  summarisation/title call using a small model of the same provider family
+  (`claude-haiku-4-5` on the anthropic path, `gpt-5.4-nano` on the openai one).
+  With a single allow-list entry that call `403`s. It is non-fatal but invisible
+  outside the gateway request log, and the model varies by family — so allow a
+  second entry rather than adding one more fixed name.
+
+  **opencode drives the Responses API for `openai/` providers**, which is stateful
+  (`previous_response_id`, no prompt resend). That matters for
+  `scripts/per_trial_tokens.py`, whose content-matching fallback behaves
+  differently there than on claude-code's `messages` traffic.
+
+  **Verify every new harness or model** with `vero/examples/harness-conformance`
+  (see its `SKILL.md`) before spending a benchmark on it: check the gateway
+  request log for `403 model_denied`, confirm the producer request count is
+  non-zero — a zero count with a working optimizer means it found another way out
+  — and confirm the `endpoint` is the one you intended.
 - **Telemetry**: W&B project `harness-engineering-bench` for the whole suite
   (group per benchmark, `--param wandb_run=` for the per-launch name) with trace
   uploads; inner
