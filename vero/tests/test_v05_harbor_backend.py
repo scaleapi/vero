@@ -548,12 +548,25 @@ async def test_harbor_backend_reports_latency_and_inference_telemetry(tmp_path):
     assert by_id["case-b"].metrics["wall_seconds"] == 30.0
     assert report.metrics["mean_case_wall_seconds"] == 60.0
     assert report.metrics["max_case_wall_seconds"] == 90.0
+    assert report.metrics["median_case_wall_seconds"] == 60.0
     # this evaluation's attribution only, summed across gateway scopes
     assert report.metrics["inference_requests"] == 14.0
     assert report.metrics["inference_input_tokens"] == 1100.0
     assert report.metrics["inference_cached_input_tokens"] == 400.0
     assert report.metrics["inference_output_tokens"] == 300.0
     assert report.metrics["inference_total_tokens"] == 1400.0
+    # the trusted gateway total is per evaluation, so only its per-case mean is
+    # derivable here (median/max need post-hoc per-case attribution)
+    assert report.metrics["mean_case_inference_input_tokens"] == 550.0
+    assert report.metrics["mean_case_inference_total_tokens"] == 700.0
+    assert report.metrics["mean_case_inference_requests"] == 7.0
+    # agent-reported tokens are per case, so they get the same mean/median/max
+    # treatment as latency rather than only a report-level sum
+    assert report.metrics["mean_case_agent_reported_input_tokens"] == 600.0
+    assert report.metrics["max_case_agent_reported_input_tokens"] == 1000.0
+    assert report.metrics["mean_case_agent_reported_cached_input_tokens"] == 300.0
+    assert report.metrics["mean_case_agent_reported_output_tokens"] == 37.5
+    assert report.metrics["max_case_agent_reported_output_tokens"] == 50.0
     # agent-self-reported usage: per case and summed at report level, under a
     # prefix distinct from the trusted gateway-metered inference_* metrics
     assert by_id["case-a"].metrics["agent_reported_input_tokens"] == 1000.0
@@ -1050,3 +1063,69 @@ def test_command_forwards_retry_config_and_max_retries(tmp_path):
     assert command[command.index("--config") + 1] == "/staging/retry-config.json"
     # ... while the count stays a flag (harbor applies it over the --config base).
     assert command[command.index("--max-retries") + 1] == "5"
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_reports_median_for_skewed_cost_distributions(tmp_path):
+    # Heavy tail: one case dominates both latency and tokens. The mean alone
+    # hides that shape, which is why cost metrics carry a median and a max.
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:10Z",
+                    "agent_result": {
+                        "n_input_tokens": 100,
+                        "n_cache_tokens": 10,
+                        "n_output_tokens": 5,
+                    },
+                }
+            ],
+            "example/beta": [
+                {
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:20Z",
+                    "agent_result": {
+                        "n_input_tokens": 200,
+                        "n_cache_tokens": 20,
+                        "n_output_tokens": 10,
+                    },
+                }
+            ],
+            "example/gamma": [
+                {
+                    "verifier_result": {"rewards": {"reward": 1.0}},
+                    "started_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:05:00Z",
+                    "agent_result": {
+                        "n_input_tokens": 3000,
+                        "n_cache_tokens": 300,
+                        "n_output_tokens": 150,
+                    },
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(_config(tmp_path))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a", "case-b", "case-c"])),
+    )
+
+    # latency: mean is dragged up by the tail case, median is not
+    assert report.metrics["mean_case_wall_seconds"] == 110.0
+    assert report.metrics["median_case_wall_seconds"] == 20.0
+    assert report.metrics["max_case_wall_seconds"] == 300.0
+    # tokens get the same treatment, and show the same divergence
+    assert report.metrics["mean_case_agent_reported_input_tokens"] == 1100.0
+    assert report.metrics["median_case_agent_reported_input_tokens"] == 200.0
+    assert report.metrics["max_case_agent_reported_input_tokens"] == 3000.0
+    assert report.metrics["mean_case_agent_reported_output_tokens"] == 55.0
+    assert report.metrics["median_case_agent_reported_output_tokens"] == 10.0
+    assert report.metrics["max_case_agent_reported_output_tokens"] == 150.0
+    assert report.metrics["median_case_agent_reported_cached_input_tokens"] == 20.0

@@ -529,7 +529,11 @@ class CostReportingBackend(StubBackend):
                     "inference_total_tokens": 12345.0,
                     "inference_cached_input_tokens": 678.0,
                     "agent_reported_total_input_tokens": 555.0,
+                    # distribution wrappers of the same budget signal
+                    "mean_case_inference_input_tokens": 99.0,
+                    "median_case_agent_reported_output_tokens": 33.0,
                     "mean_case_wall_seconds": 42.0,
+                    "median_case_wall_seconds": 40.0,
                 }
             }
         )
@@ -558,7 +562,12 @@ async def test_budget_blind_sidecar_redacts_inference_metrics(tmp_path):
     receipt_metrics = response.receipt.result.metrics
     assert "inference_total_tokens" not in receipt_metrics
     assert "inference_cached_input_tokens" not in receipt_metrics
+    # per-case distribution wrappers are the same signal renamed, so they are
+    # redacted too; latency distributions stay visible
+    assert "mean_case_inference_input_tokens" not in receipt_metrics
+    assert "median_case_agent_reported_output_tokens" not in receipt_metrics
     assert receipt_metrics["mean_case_wall_seconds"] == 42.0
+    assert receipt_metrics["median_case_wall_seconds"] == 40.0
 
     document = json.loads(
         (

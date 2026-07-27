@@ -497,12 +497,20 @@ class EvaluationSidecar:
                 f"{policy.access.min_aggregate_cases} cases; requested {cost.cases}"
             )
 
-    _BUDGET_METRIC_PREFIXES = ("inference_", "agent_reported_")
+    _BUDGET_METRIC_MARKERS = ("inference_", "agent_reported_")
 
     def _redact_budget_metrics(self, record: EvaluationRecord) -> EvaluationRecord:
         """Budget-blind mode: cost metrics — gateway-metered ``inference_*``
         and self-declared ``agent_reported_*``, report- and case-level — are
-        budget signal and must not reach the agent (enforcement unchanged)."""
+        budget signal and must not reach the agent (enforcement unchanged).
+
+        Matched anywhere in the key, not just as a prefix: the report also
+        carries distribution wrappers of these metrics
+        (``mean_case_inference_input_tokens``,
+        ``median_case_agent_reported_output_tokens``), which are the same
+        signal under a different name. Latency keys carry no marker and stay
+        visible.
+        """
         if self.disclose_budget:
             return record
 
@@ -510,7 +518,7 @@ class EvaluationSidecar:
             return {
                 key: value
                 for key, value in metrics.items()
-                if not key.startswith(self._BUDGET_METRIC_PREFIXES)
+                if not any(marker in key for marker in self._BUDGET_METRIC_MARKERS)
             }
 
         metrics = keep(record.report.metrics)

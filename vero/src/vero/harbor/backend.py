@@ -1026,6 +1026,31 @@ class HarborBackend:
                     totals[metric] = totals.get(metric, 0.0) + float(value)
         return totals
 
+    @staticmethod
+    def _case_distribution(
+        case_results: list[EvaluationCaseResult], metric: str
+    ) -> dict[str, float]:
+        """mean/median/max of a per-case cost metric.
+
+        Latency and token distributions are unbounded and heavy-tailed — a few
+        cases carry much of the total — so the median is reported beside the
+        mean, and the max names the tail (a case past its wall budget is
+        stopped and scores the failure value). Accuracy, being bounded, stays
+        mean plus stddev.
+        """
+        values = [
+            value
+            for case in case_results
+            if isinstance((value := case.metrics.get(metric)), (int, float))
+        ]
+        if not values:
+            return {}
+        return {
+            f"mean_case_{metric}": sum(values) / len(values),
+            f"median_case_{metric}": float(statistics.median(values)),
+            f"max_case_{metric}": float(max(values)),
+        }
+
     def _case_result(
         self,
         case: HarborCase,
@@ -1539,11 +1564,24 @@ class HarborBackend:
             )
             return sanitize_evaluation_report(report, self._secrets())
 
-        case_walls = [
-            wall
-            for case in case_results
-            if isinstance((wall := case.metrics.get("wall_seconds")), (int, float))
-        ]
+        # Per-case cost distributions. wall_seconds and the agent-reported token
+        # counts are recorded per case, so each gets the same mean/median/max
+        # treatment; the trusted gateway metering below is per evaluation, so
+        # only its mean is derivable here (per-case attribution of the gateway
+        # log is post-hoc — see harness-engineering-bench/scripts).
+        case_distributions: dict[str, float] = {}
+        for metric in (
+            "wall_seconds",
+            "agent_reported_input_tokens",
+            "agent_reported_cached_input_tokens",
+            "agent_reported_output_tokens",
+        ):
+            case_distributions.update(self._case_distribution(case_results, metric))
+        inference_usage = self._inference_usage_metrics(context.evaluation_id)
+        mean_case_inference = {
+            f"mean_case_{key}": value / len(case_results)
+            for key, value in inference_usage.items()
+        }
         reported_totals: dict[str, float] = {}
         for case in case_results:
             for key, value in case.metrics.items():
@@ -1568,16 +1606,10 @@ class HarborBackend:
                 ),
                 # Cost/latency telemetry: reported alongside accuracy, never
                 # part of the score.
-                **(
-                    {
-                        "mean_case_wall_seconds": sum(case_walls) / len(case_walls),
-                        "max_case_wall_seconds": max(case_walls),
-                    }
-                    if case_walls
-                    else {}
-                ),
+                **case_distributions,
                 **reported_totals,
-                **self._inference_usage_metrics(context.evaluation_id),
+                **inference_usage,
+                **mean_case_inference,
             },
             cases=case_results,
             diagnostics=diagnostics,
