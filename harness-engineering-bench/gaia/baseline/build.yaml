@@ -114,8 +114,10 @@ agent_env:
 
 
 wandb:
-  project: vero-gaia
-  group: gaia
+  project: harness-engineering-bench  # one project for the whole suite
+  group: gaia  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-gaia}  # per-launch label, e.g. --param wandb_run=gaia__opencode
+  tags: [gaia]
   log_traces: true
 
 inference_gateway:

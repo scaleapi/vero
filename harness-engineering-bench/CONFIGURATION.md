@@ -63,7 +63,10 @@ benchmark can be checked against the others at a glance.
   `-m` the outer trial is launched with has to be spelled the same way as this
   default (or as whatever `--param optimizer_model=` overrides it with);
   the router resolves both `gpt-5.4` and `openai/gpt-5.4`, so the prefix is a
-  convention rather than a requirement. deepseek-v4-flash was
+  convention rather than a requirement *upstream* — but the gateway's own
+  allow-list check is an exact string match, so the two spellings are **not**
+  interchangeable there. See the optimizer-harness note below for why that bites
+  with opencode. deepseek-v4-flash was
   chosen over gpt-oss-120b and gpt-5.4-mini from a 10-trial per-benchmark probe:
   it matches or beats both on tau3 (0.875) and is ~2–3× gpt-oss on the
   grounded-reasoning benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss
@@ -90,7 +93,34 @@ benchmark can be checked against the others at a glance.
   PATH`, harbor produces 0 trial groups, and the evaluation 502s. Verified by
   `vero/examples/harness-conformance`. Inner evals are Modal-only until the
   sidecar image ships a docker client and a mounted socket.
-- **Telemetry**: W&B project `vero-<benchmark>` with trace uploads; inner
+- **Optimizer harness**: `--agent claude-code` needs nothing special — vero points
+  `ANTHROPIC_BASE_URL`/`ANTHROPIC_API_KEY` at the producer scope, and the model
+  string it requests matches `--model` as spelled.
+
+  **`--agent opencode` requires two flags, and getting it wrong silently defeats
+  credential isolation.** Harbor's adapter injects a `baseURL` into
+  `~/.config/opencode/opencode.json` **only when the provider half of
+  `provider/model` is `openai`** (`agents/installed/opencode.py`); with
+  `anthropic/claude-sonnet-5` it writes no baseURL, so opencode calls
+  `api.anthropic.com` directly — unmetered, outside the allow-list, and holding a
+  credential the optimizer is never supposed to see. It also *requires* the
+  `provider/` form and raises `ValueError` without it. But it registers the model
+  under the provider as the bare id, so that is what the gateway receives, while
+  `${optimizer_model}` would put the prefixed form in the allow-list → 403
+  `model_denied`. Launch it as:
+
+      --agent opencode --model openai/claude-sonnet-5 \
+        --param optimizer_model=claude-sonnet-5
+
+  `--param` wins over the `--model`-derived default (`setdefault` in
+  `harbor/cli.py`), so the prefixed form reaches opencode while the bare form
+  reaches the allow-list. **Verify on every new harness** by checking the gateway
+  request log for `403 model_denied` and confirming the producer scope's request
+  count is non-zero — a zero producer count with a working optimizer means it
+  found another way out.
+- **Telemetry**: W&B project `harness-engineering-bench` for the whole suite
+  (group per benchmark, `--param wandb_run=` for the per-launch name) with trace
+  uploads; inner
   sandboxes grouped under the dedicated `harness-engineering-bench` Modal app
   with a 1h idle timeout; the gateway records a per-request log.
 
