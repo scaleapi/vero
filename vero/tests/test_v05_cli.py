@@ -309,3 +309,42 @@ def test_cli_rejects_options_that_do_not_apply(tmp_path: Path):
     assert "are only valid with --produce" in producer_timeout.output
     assert wandb.exit_code == 2
     assert "require --wandb-project" in wandb.output
+
+
+def test_opencode_non_openai_provider_gets_a_gateway_base_url(tmp_path):
+    """opencode reaches non-openai providers only if we supply the baseURL.
+
+    Harbor's adapter injects one for `openai/...` alone, so `anthropic/...`
+    otherwise calls api.anthropic.com and dies on 401 (the optimizer holds only a
+    scoped token). Forcing `openai/` instead puts a Claude model on the Responses
+    API, whose litellm translation opencode cannot parse. This keeps Anthropic on
+    Messages, through the gateway.
+    """
+    from vero.harbor.cli import _opencode_gateway_args
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps({"producer_base_url": "http://inference-gateway:8001/scopes/p/o/v1"}),
+        encoding="utf-8",
+    )
+
+    args = _opencode_gateway_args("opencode", "anthropic/claude-sonnet-5", task)
+    assert args[0] == "--ak"
+    key, _, value = args[1].partition("=")
+    assert key == "opencode_config"
+    assert json.loads(value) == {
+        "provider": {
+            "anthropic": {
+                "options": {"baseURL": "http://inference-gateway:8001/scopes/p/o/v1"}
+            }
+        }
+    }
+
+    # openai is the one provider the adapter already handles; don't fight it.
+    assert _opencode_gateway_args("opencode", "openai/gpt-5.4", task) == []
+    # Other agents and bare model names are untouched.
+    assert _opencode_gateway_args("claude-code", "anthropic/claude-sonnet-5", task) == []
+    assert _opencode_gateway_args("opencode", "claude-sonnet-5", task) == []
+    # A task compiled without a gateway simply gets no override.
+    assert _opencode_gateway_args("opencode", "anthropic/x", tmp_path / "none") == []

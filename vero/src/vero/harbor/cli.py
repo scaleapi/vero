@@ -224,6 +224,44 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
+    """Route opencode's non-openai providers through the gateway.
+
+    Harbor's opencode adapter writes a provider ``baseURL`` into
+    ``opencode.json`` only when the provider half of ``provider/model`` is
+    ``openai`` (``agents/installed/opencode.py``). For any other provider it
+    writes none, so opencode calls that provider's public endpoint. That fails
+    closed rather than leaking -- the optimizer only ever holds a scoped gateway
+    token, and Anthropic answers ``401 invalid x-api-key`` -- but it does leave
+    ``openai/`` as the only usable form, which forces the Responses API. Driving
+    a Claude model that way breaks: litellm's Anthropic-to-Responses translation
+    emits mixed id namespaces in one stream (a ``resp_`` id, Anthropic ``msg_``/
+    ``toolu_`` item ids, and a stray ``chatcmpl-`` id), and opencode dies
+    resolving a text part under an id it never registered.
+
+    Supplying the baseURL ourselves keeps the traffic on the provider's own API
+    -- Messages for Anthropic, which is the path claude-code already proves --
+    and metered. The adapter deep-merges job kwargs last, so this wins.
+    """
+
+    if agent != "opencode" or not model or "/" not in model:
+        return []
+    provider, _, _ = model.partition("/")
+    if provider == "openai":
+        return []  # the adapter already injects the baseURL for this one
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return []
+    try:
+        base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
+    # producer_base_url ends in /v1 and provider SDKs append their own route
+    # (/messages), matching how ANTHROPIC_BASE_URL is handed to claude-code.
+    payload = {"provider": {provider: {"options": {"baseURL": base_url}}}}
+    return ["--ak", f"opencode_config={json.dumps(payload, separators=(',', ':'))}"]
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -437,6 +475,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         # for a deterministic command line.
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
+        command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(
