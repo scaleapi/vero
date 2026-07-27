@@ -114,8 +114,20 @@ inference_gateway:
   producer:
     allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
     max_concurrency: 8
+  # Token caps are a runaway backstop, not the spend control: the work is already
+  # bounded by the agent case budget above and by the fixed held-out set, so a cap
+  # that bites first only aborts authorized work. Sized at ~3M tokens per
+  # case-run, ~2.3x the worst measured cost (1.33M/case for an optimized
+  # candidate). ~90% of these tokens are cache reads, counted at full weight.
   evaluation:
     allowed_models: [fireworks_ai/deepseek-v4-flash]
-    max_requests: 15000
-    max_tokens: 100000000
+    max_requests: 200000
+    max_tokens: 3000000000  # 588 agent case-runs (196 dev + 392 validation)
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring. This
+  # inherited evaluation's 100M, exhausted mid-finalize, and shipped reward 0.0.
+  finalization:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 3000000000  # 297 finalize trials (99 test x3) + 294 rescore
     max_concurrency: 64

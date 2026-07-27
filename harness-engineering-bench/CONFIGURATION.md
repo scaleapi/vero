@@ -91,6 +91,7 @@ benchmark can be checked against the others at a glance.
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
+| gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B |
 | timeout_seconds (per eval) | 3600 | 7200 | 14400 | 14400 | 28800 |
 | case_timeout_seconds (enforced) † | 900 | 1200 | 1800 | 1200 | 2100 |
 | task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 |
@@ -105,7 +106,21 @@ benchmark can be checked against the others at a glance.
   agent phase and the verifier (finalization) phase with independent clocks, so
   a long search does not eat into finalization's budget and vice versa. The
   **optimizer agent phase is unbounded** (vero sets no `[agent] timeout_sec`);
-  the search is governed by the gateway token budget, not wall time.
+  the search is governed by the agent's case budget, not wall time.
+- **Gateway token caps are a runaway backstop, not the spend control** (¶). The
+  work is already bounded by the agent case budget and by the fixed held-out set,
+  so a cap that bites first only aborts already-authorized work. Each is sized at
+  ~3M tokens per case-run: ~2.3× the worst measured cost of 1.33M/case-run for an
+  *optimized* officeqa candidate, itself ~3× its own baseline, because more turns
+  and bigger contexts are exactly what the optimizer buys. ~90% of these tokens
+  are cache reads, which count at full weight against `max_tokens`.
+- **`finalization` is a reserved gateway scope and every benchmark now sets its
+  budget explicitly.** Left unset it silently inherits `evaluation`'s numbers, and
+  a search-phase overspend then starves held-out scoring: officeqa's first full
+  run exhausted the shared 100M mid-finalize and reported `reward 0.0` with
+  `inference_budget_exhausted`. An optimizer exhausting its *own* evaluation
+  budget is a legitimate result; trusted finalization failing on budget is an
+  infrastructure bug.
 - **`case_timeout_seconds` is the enforced per-case wall cap**;
   `task_agent_timeout_seconds` is the task-declared agent timeout used only as
   the rescale denominator (Harbor's per-case timeout = declared ×
@@ -162,6 +177,12 @@ browsecomp p99≈1479/max≈1771 → 2100. This replaces the earlier codex-probe
 sizing, which was too tight for the real target agents — the prior caps
 (180/300/900) would have killed ~9/13/26% of gaia/officeqa/browsecomp candidate
 cases, scoring candidates far harsher than the leniently-measured baselines.
+
+¶ `evaluation` and `finalization` each get this cap independently — they are
+separate scopes with separate tokens and separate ledgers, so the numbers do not
+share a pool. `max_requests` is 200 000 on both everywhere (a full officeqa
+finalize needs ~12 000, so this is not the binding constraint either). Sizing is
+per benchmark from its own case counts; see each `build.yaml` for the arithmetic.
 
 ‖ `verifier_timeout_seconds` sized to ~1.5× a with-rescore finalize
 (`n_attempts=3` × held-out eval + `rescore_top_k=3` × validation eval), for
