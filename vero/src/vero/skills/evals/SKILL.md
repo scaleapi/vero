@@ -30,6 +30,14 @@ evals submit --version COMMIT         # nominate your best candidate to ship
 Evaluate the baseline first: a candidate only counts as an improvement against
 a measured baseline on the same case selection.
 
+**Results are persisted, so printed output is disposable.** Before `evals run`
+returns, the complete record — overall metrics, every per-case score, and the
+trial artifacts — is written under `.evals/results/` and stays there for the rest
+of the run. So piping through `head`/`tail` loses nothing recoverable: use
+`evals list` to find any past evaluation and `evals show` / `evals cases` /
+`evals diff` to read it back. Never re-run an evaluation just to recover a number
+you truncated — it is on disk.
+
 ## Blocking vs detached
 
 By default `evals run` **blocks** until scoring finishes and returns the result
@@ -93,6 +101,8 @@ are enforced by the evaluator; `evals plan` shows what remains.
 - Claiming an improvement before the baseline's own evaluation finished.
 - Dumping whole traces into context. Go metadata-first: `evals trace` summary,
   then `--span N`, then windowed chars; artifacts are files — `grep` them.
+- Re-running an evaluation because you truncated its output. Every result is on
+  disk under `.evals/results/`; read it back with `evals show` / `evals cases`.
 - Confusing ids: evaluation ids come from `evals list`; case ids from
   `evals cases`; job ids only from `evals run --detach`.
 - Scores may be noisy: replicate an important comparison before acting on it, by

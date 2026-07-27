@@ -36,6 +36,15 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    {% endif %}
    Run `evals run --help` for every option.
 
+   **Every result is persisted, so you never need to preserve the printed
+   output.** The full record — overall metrics, every per-case score, and the
+   trial artifacts — is written under `.evals/results/` before the command
+   returns, and stays there for the rest of the run. Piping a result through
+   `head`/`tail` therefore costs you nothing: recover any of it later with
+   `evals list` (one row per past evaluation), `evals show ID`, `evals cases ID`,
+   and `evals diff OLD NEW`. Do not re-run an evaluation to see a number you
+   truncated — look it up.
+
    Add `--detach` **only** to run several evaluations at once: it returns a
    `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks
    until that job finishes and prints its result (or poll `evals status JOB_ID`,
