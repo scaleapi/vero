@@ -182,8 +182,16 @@ The reported unit is tokens, not dollars: the trusted per-evaluation split lands
 in `reward_metrics` as `inference_input_tokens` / `inference_cached_input_tokens`
 / `inference_output_tokens` / `inference_total_tokens` (→ W&B). Because the target
 model is fixed per benchmark, dollars are a downstream linear function of that
-triple (per-model rate vector) and are not stored. For per-trial breakdowns, run
-the post-hoc aggregator on the exported session:
+triple (per-model rate vector) and are not stored.
+
+Read the per-case statistics, not just the totals: token and latency
+distributions are heavy-tailed, so `reward_metrics` carries a mean, median, and
+max per case (`mean/median/max_case_wall_seconds`,
+`mean/median/max_case_agent_reported_*_tokens`, plus a derived
+`mean_case_inference_*`). A mean far above the median means a few cases dominate
+the spend; the max is the case most likely to hit its wall budget and score the
+failure value. For per-trial breakdowns, run the post-hoc aggregator on the
+exported session:
 
 ```bash
 python harness-engineering-bench/scripts/per_trial_tokens.py <session-dir> --json

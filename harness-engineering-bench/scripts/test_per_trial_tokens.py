@@ -212,7 +212,7 @@ def test_analyze_session_stamped_full_coverage_wall_and_reconciliation(tmp_path)
 
     # report schema
     assert set(data) == {
-        "trials", "gateway_total", "attributed",
+        "trials", "distribution", "gateway_total", "attributed",
         "agent_reported_total", "residual", "coverage_pct",
     }
     # stamped chains attribute fully
@@ -261,3 +261,41 @@ def test_csv_rows_schema_and_residual_row(tmp_path):
     assert trial_row["total_tokens"] == 13
     residual_row = next(r for r in rows if r["task"] == "(unattributed)")
     assert residual_row["total_tokens"] == 8
+
+
+def test_distribution_reports_mean_median_max_for_skewed_trials(tmp_path):
+    # Heavy tail: one trial dominates. mean alone hides the shape, so the
+    # aggregator reports median beside it and max names the tail.
+    evaluation = "eval-1"
+    sizes = {"a": 100, "b": 200, "c": 3000}
+    for index, (suffix, tokens) in enumerate(sizes.items()):
+        _trial(
+            tmp_path, evaluation, index, f"org/task-{suffix}",
+            f"Question about {suffix} widgets in the treasury bulletin corpus",
+        )
+    records = [
+        {
+            "scope": "evaluation", "attribution": evaluation,
+            "thread_id": f"th{suffix}",
+            "root_snippet": (
+                f"Question about {suffix} widgets in the treasury bulletin corpus"
+            ),
+            "input_tokens": tokens, "cached_input_tokens": tokens // 10,
+            "output_tokens": tokens // 20, "total_tokens": tokens,
+            "latency_ms": tokens, "ts": "2026-01-01T00:01:00Z",
+        }
+        for suffix, tokens in sizes.items()
+    ]
+    requests = _write_log(tmp_path, records)
+
+    report = p.analyze_session(tmp_path, requests, [])
+    dist = report[evaluation]["distribution"]
+
+    assert dist["input_tokens"]["mean"] == 1100.0     # dragged up by the tail
+    assert dist["input_tokens"]["median"] == 200.0    # unmoved by it
+    assert dist["input_tokens"]["max"] == 3000.0
+    assert dist["input_tokens"]["n"] == 3
+    assert dist["output_tokens"]["median"] == 10.0
+    assert dist["latency_ms"]["median"] == 200.0
+    # every trial shares one 5-minute window in the fixture
+    assert dist["wall_s"]["median"] == 300.0

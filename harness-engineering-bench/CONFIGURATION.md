@@ -33,7 +33,17 @@ benchmark can be checked against the others at a glance.
   (`inference_input_tokens`, `inference_cached_input_tokens`,
   `inference_output_tokens`, `inference_total_tokens`, `inference_requests`) in
   `reward_metrics`; each trial's `result.json` also carries agent-self-reported
-  tokens (`agent_reported_*`) and its wall window. With
+  tokens (`agent_reported_*`) and its wall window. Cost is reported per case the
+  same way latency is, and because token and latency distributions are unbounded
+  and heavy-tailed (a few cases carry much of the total) each carries a **mean, a
+  median, and a max** — `mean/median/max_case_wall_seconds` and
+  `mean/median/max_case_agent_reported_{input,cached_input,output}_tokens`.
+  Accuracy, being bounded, keeps mean plus stddev. The trusted gateway figure is
+  metered per evaluation rather than per case, so it contributes the sum plus a
+  derived `mean_case_inference_*`; its median and max come from post-hoc
+  attribution (`scripts/per_trial_tokens.py`, which reports mean/median/max over
+  trials for every token and latency measure). All of these are budget signal and
+  are redacted from the agent under `disclose_budget: false`; latency is not. With
   `inference_gateway.request_log_attribution: true` the gateway stamps every
   request-log record with a `thread_id`, so `scripts/per_trial_tokens.py`
   attributes gateway tokens to individual trials (trusted, versus a content-match

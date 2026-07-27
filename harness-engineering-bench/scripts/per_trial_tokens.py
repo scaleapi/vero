@@ -40,6 +40,7 @@ import argparse
 import csv
 import json
 import re
+import statistics
 import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -216,6 +217,35 @@ def assign_thread(
     return None
 
 
+_DISTRIBUTION_KEYS = (*TOKEN_KEYS, "requests", "latency_ms", "wall_s")
+
+
+def distribution(entries: list[dict]) -> dict[str, dict[str, float]]:
+    """mean/median/max per-trial, for each token and latency measure.
+
+    Token and latency distributions are unbounded and heavy-tailed — a few
+    trials carry much of an evaluation's total — so the median is reported
+    beside the mean and the max names the tail. (Accuracy, being bounded, is
+    summarized by its mean alone.)
+    """
+    summary: dict[str, dict[str, float]] = {}
+    for key in _DISTRIBUTION_KEYS:
+        values = [
+            entry[key]
+            for entry in entries
+            if isinstance(entry.get(key), (int, float))
+        ]
+        if not values:
+            continue
+        summary[key] = {
+            "mean": round(sum(values) / len(values), 1),
+            "median": round(statistics.median(values), 1),
+            "max": round(float(max(values)), 1),
+            "n": len(values),
+        }
+    return summary
+
+
 def trial_wall_seconds(trial: dict) -> float | None:
     started, finished = trial.get("started"), trial.get("finished")
     if started is None or finished is None:
@@ -283,6 +313,7 @@ def analyze_session(
         }
         report[evaluation_id] = {
             "trials": per_trial,
+            "distribution": distribution(list(per_trial.values())),
             "gateway_total": gateway_total,
             "attributed": attributed,
             "agent_reported_total": agent_reported_total,
@@ -385,6 +416,13 @@ def print_report(run_label: str, report: dict) -> None:
             f"coverage: {data['coverage_pct']}% of {gateway['total_tokens']} "
             f"gateway-metered tokens attributed to trials"
         )
+        if data["distribution"]:
+            print(f"per-trial distribution  {'mean':>12} {'median':>12} {'max':>12}")
+            for key, stats in data["distribution"].items():
+                print(
+                    f"  {key:<20} {stats['mean']:>12,.1f} "
+                    f"{stats['median']:>12,.1f} {stats['max']:>12,.1f}"
+                )
         # Reconcile the trusted envelope against the two independent token sources.
         print(
             f"  input tokens  gateway {gateway['input_tokens']} | "
@@ -414,7 +452,9 @@ def main() -> int:
         if not requests_dir.is_dir():
             print(f"no request log at {requests_dir}", file=sys.stderr)
             continue
-        grid[session.name] = analyze_session(session, requests_dir, task_texts)
+        # "." resolves to an empty name, which would label every row blank.
+        run_label = session.resolve().name or str(session)
+        grid[run_label] = analyze_session(session, requests_dir, task_texts)
 
     if not grid:
         return 1
@@ -430,7 +470,7 @@ def main() -> int:
     if arguments.as_json:
         # One session keeps the original flat {evaluation: ...} schema; several
         # nest under their run label.
-        payload = grid[arguments.sessions[0].name] if len(grid) == 1 else grid
+        payload = next(iter(grid.values())) if len(grid) == 1 else grid
         print(json.dumps(payload, indent=1, default=str))
         return 0
 
