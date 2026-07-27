@@ -194,6 +194,11 @@ agent_env:
   BASH_DEFAULT_TIMEOUT_MS: "1800000"
   ENABLE_BACKGROUND_TASKS: "0"
   FORCE_AUTO_BACKGROUND_TASKS: "0"
+  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent) default
+  # to symlinking their entry point into /usr/local/bin, which the unprivileged
+  # optimizer user cannot write: "Failed to install executable ... Permission
+  # denied". npm/nvm-based harnesses (claude-code, opencode) are unaffected.
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
 
 wandb:
   project: vero-conformance
