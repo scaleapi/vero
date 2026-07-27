@@ -390,6 +390,28 @@ class EvaluationEngine:
                     )
                 )
             raise
+        except asyncio.CancelledError:
+            # Last line of defence for the reservation. The evaluator's own
+            # handlers convert cancellation and failure into the two typed errors
+            # above, but each of them has to await a persist before it can raise,
+            # and a cancellation delivered during that await -- which
+            # quiesce_agent_evaluations does deliver, at finalization -- unwinds
+            # as a raw CancelledError instead. Neither handler above would see
+            # it, and the reservation would stay charged forever.
+            #
+            # Only the refund is recoverable here: a raw cancellation carries no
+            # evaluation id, so there is no record to load. The evaluator already
+            # persisted one on its shielded paths.
+            if charged:
+                await asyncio.shield(
+                    self.budget_ledger.refund(
+                        backend_id,
+                        request.evaluation_set,
+                        cost,
+                        principal,
+                    )
+                )
+            raise
         # Shielded for the same reason as the two handlers above, and one more:
         # the budget was charged for an evaluation that has now actually run, so
         # a cancellation landing inside _record would leave the ledger counting

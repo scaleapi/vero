@@ -1190,3 +1190,60 @@ async def test_engine_enforces_aggregate_k_anonymity_floor(tmp_path: Path):
         request=request_with(CaseRange(stop=2)),
         principal=EvaluationPrincipal.ADMIN,
     )
+
+
+@pytest.mark.asyncio
+async def test_raw_cancellation_during_cleanup_still_refunds(tmp_path: Path):
+    """A CancelledError that escapes the evaluator must not leak the reservation.
+
+    The evaluator turns cancellation and failure into two typed errors, but each
+    has to await a persist before it can raise them. A cancellation delivered
+    during that await -- which quiesce_agent_evaluations does deliver, when it
+    drains agent evaluations at finalization -- unwinds as a raw CancelledError
+    instead, matching neither typed handler. Without a bare handler in the engine
+    the reservation stays charged forever.
+    """
+
+    class CancellingEvaluator:
+        """Stands in for an evaluator interrupted mid-cleanup."""
+
+        def __init__(self, evaluations_dir):
+            self.evaluations_dir = evaluations_dir
+
+        async def evaluate(self, **_kwargs):
+            raise asyncio.CancelledError()
+
+    workspace = StubWorkspace(tmp_path / "repo")
+    evaluation_set = request().evaluation_set
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="default",
+                evaluation_set_key=evaluation_set.budget_key("default"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budgets.json",
+    )
+    ledger.save()
+    engine = EvaluationEngine(
+        evaluator=CancellingEvaluator(evaluator(tmp_path, workspace).evaluations_dir),
+        backends=BackendRegistry({"default": StubBackend()}),
+        database=EvaluationDatabase(id="session"),
+        database_path=tmp_path / "database.json",
+        budget_ledger=ledger,
+        authorization_resolver=allow_all_evaluations,
+    )
+
+    # The cancellation still propagates -- it is not swallowed.
+    with pytest.raises(asyncio.CancelledError):
+        await engine.evaluate_record(backend_id="default", request=request())
+
+    remaining = ledger.get("default", evaluation_set)
+    assert remaining is not None and remaining.remaining_runs == 2
+    assert (
+        BudgetLedger.load(tmp_path / "budgets.json")
+        .get("default", evaluation_set)
+        .remaining_runs
+        == 2
+    )

@@ -206,34 +206,46 @@ class Evaluator:
                 )
             )
             raise EvaluationCancelledError(evaluation_id, message) from error
+        # The two handlers below shield their persist for the same reason the
+        # cancellation handler above does. asyncio.timeout absorbs its own
+        # internal cancellation and re-raises as TimeoutError, but an *external*
+        # cancel -- quiesce_agent_evaluations draining agent evaluations at
+        # finalization -- can still be pending, and the first await inside an
+        # unshielded _persist_failure would deliver it, losing the failure record
+        # and unwinding as a raw CancelledError instead of the typed error.
+        # (EvaluationEngine refunds on that raw path too, belt and braces.)
         except TimeoutError as error:
             message = f"evaluation exceeded {request.limits.timeout_seconds} seconds"
-            await self._persist_failure(
-                store=store,
-                evaluation_id=evaluation_id,
-                backend_id=backend_id,
-                backend=backend,
-                request=request,
-                objective_spec=objective_spec,
-                principal=principal,
-                created_at=created_at,
-                code="evaluation_timeout",
-                message=message,
+            await asyncio.shield(
+                self._persist_failure(
+                    store=store,
+                    evaluation_id=evaluation_id,
+                    backend_id=backend_id,
+                    backend=backend,
+                    request=request,
+                    objective_spec=objective_spec,
+                    principal=principal,
+                    created_at=created_at,
+                    code="evaluation_timeout",
+                    message=message,
+                )
             )
             raise EvaluationExecutionError(evaluation_id, message) from error
         except Exception as error:
             message = str(error) or type(error).__name__
-            await self._persist_failure(
-                store=store,
-                evaluation_id=evaluation_id,
-                backend_id=backend_id,
-                backend=backend,
-                request=request,
-                objective_spec=objective_spec,
-                principal=principal,
-                created_at=created_at,
-                code="backend_error",
-                message=message,
+            await asyncio.shield(
+                self._persist_failure(
+                    store=store,
+                    evaluation_id=evaluation_id,
+                    backend_id=backend_id,
+                    backend=backend,
+                    request=request,
+                    objective_spec=objective_spec,
+                    principal=principal,
+                    created_at=created_at,
+                    code="backend_error",
+                    message=message,
+                )
             )
             raise EvaluationExecutionError(evaluation_id, message) from error
 
