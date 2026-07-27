@@ -39,6 +39,11 @@ targets:
     baseline_reward: 0.3603  # held-out K=3 mean (see CONFIGURATION.md)
     failure_value: 0.0
     max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the K=3 pinned baseline.
+    # Per-target override — search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
 
 evaluation_set_name: officeqa
 objective:
@@ -81,8 +86,10 @@ secrets:
 harness_user: harness
 
 wandb:
-  project: vero-officeqa
-  group: officeqa
+  project: harness-engineering-bench
+  group: officeqa  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-officeqa}  # per-launch label, e.g. --param wandb_run=officeqa__claude-sonnet-5
+  tags: [officeqa]
   log_traces: true
 
 inference_gateway:
