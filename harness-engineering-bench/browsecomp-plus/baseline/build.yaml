@@ -59,11 +59,13 @@ feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
 timeout_seconds: 28800
-case_timeout_seconds: 900
+# Raised from 900: baseline p99 ~1479s / max ~1771s exceeded 900, killing ~26% of cases.
+# task_agent_timeout is the task-declared denominator; case_timeout is the enforced cap.
+case_timeout_seconds: 2100
 task_agent_timeout_seconds: 3600
 max_concurrency: 8
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 57600
+verifier_timeout_seconds: 64800  # sized for 3x held-out finalize + rescore headroom (~11.5h + margin)
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET

@@ -59,13 +59,13 @@ feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
 timeout_seconds: 14400
-# Tasks declare a 3600s agent timeout; 900s is the enforced per-case budget.
-# Provisional - revisit against empirical wall_seconds once runs report it.
-case_timeout_seconds: 900
+# Tasks declare a 3600s agent timeout (the denominator); case_timeout is the enforced
+# per-case budget. Raised from 900 to 1200: baseline max case wall ~1122s exceeded 900.
+case_timeout_seconds: 1200
 task_agent_timeout_seconds: 3600
 max_concurrency: 8
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 28800  # 2x timeout_seconds: finalization runs candidate + baseline test evals
+verifier_timeout_seconds: 43200  # sized for 3x held-out finalize + rescore headroom (~8h + margin)
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET

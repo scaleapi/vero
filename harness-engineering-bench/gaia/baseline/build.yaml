@@ -66,11 +66,16 @@ feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
 timeout_seconds: 3600
-case_timeout_seconds: 180
+# case_timeout raised from 180: baseline p99 case wall ~608s (agent's own MAX_TURNS
+# cap) exceeded 180, killing ~9% of cases. task_agent_timeout is the task-declared
+# denominator; the enforced per-case cap is case_timeout_seconds.
+case_timeout_seconds: 900
 task_agent_timeout_seconds: 600
 max_concurrency: 8
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 7200
+# verifier phase is separate from the (unbounded) agent phase; size for finalization
+# only: 3x held-out (n_attempts) + rescore headroom. A verifier timeout loses the score.
+verifier_timeout_seconds: 10800
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET

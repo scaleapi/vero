@@ -68,23 +68,38 @@ benchmark can be checked against the others at a glance.
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
 | timeout_seconds (per eval) | 3600 | 7200 | 14400 | 14400 | 28800 |
-| case_timeout_seconds (enforced) | 180 | 300 | 1800 † | 900 † | 900 † |
+| case_timeout_seconds (enforced) † | 900 | 1200 | 1800 | 1200 | 2100 |
 | task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 |
-| verifier_timeout_seconds | 7200 | 14400 | 28800 | 28800 | 57600 |
+| verifier_timeout_seconds ‖ | 10800 | 25200 | 28800 | 43200 | 64800 |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index |
 
 ## Conventions
 
-- **Timeouts**: `task_agent_timeout_seconds` mirrors the agent timeout the
-  dataset's task packages declare; `case_timeout_seconds` is the per-case
-  budget VeRO actually enforces (compiled to Harbor's agent-timeout
-  multiplier). Set both explicitly — omitting them silently applies the
+- **Timeouts are per-phase, not one shared wall.** Harbor runs the optimizer
+  agent phase and the verifier (finalization) phase with independent clocks, so
+  a long search does not eat into finalization's budget and vice versa. The
+  **optimizer agent phase is unbounded** (vero sets no `[agent] timeout_sec`);
+  the search is governed by the gateway token budget, not wall time.
+- **`case_timeout_seconds` is the enforced per-case wall cap**;
+  `task_agent_timeout_seconds` is the task-declared agent timeout used only as
+  the rescale denominator (Harbor's per-case timeout = declared ×
+  `case_timeout/task_agent_timeout`). `case_timeout` may exceed
+  `task_agent_timeout`. Set both explicitly — omitting them silently applies the
   180/600 defaults regardless of what the tasks declare.
-- **Verifier timeout** is 2× `timeout_seconds`: finalization runs the
-  candidate and the baseline test evaluations.
+- **`verifier_timeout_seconds`** bounds only finalization (the held-out
+  evaluation of the selected candidate), sized for `n_attempts` × held-out +
+  rescore headroom (‖). A verifier timeout yields no reward (the score is lost,
+  only agent artifacts are salvaged), so it is sized generously.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
+- **Optimizer `agent_env`** (currently on officeqa; propagate to all): inner
+  evals take 15–30 min, but Claude Code caps a single Bash call at
+  `BASH_MAX_TIMEOUT_MS` (default 600000=10min), which forces the agent into
+  `--detach` + background-poll + end-turn — and in headless `--print` mode,
+  ending the turn ends the run. Set `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS`
+  high and `ENABLE_BACKGROUND_TASKS`/`FORCE_AUTO_BACKGROUND_TASKS=0` so the agent
+  blocks on a whole eval in one call and stays in-loop.
 - **`infrastructure_max_attempts: 3`** applies only to trusted finalization
   re-scores. For competitive (agent) evaluations, whole-sub-run infrastructure
   retry is disabled and a within-trial transient-infra failure is scored at the
@@ -115,11 +130,20 @@ each agent sends `model_name.removeprefix("openai/")`, so an `openai/`-prefixed
 name would be allow-listed in one form and requested in another and the gateway
 would deny it.
 
-† Sized from stock-agent probes (codex on the target model, 3 development
-tasks each, full declared timeouts): tau3 trials took 202-211s (900s budget
-≈ 4x headroom) and swe-atlas trials 379-602s (1800s ≈ 3x headroom over the
-slowest). BrowseComp-Plus provisionally uses the tau3 limit. Revisit against
-`wall_seconds` distributions from real runs.
+† Sized from the **held-out baseline** per-case wall-time distributions (the seed
+target agent on each benchmark's target model), set at or above each benchmark's
+observed max: gaia p99≈608/max≈609 → 900; officeqa p99≈640/max≈1076 → 1200;
+swe-atlas p99≈1163/max≈1278 → 1800 (unchanged); tau3 p99≈643/max≈1122 → 1200;
+browsecomp p99≈1479/max≈1771 → 2100. This replaces the earlier codex-probe
+sizing, which was too tight for the real target agents — the prior caps
+(180/300/900) would have killed ~9/13/26% of gaia/officeqa/browsecomp candidate
+cases, scoring candidates far harsher than the leniently-measured baselines.
+
+‖ `verifier_timeout_seconds` sized to ~1.5× a with-rescore finalize
+(`n_attempts=3` × held-out eval + `rescore_top_k=3` × validation eval), for
+salvage headroom even though the validation rescore does not fire in the
+`submit` selection path. Because phases are independent, this covers
+finalization only — not the search.
 
 ‡ Exception to the harness-isolation default: these tasks run LLM services
 (rubric judge, user-simulator/grader, or answer judge) inside their task
