@@ -72,12 +72,15 @@ benchmark can be checked against the others at a glance.
   benchmark, 5 of its 66 held-out tasks send image inputs, and deepseek-v4-flash
   rejects those outright (`This model does not support image inputs`), capping
   achievable reward near 0.92 and disguising the shortfall as agent failure.
-- **Execution**: `harbor[modal]==0.20.0`, python 3.12, `n_attempts: 1`,
-  `max_retries: 1`, 3 infrastructure attempts at 5s, `aggregate_attempts:
-  best`, `max_concurrency: 8`, `error_rate_threshold: 0.1`,
-  `feedback_transcripts: true` with `feedback_max_bytes: 16000`,
-  `environment_name: ${inner_env:-modal}` (pass `--param inner_env=docker`
-  for local shakedowns).
+- **Execution**: `harbor[modal]==0.20.0`, python 3.12, `n_attempts: 1` globally
+  (officeqa's **test** target overrides to `n_attempts: 3` /
+  `aggregate_attempts: mean` so the noisy held-out score is averaged over 3 —
+  see the per-target override in its `build.yaml`), `max_retries: 1`, 3
+  infrastructure attempts at 5s, `aggregate_attempts: best`,
+  `max_concurrency: 24` (see § — every timeout below is derived from this
+  number), `error_rate_threshold: 0.1`, `feedback_transcripts: true` with
+  `feedback_max_bytes: 16000`, `environment_name: ${inner_env:-modal}` (pass
+  `--param inner_env=docker` for local shakedowns).
 - **Telemetry**: W&B project `vero-<benchmark>` with trace uploads; inner
   sandboxes grouped under the dedicated `harness-engineering-bench` Modal app
   with a 1h idle timeout; the gateway records a per-request log.
