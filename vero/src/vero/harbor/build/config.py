@@ -126,6 +126,40 @@ class _TaskIdentityFields(StrictModel):
         return value
 
 
+# Flags whose value vero owns, in both spellings. harbor takes the last value
+# for a key and build-declared args are appended after vero's own, so listing
+# only the short form let a build declare `--agent other` and silently replace
+# the agent the caller asked for -- a substitution that invalidates a result
+# without failing anything.
+#
+# Matched exactly, never by prefix: `--agent-timeout-multiplier`,
+# `--agent-kwarg` and `--environment-build-timeout-multiplier` are all
+# legitimate and all begin with a controlled name. Note harbor spells the long
+# form of `-e` as `--env`; there is no `--environment` option.
+_OUTER_CONTROLLED_FLAGS = frozenset(
+    {"-a", "--agent", "-e", "--env", "-m", "--model", "-p", "--path"}
+)
+
+# A nested evaluation run is driven entirely by vero, so it reserves the task
+# selection and concurrency flags as well. `-o` is included because the long
+# form it pairs with, `--jobs-dir`, was already reserved without it.
+_EVALUATION_CONTROLLED_FLAGS = _OUTER_CONTROLLED_FLAGS | frozenset(
+    {
+        "-d",
+        "--dataset",
+        "-i",
+        "--include-task-name",
+        "-n",
+        "--n-concurrent",
+        "-o",
+        "--jobs-dir",
+        "--agent-import-path",
+        "--max-retries",
+        "--n-attempts",
+    }
+)
+
+
 class _HarborEvaluationFields(StrictModel):
     """Knobs for the nested ``harbor run`` that scores a candidate.
 
@@ -228,21 +262,10 @@ class _HarborEvaluationFields(StrictModel):
     @field_validator("extra_harbor_args")
     @classmethod
     def validate_extra_harbor_args(cls, value: list[str]) -> list[str]:
-        controlled = {
-            "-a",
-            "-d",
-            "-e",
-            "-i",
-            "-m",
-            "-n",
-            "-p",
-            "--agent-import-path",
-            "--jobs-dir",
-            "--max-retries",
-            "--n-attempts",
-        }
         conflicts = [
-            argument for argument in value if argument.split("=", 1)[0] in controlled
+            argument
+            for argument in value
+            if argument.split("=", 1)[0] in _EVALUATION_CONTROLLED_FLAGS
         ]
         if conflicts:
             raise ValueError(
@@ -253,11 +276,10 @@ class _HarborEvaluationFields(StrictModel):
     @field_validator("optimizer_harbor_args")
     @classmethod
     def validate_optimizer_harbor_args(cls, value: list[str]) -> list[str]:
-        # `vero harbor run` owns the outer command's task, agent, environment and
-        # model; a build must not fight the CLI over them.
-        controlled = {"-a", "-e", "-m", "-p"}
         conflicts = [
-            argument for argument in value if argument.split("=", 1)[0] in controlled
+            argument
+            for argument in value
+            if argument.split("=", 1)[0] in _OUTER_CONTROLLED_FLAGS
         ]
         if conflicts:
             raise ValueError(

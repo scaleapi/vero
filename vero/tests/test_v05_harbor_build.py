@@ -413,6 +413,38 @@ def test_build_config_requires_pins_and_valid_partition_references(tmp_path):
         tmp_path / "outer-ek",
         optimizer_harbor_args=["--ek", "modal_vm_runtime=true"],
     ).optimizer_harbor_args == ["--ek", "modal_vm_runtime=true"]
+    # Long forms are the dangerous half: harbor takes the last value for a key
+    # and these are appended after vero's own flags, so a build declaring
+    # `--agent other` silently replaced the agent the caller asked for. Note
+    # harbor spells the long form of `-e` as `--env`, not `--environment`.
+    for forged in (
+        ["--agent", "forged"],
+        ["--agent=forged"],
+        ["--model", "forged"],
+        ["--env", "docker"],
+        ["--path", "/forged"],
+    ):
+        with pytest.raises(ValidationError, match="controlled flags"):
+            _config(tmp_path / f"outer-long-{forged[0].strip('-')}", optimizer_harbor_args=forged)
+    # `-o` pairs with `--jobs-dir`, which was already reserved for a nested run.
+    with pytest.raises(ValidationError, match="controlled flags"):
+        _config(tmp_path / "eval-o", extra_harbor_args=["-o", "/forged"])
+    for forged in (["--dataset", "x"], ["--n-concurrent", "8"]):
+        with pytest.raises(ValidationError, match="controlled flags"):
+            _config(tmp_path / f"eval-{forged[0].strip('-')}", extra_harbor_args=forged)
+    # Matching is exact, so these legitimate near-misses must still pass.
+    for allowed in (
+        ["--agent-timeout-multiplier", "4"],
+        ["--agent-kwarg", "base_url=http://gw/v1"],
+        ["--environment-build-timeout-multiplier", "2"],
+    ):
+        assert (
+            _config(
+                tmp_path / f"outer-ok-{allowed[0].strip('-')}",
+                optimizer_harbor_args=allowed,
+            ).optimizer_harbor_args
+            == allowed
+        )
     with pytest.raises(ValidationError, match="explicit version"):
         _config(tmp_path / "source", task_source="org/unversioned")
 
