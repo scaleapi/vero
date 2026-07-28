@@ -279,6 +279,43 @@ def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
     ]
 
 
+def _kimi_gateway_args(agent: str, task: Path) -> list[str]:
+    """Point kimi-cli's provider at the gateway instead of api.openai.com.
+
+    kimi-cli only accepts a model whose provider half is in its own table, and
+    ``fireworks_ai`` is not; prefixing with ``openai/`` selects its
+    ``openai_legacy`` provider and leaves the rest of the string as the model.
+    That provider's base URL defaults to ``https://api.openai.com/v1``, and the
+    only thing that overrides it is ``OPENAI_BASE_URL`` read *inside the agent
+    process* (``augment_provider_with_env_vars`` in kimi_cli/llm.py). The
+    compose file sets that variable on the container, but harbor hands the agent
+    an explicit environment, so without this the harness sent its scoped
+    producer token to OpenAI and got a 401 -- failing closed, so nothing leaked,
+    but unable to run at all.
+
+    Both values are set so the agent process does not depend on harbor
+    resolving the key from the launching shell's environment.
+    """
+
+    if agent != "kimi-cli":
+        return []
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return []
+    try:
+        launch = json.loads(path.read_text(encoding="utf-8"))
+        base_url = launch["producer_base_url"]
+        api_key = launch["producer_api_key"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
+    return [
+        "--ae",
+        f"OPENAI_BASE_URL={base_url}",
+        "--ae",
+        f"OPENAI_API_KEY={api_key}",
+    ]
+
+
 def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
     """Route opencode's non-openai providers through the gateway.
 
@@ -574,6 +611,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
+        command.extend(_kimi_gateway_args(agent, task))
         command.extend(_outer_app_name_args(environment, config.name, extra))
         command.extend(extra)
         click.echo(shlex.join(command))
