@@ -467,18 +467,29 @@ class EvaluationEngine:
             None,
         )
         if infrastructure is not None:
+            # Build the failure before refunding so the refund cannot preempt it:
+            # the sidecar maps this type to "infrastructure failure" for the
+            # agent, and a bare OSError from the ledger's write would arrive
+            # instead as an unmapped "evaluation failed: OSError".
+            failure = EvaluationInfrastructureError(record.id, infrastructure.message)
             if charged:
                 # Shield: a cancellation racing this infrastructure-failure
                 # refund must not leak the reservation's budget.
-                await asyncio.shield(
-                    self.budget_ledger.refund(
-                        backend_id,
-                        request.evaluation_set,
-                        cost,
-                        principal,
+                try:
+                    await asyncio.shield(
+                        self.budget_ledger.refund(
+                            backend_id,
+                            request.evaluation_set,
+                            cost,
+                            principal,
+                        )
                     )
-                )
-            raise EvaluationInfrastructureError(record.id, infrastructure.message)
+                except Exception as refund_error:
+                    # Same guard as the three handlers above, for the same
+                    # reason: chain the refund's own failure and re-raise the
+                    # original, as BudgetStore.refund already does.
+                    raise failure from refund_error
+            raise failure
         return record, decision
 
     async def _record(self, record: EvaluationRecord) -> None:
