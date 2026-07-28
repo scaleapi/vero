@@ -408,14 +408,14 @@ def test_sidecar_wandb_telemetry_is_best_effort(tmp_path: Path):
 def test_scheme_less_wandb_base_url_is_repaired_before_init(tmp_path: Path, monkeypatch):
     """A self-hosted host written without a scheme must not silently kill reporting.
 
-    W&B parses `base_url` as a URL, so `WANDB_BASE_URL=scaleai.wandb.io` raises
+    W&B parses `base_url` as a URL, so `WANDB_BASE_URL=wandb.example.com` raises
     out of `wandb.init()` and the sidecar disables W&B for the whole run.
     """
     from vero.runtime.wandb import normalize_wandb_base_url
 
-    monkeypatch.setenv("WANDB_BASE_URL", "scaleai.wandb.io")
-    assert normalize_wandb_base_url() == "https://scaleai.wandb.io"
-    assert os.environ["WANDB_BASE_URL"] == "https://scaleai.wandb.io"
+    monkeypatch.setenv("WANDB_BASE_URL", "wandb.example.com")
+    assert normalize_wandb_base_url() == "https://wandb.example.com"
+    assert os.environ["WANDB_BASE_URL"] == "https://wandb.example.com"
 
     # Already-qualified values, including plain http, are left exactly as given.
     monkeypatch.setenv("WANDB_BASE_URL", "http://localhost:8080")
@@ -426,8 +426,8 @@ def test_scheme_less_wandb_base_url_is_repaired_before_init(tmp_path: Path, monk
     assert normalize_wandb_base_url() is None
 
     # And the repair happens before a sink opens its run.
-    monkeypatch.setenv("WANDB_BASE_URL", "scaleai.wandb.io")
+    monkeypatch.setenv("WANDB_BASE_URL", "wandb.example.com")
     SidecarWandbSink(
         project="v", session_id="s", session_dir=tmp_path / "session", client=FakeWandb()
     )
-    assert os.environ["WANDB_BASE_URL"] == "https://scaleai.wandb.io"
+    assert os.environ["WANDB_BASE_URL"] == "https://wandb.example.com"

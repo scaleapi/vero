@@ -92,7 +92,7 @@ secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
   - WANDB_API_KEY
-  - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
+  - WANDB_BASE_URL  # self-hosted or cloud W&B
 
 # candidate harness runs as an unprivileged uid, unable to read held-out state.
 harness_user: harness

@@ -177,6 +177,42 @@ benchmark can be checked against the others at a glance.
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index |
 
+## Choosing an optimizer harness
+
+Every harness reaches the gateway a different way, and getting it wrong produces
+an error that reads like a credential problem rather than a routing one. vero
+handles each case in `harbor/cli.py`, so a launch needs only `--agent` and
+`--model` — but the model string form is not interchangeable, and a wrong one
+either bypasses the gateway or fails closed against the wrong endpoint.
+
+| `--agent` | `--model` form | how vero routes it | proven |
+|---|---|---|---|
+| `claude-code` | `claude-sonnet-5` | `ANTHROPIC_BASE_URL`, scope root with the trailing `/v1` stripped, because the Anthropic SDK re-appends `/v1/messages` | yes |
+| `opencode` | `anthropic/claude-sonnet-5` | provider `baseURL` written into `opencode.json`; keeps the `/v1` because opencode appends only `/messages` | yes |
+| `mini-swe-agent` | `anthropic/claude-sonnet-5` | litellm aliases: `OPENAI_API_BASE` keeps `/v1` (it appends `/chat/completions`), `ANTHROPIC_API_BASE` gets the fully qualified `/v1/messages` (it appends that unless already present) | yes |
+| `kimi-cli` | `openai/fireworks_ai/kimi-k3` | `--ak base_url`, written into the provider block of kimi-cli's config file | yes |
+| `codex` | — | reads `OPENAI_BASE_URL`/`OPENAI_API_KEY` | **not yet run** |
+
+Two things are specific to `kimi-cli` and easy to get wrong:
+
+- **The doubled prefix is deliberate.** kimi-cli splits the model on the first
+  `/` and rejects any provider not in its own table; `fireworks_ai` is not in it.
+  The `openai/` prefix selects its `openai_legacy` provider type and leaves
+  `fireworks_ai/kimi-k3` as the model, which is the only form the upstream
+  resolves.
+- **The gateway allow-list needs the wire form, not the prefixed one**, so pass
+  `--param optimizer_model=fireworks_ai/kimi-k3` alongside `--model`. `--model`
+  only fills that parameter when it is otherwise unset, so an explicit `--param`
+  wins. Without it the first request is a gateway 403 `model_denied`.
+- kimi-cli pins a 256K context window for the k2.5/k2.6/k2.7 families by name.
+  **k3 is not in that list** and falls back to a 128K default, which may be
+  below its real window; set `KIMI_MODEL_MAX_CONTEXT_SIZE` once that number is
+  known.
+
+Adding a harness means finding out how it addresses a base URL before spending a
+full run on it. A cheap conformance run — short budget, one benchmark — costs
+about two minutes and has caught this on every harness added so far.
+
 ## Conventions
 
 - **Timeouts are per-phase, not one shared wall.** Harbor runs the optimizer

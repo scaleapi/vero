@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 def normalize_wandb_base_url(environment: dict[str, str] | None = None) -> str | None:
     """Give a scheme-less ``WANDB_BASE_URL`` the ``https://`` it needs.
 
-    A self-hosted host is naturally written ``scaleai.wandb.io``, but W&B's
+    A self-hosted host is naturally written ``wandb.example.com``, but W&B's
     settings model parses ``base_url`` as a URL and rejects that with
     ``Input should be a valid URL, relative URL without a base``. The error
     surfaces out of ``wandb.init()``, which callers treat as "W&B unavailable",
