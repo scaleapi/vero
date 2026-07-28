@@ -11,6 +11,10 @@ Sends one 1-token request per key and reads the response headers. Note the
 depleting shared bucket — see the concurrency note (§) in CONFIGURATION.md — so
 only the `x-ratelimit-api_key-*` values below bound how many runs fit.
 
+**A raised limit can take ~15 minutes to propagate.** A key still reporting its
+old ceiling right after a change is probably stale, not unchanged — re-run before
+concluding anything or re-planning concurrency around it.
+
 Prints no secret material: keys are shown as a short fingerprint only.
 """
 
@@ -106,8 +110,12 @@ def main() -> int:
     print(f"Combined ceiling across these keys: ~{total} concurrent runs.")
     print("Distinct keys only help if each run is launched with its own "
           "--env-file; runs sharing a file share its bucket.")
-    print("Local capacity is a separate ceiling (~8-10 runs on a 14-core box), "
-          "as is Modal sandbox concurrency (runs x max_concurrency).")
+    print("A raised limit can take ~15 min to propagate; an unexpectedly low "
+          "reading right after a change is probably stale.")
+    print("Local capacity is a separate ceiling (measured ~15-20 runs on a "
+          "14-core box: 4 runs sat at load 3.11, since the work is in Modal and "
+          "the local gateway is I/O-bound), as is Modal sandbox concurrency "
+          "(runs x max_concurrency).")
     return 0
 
 
