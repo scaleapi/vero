@@ -407,6 +407,12 @@ def test_build_config_requires_pins_and_valid_partition_references(tmp_path):
         _config(tmp_path / "unknown", selection_partition="missing")
     with pytest.raises(ValidationError, match="controlled flags"):
         _config(tmp_path / "flags", extra_harbor_args=["--jobs-dir=/forged"])
+    with pytest.raises(ValidationError, match="controlled flags"):
+        _config(tmp_path / "outer-flags", optimizer_harbor_args=["-a", "forged"])
+    assert _config(
+        tmp_path / "outer-ek",
+        optimizer_harbor_args=["--ek", "modal_vm_runtime=true"],
+    ).optimizer_harbor_args == ["--ek", "modal_vm_runtime=true"]
     with pytest.raises(ValidationError, match="explicit version"):
         _config(tmp_path / "source", task_source="org/unversioned")
 

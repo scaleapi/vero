@@ -56,6 +56,12 @@ model: fireworks_ai/deepseek-v4-flash
 environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+# NOTE: tau3's optimizer trial reliably dies at ~38-40 min with grpclib
+# StreamTerminatedError ("Connection lost"). Four live experiments (default
+# DinD, --ek modal_vm_runtime=true, --ek modal_sandbox_v2=true, and
+# --max-retries 1) all failed identically, so no `optimizer_harbor_args` value
+# is set here: none of them is a fix, and a config value that claims to be one
+# is worse than nothing. Tracked upstream; see the PR that added this field.
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
