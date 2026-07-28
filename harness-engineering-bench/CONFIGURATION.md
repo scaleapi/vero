@@ -57,7 +57,16 @@ benchmark can be checked against the others at a glance.
 - **Target model**: `fireworks_ai/deepseek-v4-flash` by default (see the
   per-benchmark table — a benchmark may pin a different evaluated model), fixed
   per run by the gateway's evaluation scope (the `evaluation.allowed_models`
-  allow-list, so a candidate cannot swap it). The optimizer uses a separate
+  allow-list). That confines the target to its evaluated model in the normal
+  case, but it is **not a hard guarantee**: both scopes share one gateway host
+  split only by URL path, and the optimizer both holds the producer token and
+  authors the candidate, so an adversarial optimizer could smuggle that token
+  into the candidate and reach `/scopes/producer` from the eval sandbox. Closing
+  it needs per-role egress isolation; see the note in
+  `vero/src/vero/gateway/inference.py`. On the three benchmarks that set
+  `task_services_use_upstream`, the raw upstream credential is in the candidate
+  harness's environment as well — see the isolation note below. The optimizer
+  uses a separate
   producer scope bound to `${optimizer_model:-openai/gpt-5.4}`. The gateway
   matches the requested model against the allow-list as an exact string, so the
   `-m` the outer trial is launched with has to be spelled the same way as this
@@ -223,13 +232,18 @@ about two minutes and has caught this on every harness added so far.
 - **Gateway token caps are a runaway backstop, not the spend control** (¶). The
   work is already bounded by the agent case budget and by the fixed held-out set,
   so a cap that bites first only aborts already-authorized work. Each is sized at
-  ~3M tokens per case-run: ~2.3× the worst measured cost of 1.33M/case-run for an
+  4.4–6.8M tokens per case-run depending on the benchmark (derive it from each
+build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for an
   *optimized* officeqa candidate, itself ~3× its own baseline, because more turns
   and bigger contexts are exactly what the optimizer buys. ~90% of these tokens
   are cache reads, which count at full weight against `max_tokens`.
 - **`finalization` is a reserved gateway scope and every benchmark now sets its
-  budget explicitly.** Left unset it silently inherits `evaluation`'s numbers, and
-  a search-phase overspend then starves held-out scoring: officeqa's first full
+  budget explicitly.** Left unset it inherits `evaluation`'s *limits* as a
+  separate pool of the same size — the compiler mints a finalization token
+  unconditionally and the gateway keys each ledger by scope name, so search spend
+  cannot deplete it. The risk of omitting it is a held-out pass funded at
+  search-sized numbers, not starvation. (The starvation incident below predates
+  the reserved scope.) officeqa's first full
   run exhausted the shared 100M mid-finalize and reported `reward 0.0` with
   `inference_budget_exhausted`. An optimizer exhausting its *own* evaluation
   budget is a legitimate result; trusted finalization failing on budget is an
@@ -292,8 +306,12 @@ about two minutes and has caught this on every harness added so far.
 
 ◆ Held-out baseline of the seed harness on the **test** partition, mean over
 K=3 independent rounds; ± is the stdev across the three round means. Pinned
-into each target's `baseline_reward` with `score_baseline: false`, so runs use
-this number instead of re-scoring the seed every finalization. swe-atlas's
+into each target's `baseline_reward` with `score_baseline: false`, which avoids
+re-scoring the seed every finalization. **Note the pin is currently inert at
+runtime:** the verifier reads `target.baseline_reward` only inside its
+`score_baseline` branch, so with that false a run's `finalize.json` carries an
+empty `baseline_rewards` and the improvement delta has to be computed offline
+against this table. swe-atlas's
 `reward` is a binary pass/fail over a rubric and sits near the floor (0.097);
 the continuous `agg_score` (0.632, sd 0.011) is the far more informative
 signal — a candidate `reward_key` switch, pending the verifier emitting
@@ -383,7 +401,9 @@ sandbox capacity is a separate ceiling. Target models still differ per benchmark
 side benefit, but it is not the constraint. The single `502 upstream_error` seen
 so far is 1 in 4 750 requests at 24 slots.
 
-`max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
+`max_concurrency` is concurrent *trials* per evaluation — it becomes harbor's
+`-n`, and with `n_attempts: 3` on the test target 24 trials is 8 cases in flight.
+Raised 8 → 24 across the
 board. It is the throughput lever: finalize wall time is
 `ceil(trials / max_concurrency) × mean case wall`, so officeqa's ~4.1 h finalize
 becomes ~1.4 h. Headroom is measured, not assumed — officeqa run #2 sustained

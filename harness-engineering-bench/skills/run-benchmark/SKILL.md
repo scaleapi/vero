@@ -26,8 +26,19 @@ agent that edits only `target/`, commits candidates, and scores them via the
 `evals` CLI). When the optimizer finishes, the trusted verifier scores the
 selected candidate on the held-out `test` partition and writes the final reward.
 
-The optimizer never sees the real upstream key — it gets a scoped producer token
-pointed at the gateway. Keep it that way.
+The optimizer itself gets a scoped producer token pointed at the gateway, not the
+real upstream key. Keep it that way.
+
+Two caveats, because this is easy to over-trust. Benchmarks that run an
+in-container judge or user-simulator set `task_services_use_upstream`, which puts
+the **raw upstream credential** into the evaluation sub-run; those benchmarks also
+run the candidate harness without a separate user, so optimizer-authored code
+shares that environment. And the per-scope model allow-list confines the target
+model in the normal case but is not a hard guarantee — the optimizer holds the
+producer token and writes the candidate. Both are known, deferred, and recorded
+in the affected `build.yaml` files and in `vero/src/vero/gateway/inference.py`.
+Treat the boundary as "an honest optimizer cannot reach the key by accident",
+not "an adversarial one cannot reach it at all".
 
 ## Prerequisites (confirm these exist first)
 
