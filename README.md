@@ -1,5 +1,7 @@
 # VeRO: a harness for agents to optimize programs, text, and agents
-> The code for the original VeRO paper is archived in [`legacy/`](legacy/).
+> **Looking for the code from the VeRO paper?** See
+> [Paper reproduction](#paper-reproduction) — reproduce from the `paper-v1`
+> tag, or read the same code in place under [`legacy/`](legacy/).
 
 [![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -37,6 +39,7 @@ includes a no-bind-mount `DockerSandbox` example.
 | [`vero/`](vero/) | The `scale-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
 | [`vero-tasks/`](vero-tasks/) | Narrow Python task types and schema-v1 evaluation runner |
 | [`harness-engineering-bench/`](harness-engineering-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
+| [`legacy/`](legacy/) | The pre-v0.5 tree, i.e. the original VeRO paper code — reference only, not used by the current system |
 
 Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/),
 try the [26-circle packing benchmark](vero/examples/circle-packing/), or read the
@@ -61,16 +64,27 @@ VeRO was introduced in [*VeRO: A Harness for Agents to Optimize
 Agents*](https://arxiv.org/abs/2602.22480), accepted at ICML 2026. The current
 library generalizes that version/evaluate/select loop from agents to programs.
 
-The exact paper implementation is frozen separately from the v0.5 redesign:
+The paper-era code is available two ways, and they hold the same code:
+
+**To reproduce the paper, use the frozen ref.** It is the repository exactly as
+it stood at publication, with the original paths intact:
 
 ```bash
-git checkout paper-v1
+git checkout paper-v1          # tag; the paper/v1 branch points at the same commit
 ```
 
-Use the `paper/v1` branch or `paper-v1` tag for reproduction. Development of
-the generic program optimizer continues on the `v0.5` branch. The frozen ref
-also preserves the paper-era `vero-agents` and `vero-benchmarking` directories;
-their Harbor-native replacement on `v0.5` is `harness-engineering-bench`.
+**To read that code alongside the current system, use [`legacy/`](legacy/).** The
+v0.5 redesign relocated the paper-era tree into that directory rather than
+deleting it, so it sits in this branch next to the code that replaced it. Both
+the frozen ref and `legacy/` include the paper-era `vero-agents` and
+`vero-benchmarking` directories; their Harbor-native replacement is
+[`harness-engineering-bench/`](harness-engineering-bench/).
+
+Prefer the frozen ref for reproduction, since it is the state that was actually
+published. Either way, note that both packages are named `scale-vero` and both
+import as `vero` (0.4.7 in `legacy/vero`, 0.5.0 in `vero/`), so **they cannot be
+installed into the same environment** — give the legacy package its own
+virtualenv. Development of the current system continues on `main`.
 
 ## Citation
 
