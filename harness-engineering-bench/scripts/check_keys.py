@@ -101,7 +101,17 @@ def main() -> int:
         by_tpm = tpm // RUN_TPM if tpm else 0
         by_rpm = rpm // RUN_RPM if rpm else 0
         fits = min(x for x in (by_tpm, by_rpm) if x) if (by_tpm or by_rpm) else 0
-        bound = "TPM-bound" if by_tpm <= by_rpm else "RPM-bound"
+        # Name the axis that actually produced `fits`. A missing header reads as
+        # 0, so comparing the two directly would report whichever axis is absent
+        # as the binding one and send someone to raise the wrong quota.
+        if by_tpm and by_rpm:
+            bound = "TPM-bound" if by_tpm <= by_rpm else "RPM-bound"
+        elif by_tpm:
+            bound = "TPM-bound (no RPM limit reported)"
+        elif by_rpm:
+            bound = "RPM-bound (no TPM limit reported)"
+        else:
+            bound = "no rate-limit headers reported"
         total += fits
         print(f"{path.name:28s} {fingerprint:10s} {tpm:12,} {rpm:10,} {fits:9d}  {bound}")
 
