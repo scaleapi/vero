@@ -48,7 +48,7 @@ def log(message: str) -> None:
     print(f"[rescore] {message}", flush=True)
 
 
-def load_build(benchmark: str) -> dict:
+def load_build(benchmark: str) -> tuple[dict, Path]:
     import yaml  # provided by the vero environment
 
     path = BENCH_ROOT / benchmark / "baseline" / "build.yaml"

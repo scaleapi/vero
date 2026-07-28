@@ -20,6 +20,45 @@ def test_classify_signal_recognizes_infrastructure_categories():
     )
 
 
+def test_classify_signal_recognizes_an_unprovisioned_upstream_model():
+    """A configured-but-not-deployed model must not be blamed on the candidate.
+
+    Left unclassified this is the worst silent failure in the taxonomy: every
+    call 404s, the agent writes no answer, and each case is recorded as an
+    informative task failure -- the harness scoring the candidate down for a
+    model that does not exist.
+    """
+    for signal in (
+        "DeploymentNotFound",
+        "model_not_found",
+        "The API deployment for this resource does not exist",
+        "openai.NotFoundError: model_not_found",
+    ):
+        assert (
+            classify_signal(signal) is ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+        ), signal
+
+    # Deliberately narrow: a bare "does not exist" is a container/file problem,
+    # not a missing model, and matching it here would swallow real infra errors.
+    assert (
+        classify_signal("loading container: file does not exist")
+        is not ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE
+    )
+
+
+def test_unprovisioned_model_policy_is_terminating_and_not_a_sample():
+    """It is a permanent misconfiguration, so it stops the run and scores nothing."""
+    p = policy(ErrorCategory.UPSTREAM_MODEL_UNAVAILABLE)
+    assert p.retryable is False  # every remaining case fails identically
+    assert p.terminating is True
+    assert p.is_informative_sample is False  # never scored as a candidate failure
+    # Unlike auth, still counts toward invalidity: if the terminating path is
+    # ever bypassed, the aggregate must come out invalid rather than averaging
+    # a shrinking set of survivors.
+    assert p.counts_toward_invalidity is True
+    assert p.diagnostic_code == "upstream_model_unavailable"
+
+
 def test_classify_signal_leaves_task_failures_unclassified():
     # The benign "produced no answer" marker and a candidate's own bug are not
     # infrastructure — the case-level classifier turns both into task failures.
