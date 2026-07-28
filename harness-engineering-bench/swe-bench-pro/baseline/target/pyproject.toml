@@ -1,0 +1,31 @@
+[project]
+name = "swebench-pro-agent"
+version = "0.1.0"
+description = "Editable Harbor-native SWE-bench-Pro baseline for VeRO"
+# Floor at 3.12 (harbor 0.20.0 requires it; ">=3.11" made the package's own
+# `uv run pytest` unresolvable). Cap below 3.14: an uncapped range lets uv
+# resolve to 3.14, whose litellm/pyo3 build fails.
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "harbor==0.20.0",
+    "openai==2.46.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swebench_pro_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# NOTE: no uv.lock is committed yet. Run `uv lock` in this directory when
+# finalizing the baseline so the compiled task pins an exact resolution.

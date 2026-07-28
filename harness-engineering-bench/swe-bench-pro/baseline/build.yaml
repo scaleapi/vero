@@ -1,0 +1,108 @@
+name: vero/optimize-swe-bench-pro-baseline
+description: >-
+  Improve a code-editing SWE-bench-Pro agent while preserving the Harbor agent
+  interface. The target must edit a checked-out repository so the task's hidden
+  test suite passes; the task-source verifier runs the suite for the reward.
+agent_repo: target
+# SWE-bench-Pro ships as the `swebenchpro` dataset in the DEFAULT Harbor registry
+# (731 instances), not as an `<org>/<name>@sha256:<digest>` package like
+# swe-atlas-qna or tau3. Its tasks resolve to git-backed task ids under
+# laude-institute/harbor-datasets at commit c8e8f3fac7097accaacf261d74c3d6f441de45b1,
+# so the version pin is the registry version rather than a content digest.
+task_source: swebenchpro@1.0
+task_manifest: ../partitions/manifest.json
+agent_import_path: swebench_pro_agent.agent:SweBenchProAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    # false, unlike the sibling benchmarks: VeRO materializes case resources via
+    # PackageDatasetClient, which only accepts `<org>/<name>` package refs. A
+    # registry dataset such as swebenchpro@1.0 cannot be exposed that way.
+    expose_case_resources: false
+    total_runs: 100
+    total_cases: 146
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 292
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    failure_value: 0.0
+    max_attempts: 1
+
+evaluation_set_name: swe-bench-pro
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: true
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: gpt-4o
+environment_name: ${inner_env:-modal}
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Timeouts are bumped well above the GAIA baseline: SWE-bench-Pro tasks build a
+# real repository and run its (often slow) test suite, so both the per-case and
+# the verifier budgets need substantially more headroom than a short-answer task.
+# task_agent_timeout_seconds mirrors the task package's own `[agent] timeout_sec
+# = 3000`; case_timeout_seconds is the tighter budget VeRO enforces on top, so
+# the baseline runner's --agent-timeout-multiplier is 1800/3000 = 0.6.
+timeout_seconds: 28800
+case_timeout_seconds: 1800
+task_agent_timeout_seconds: 3000
+max_concurrency: 8
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 28800
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
+
+# candidate harness runs as an unprivileged uid, unable to read held-out state.
+harness_user: harness
+
+wandb:
+  project: vero-swe-bench-pro
+  group: swe-bench-pro
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    # Both prefixed and bare forms: the gateway model match is prefix-sensitive.
+    allowed_models: ["${optimizer_model:-gpt-5.3-codex}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-4o]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
