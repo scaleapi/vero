@@ -112,10 +112,14 @@ def main() -> int:
           "--env-file; runs sharing a file share its bucket.")
     print("A raised limit can take ~15 min to propagate; an unexpectedly low "
           "reading right after a change is probably stale.")
-    print("Local capacity is a separate ceiling (measured ~15-20 runs on a "
-          "14-core box: 4 runs sat at load 3.11, since the work is in Modal and "
-          "the local gateway is I/O-bound), as is Modal sandbox concurrency "
-          "(runs x max_concurrency).")
+    print("Local capacity is a separate and usually tighter ceiling, and "
+          "container memory binds well before CPU does: each run is 3 "
+          "containers, and a Docker VM that looks idle on load average will "
+          "still OOM-kill a run once their combined footprint exceeds it. "
+          "Measure your own VM's limit rather than sizing off core count; the "
+          "OOM surfaces misleadingly as a rate-limit error. Put the outer "
+          "trial on Modal to get past it. Modal sandbox concurrency (runs x "
+          "max_concurrency) is a third ceiling.")
     return 0
 
 
