@@ -781,8 +781,15 @@ def create_inference_gateway_app(
         try:
             await store.reserve(scope_name, attribution)
         except InferenceBudgetExceeded as error:
-            await log_request(status=429, error="budget_exhausted")
-            return _provider_error(429, str(error), "budget_exhausted")
+            # 402, not 429. Budget exhaustion is terminal -- no amount of waiting
+            # restores the quota -- but 429 means "slow down and try again", and
+            # every layer above honours that: EvaluationLimits.retry_status_codes
+            # defaults to [429, 503, 529], and target-agent SDKs retry it too.
+            # officeqa run #2 reissued 3672 doomed requests after exhausting the
+            # finalization scope, burning verifier wall-clock to no purpose.
+            # 402 is in no retry list, so the caller fails fast with the reason.
+            await log_request(status=402, error="budget_exhausted")
+            return _provider_error(402, str(error), "budget_exhausted")
 
         headers = {
             name: value
