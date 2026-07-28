@@ -363,14 +363,23 @@ class EvaluationEngine:
             ).load()
             await asyncio.shield(self._record(cancelled))
             if charged:
-                await asyncio.shield(
-                    self.budget_ledger.refund(
-                        backend_id,
-                        request.evaluation_set,
-                        cost,
-                        principal,
+                try:
+                    await asyncio.shield(
+                        self.budget_ledger.refund(
+                            backend_id,
+                            request.evaluation_set,
+                            cost,
+                            principal,
+                        )
                     )
-                )
+                except Exception as refund_error:
+                    # The shield covers cancellation, not a refund that fails on
+                    # its own: an OSError from the ledger's write propagates here
+                    # in place of error, so the caller never sees the original
+                    # signal while the reservation stays charged -- the leak these
+                    # handlers exist to prevent. Chain it and re-raise the
+                    # original, as BudgetStore.refund already does.
+                    raise error from refund_error
             raise
         except EvaluationExecutionError as error:
             failure = EvaluationStore(
@@ -381,16 +390,25 @@ class EvaluationEngine:
             # refund and leak the reservation's budget.
             await asyncio.shield(self._record(failure))
             if charged:
-                await asyncio.shield(
-                    self.budget_ledger.refund(
-                        backend_id,
-                        request.evaluation_set,
-                        cost,
-                        principal,
+                try:
+                    await asyncio.shield(
+                        self.budget_ledger.refund(
+                            backend_id,
+                            request.evaluation_set,
+                            cost,
+                            principal,
+                        )
                     )
-                )
+                except Exception as refund_error:
+                    # The shield covers cancellation, not a refund that fails on
+                    # its own: an OSError from the ledger's write propagates here
+                    # in place of error, so the caller never sees the original
+                    # signal while the reservation stays charged -- the leak these
+                    # handlers exist to prevent. Chain it and re-raise the
+                    # original, as BudgetStore.refund already does.
+                    raise error from refund_error
             raise
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as cancellation:
             # Last line of defence for the reservation. The evaluator's own
             # handlers convert cancellation and failure into the two typed errors
             # above, but each of them has to await a persist before it can raise,
@@ -403,14 +421,23 @@ class EvaluationEngine:
             # evaluation id, so there is no record to load. The evaluator already
             # persisted one on its shielded paths.
             if charged:
-                await asyncio.shield(
-                    self.budget_ledger.refund(
-                        backend_id,
-                        request.evaluation_set,
-                        cost,
-                        principal,
+                try:
+                    await asyncio.shield(
+                        self.budget_ledger.refund(
+                            backend_id,
+                            request.evaluation_set,
+                            cost,
+                            principal,
+                        )
                     )
-                )
+                except Exception as refund_error:
+                    # The shield covers cancellation, not a refund that fails on
+                    # its own: an OSError from the ledger's write propagates here
+                    # in place of cancellation, so the caller never sees the original
+                    # signal while the reservation stays charged -- the leak these
+                    # handlers exist to prevent. Chain it and re-raise the
+                    # original, as BudgetStore.refund already does.
+                    raise cancellation from refund_error
             raise
         # Shielded for the same reason as the two handlers above, and one more:
         # the budget was charged for an evaluation that has now actually run, so
