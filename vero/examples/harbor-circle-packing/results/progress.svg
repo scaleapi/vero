@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="360" viewBox="0 0 860 360">
+<style>
+ text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+ .h { font-size: 14px; font-weight: 600; fill: #1a1a24; }
+ .l { font-size: 11px; fill: #6a6a78; }
+ .mid { text-anchor: middle; } .end { text-anchor: end; }
+ .ridge { fill: none; stroke: #2f6feb; stroke-width: 2; }
+ .pt { fill: #2f6feb; } .bad { fill: #d64545; }
+ .ref { stroke: #8a8a99; stroke-width: 1; stroke-dasharray: 5 4; }
+ .base { stroke: #d64545; stroke-width: 1; stroke-dasharray: 3 3; }
+ .disc { fill: #2f6feb; fill-opacity: 0.18; stroke: #2f6feb; stroke-width: 1; }
+</style>
+<rect width="860" height="360" fill="#ffffff"/>
+<rect x="52" y="52" width="336" height="312" fill="#fbfbfd" stroke="#d6d6de"/>
+<text x="52" y="38" class="h">Search progress</text>
+<line x1="52" y1="70.1" x2="388" y2="70.1" class="ref"/>
+<text x="58" y="65.1" class="l">published best 2.635</text>
+<polyline points="62.0,357.4 107.1,87.4 152.3,87.4 197.4,80.1 242.6,80.1 287.7,80.1 332.9,80.1 378.0,80.1" class="ridge"/>
+<circle cx="62.0" cy="357.4" r="3" class="pt"/>
+<circle cx="107.1" cy="87.4" r="3" class="bad"/>
+<circle cx="152.3" cy="87.4" r="3" class="pt"/>
+<circle cx="197.4" cy="80.1" r="3" class="pt"/>
+<circle cx="242.6" cy="80.1" r="3" class="pt"/>
+<circle cx="287.7" cy="80.1" r="3" class="pt"/>
+<circle cx="332.9" cy="80.1" r="3" class="pt"/>
+<circle cx="378.0" cy="80.1" r="3" class="pt"/>
+<text x="220" y="390" class="l mid">development evaluation (1–8)</text>
+<text x="44" y="56" class="l end">2.74</text><text x="44" y="364" class="l end">0.92</text>
+<text x="480" y="38" class="h">Best packing found</text>
+<rect x="480" y="52" width="312" height="312" fill="#fbfbfd" stroke="#d6d6de"/>
+<circle cx="722.80" cy="336.24" r="27.76" class="disc"/>
+<circle cx="654.13" cy="166.04" r="24.94" class="disc"/>
+<circle cx="564.24" cy="150.80" r="25.41" class="disc"/>
+<circle cx="559.95" cy="267.53" r="35.31" class="disc"/>
+<circle cx="703.28" cy="172.11" r="24.58" class="disc"/>
+<circle cx="614.52" cy="128.66" r="29.53" class="disc"/>
+<circle cx="747.44" cy="222.45" r="42.06" class="disc"/>
+<circle cx="699.70" cy="280.20" r="32.85" class="disc"/>
+<circle cx="630.95" cy="275.07" r="36.09" class="disc"/>
+<circle cx="563.03" cy="88.05" r="36.05" class="disc"/>
+<circle cx="620.47" cy="75.19" r="22.82" class="disc"/>
+<circle cx="761.13" cy="293.13" r="29.92" class="disc"/>
+<circle cx="517.43" cy="326.57" r="37.43" class="disc"/>
+<circle cx="664.26" cy="333.14" r="30.86" class="disc"/>
+<circle cx="782.56" cy="260.12" r="9.44" class="disc"/>
+<circle cx="588.42" cy="330.35" r="33.65" class="disc"/>
+<circle cx="601.70" cy="204.64" r="40.17" class="disc"/>
+<circle cx="511.22" cy="130.94" r="31.22" class="disc"/>
+<circle cx="672.76" cy="220.52" r="32.64" class="disc"/>
+<circle cx="771.04" cy="343.04" r="20.96" class="disc"/>
+<circle cx="502.42" cy="262.76" r="22.42" class="disc"/>
+<circle cx="762.50" cy="81.50" r="29.50" class="disc"/>
+<circle cx="687.01" cy="100.31" r="48.31" class="disc"/>
+<circle cx="756.89" cy="145.86" r="35.11" class="disc"/>
+<circle cx="504.09" cy="76.09" r="24.09" class="disc"/>
+<circle cx="520.78" cy="202.30" r="40.78" class="disc"/>
+<text x="636" y="390" class="l mid">sum of radii 2.5766</text>
+</svg>

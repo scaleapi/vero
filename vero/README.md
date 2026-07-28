@@ -17,12 +17,25 @@ That is the right default for optimizing agents and for any untrusted or
 reproducibility-critical run. Lighter local backends exist for trusted work that
 does not need containment.
 
-```mermaid
-flowchart LR
-    S["Strategy<br/>proposes ideas"] --> P["Producers edit<br/>isolated candidate<br/>workspaces"]
-    P --> E["Evaluation backend<br/>scores each version"]
-    E --> Sel["Selection keeps the<br/>best feasible candidate"]
-    Sel -->|"next round"| S
+```
+  ┌─────────────────────────┐   submit candidate    ┌─────────────────────────┐
+  │  candidate production   ├──────────────────────►│  evaluation service     │
+  │                         │                       │                         │
+  │  coding agent, command, │◄──────────────────────┤  owns cases + scoring   │
+  │  or custom strategy;    │  score + diagnostics  │                         │
+  │  edits its own Git      │                       │  development: may ask   │
+  │  worktree per candidate │                       │  validation:  aggregate │
+  └───────────┬─────────────┘                       │  test:        withheld  │
+              │ commit                              └───────────┬─────────────┘
+              ▼                                                 │ report
+  ┌─────────────────────────┐    next round     ┌───────────────▼─────────────┐
+  │  candidate history:     │◄──────────────────┤  selection: keep the best   │
+  │  every version kept,    │                   │  feasible candidate         │
+  │  each one re-selectable │                   └─────────────────────────────┘
+  └─────────────────────────┘
+
+  Every model call on both sides goes through the inference gateway, which holds
+  the provider key and meters spend in tokens against a per-scope budget.
 ```
 
 ## Install
@@ -37,10 +50,10 @@ uv run vero --help
 
 Python 3.11–3.13. 3.14 is excluded because litellm does not build there.
 
-## Quickstart
+## Quickstart — no credentials needed
 
-The checked-in C matrix-multiplication example is deterministic and needs **no
-model credentials**. Its editable target contains only C; a trusted external
+The C matrix-multiplication example is deterministic and runs with **no model
+credentials at all**. Its editable target contains only C; a trusted external
 harness compiles it, checks correctness, and measures latency.
 
 ```bash
@@ -57,39 +70,55 @@ VeRO evaluates the baseline, gives an isolated worktree to the configured
 producer, evaluates its commit, selects the faster feasible result, and leaves
 the original target untouched.
 
-For a coding-agent run with real search, use
-[`examples/circle-packing`](examples/circle-packing/): it asks an agent to improve
-a 26-circle packing, exposes exact geometric diagnostics after each authorized
-evaluation, and re-scores the selected candidate through a hidden final
-evaluation.
+## Examples
 
-## Optimizing an agent (the recommended path)
+Each is a complete, checked-in target plus harness — clone-and-run, not a sketch.
 
-Compile a build file into a contained task and run a coding agent against it,
-with secrets kept off the command line:
+| Example | Optimizes | Needs |
+| --- | --- | --- |
+| [`c-matmul`](examples/c-matmul/) | a C matmul kernel, for latency under a correctness constraint | **nothing** — deterministic, no credentials |
+| [`circle-packing`](examples/circle-packing/) | a packing algorithm: 26 circles in a unit square, maximizing the sum of radii | a model, via `LITELLM_BASE_URL`/`LITELLM_API_KEY` or `OPENAI_BASE_URL`/`OPENAI_API_KEY` |
+| [`harbor-circle-packing`](examples/harbor-circle-packing/) | the same target, but with the agent contained and scored by a sidecar | Docker + credentials |
+| [`harness-conformance`](examples/harness-conformance/) | nothing — it checks the *stack*: whether a new agent or model can actually drive a run | credentials for the pair under test |
+
+Run `harness-conformance` before spending a real benchmark on a new harness or
+model. Every harness addresses its provider differently, and it costs minutes to
+find that out instead of hours.
+
+### A real run, end to end
+
+`harbor-circle-packing` runs a coding agent in a container, scores each candidate
+through a trusted sidecar, and finalizes on a `test` partition the agent never
+touches. One run with `mini-swe-agent` and `claude-sonnet-5`:
+
+![circle-packing search progress](examples/harbor-circle-packing/results/progress.svg)
+
+**0.9598 → 2.5766 on the held-out partition**, `shipped: true`, in about an hour.
+The best published result for 26 circles is ~2.635. The agent wrote a 15 KB
+Lubachevsky–Stillinger-style growth algorithm with LP refinement — no hardcoded
+coordinates.
+
+Two details worth reading off the left panel. The red point is an **infeasible**
+candidate: it scored 2.5341 but overlapped, the harness rejected it on the
+`valid == 1` constraint, and the agent's next commit was "Add safety margin to
+guarantee strict feasibility". And the last five evaluations are flat — it found
+the idea early, then polished.
+
+**The cautionary half.** The same task run with `codex` and no prohibition on
+hardcoding scored **2.6360 in eight minutes** — higher than the honest run — by
+copying the published Packomania table into 26 coordinate literals. It satisfies
+the objective exactly and held-out scoring cannot catch it, because every
+partition here holds one deterministic case, so a memorized answer transfers
+perfectly. The instruction now forbids it. The general lesson is the one this
+suite is built around: a fixed single-instance objective measures lookup and
+problem-solving identically, and only varying the instance across partitions
+separates them.
+
+Regenerate the figure from any session directory:
 
 ```bash
-uv run vero harbor run \
-  --config build.yaml \
-  --agent claude-code --model claude-sonnet-5 \
-  --env-file secrets.env
+python examples/circle-packing/make_figure.py <session-dir> -o results/progress.svg
 ```
-
-Three processes come up, and the separation is the point:
-
-| | holds | never sees |
-| --- | --- | --- |
-| **Optimizer agent** | the editable target, an `evals` CLI | provider credentials; the test partition; other partitions' cases |
-| **Evaluation sidecar** | the cases, scoring, budgets, final selection | — |
-| **Inference gateway** | the real provider key | — |
-
-The agent gets a scoped token pointed at the gateway, which enforces a
-per-scope model allow-list and token budget. It cannot reach a provider directly,
-and it cannot score itself against held-out data.
-
-**→ [docs/guide.md](docs/guide.md) covers this end to end**: the build file, the
-gateway, how disclosure and budgets are enforced, and what artifacts a run
-leaves behind.
 
 ## Which backend
 

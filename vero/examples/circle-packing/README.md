@@ -31,6 +31,26 @@ vero run --config vero.toml
 `vero evaluate` is credential-free and records the baseline score. `vero run`
 uses the built-in VeRO coding agent with the configured LiteLLM model identifier
 and permits up to 30 agent-requested development evaluations in one proposal.
+
+Point the optimizer at your provider with either pair, `LITELLM_*` taking
+precedence:
+
+```bash
+export LITELLM_BASE_URL=...   # or OPENAI_BASE_URL — an OpenAI-compatible /v1
+export LITELLM_API_KEY=...    # or OPENAI_API_KEY
+```
+
+If a base URL is wrong or carries an unexpected route, the failure arrives as a
+provider `403` that reads like an auth error rather than a misrouted request.
+
+**Editing `vero.toml` between `vero evaluate` and `vero run` needs a fresh
+session.** A session records the protocol it was created with, and the optimizer
+model is part of the producer's identity, so changing it invalidates the manifest
+`evaluate` wrote. Either decide the model first, or clear the session:
+
+```bash
+vero session clear .vero/session --yes
+```
 Change `optimizer.model` to any model available through your provider. The best
 nominated candidate is then re-evaluated through the hidden final evaluation.
 Candidate versions remain in the session candidate repository, while evaluation

@@ -11,16 +11,28 @@ VeRO gives a coding agent something to edit, an evaluation boundary, and durable
 memory of every candidate it tried. The target is anything you can put under Git
 and score — a **program** (a single function up to a whole codebase), **text**
 (a prompt, spec, or config), or an **agent** (its scaffold, tools, and prompts).
-Agents are programs, but not everyone reads "program" that way, so VeRO names
-them explicitly: it was introduced to optimize agents and generalizes the same
-version / evaluate / select loop to any Git-versioned artifact.
+VeRO was introduced to optimize agents, and the same version / evaluate / select
+loop applies to any of these.
 
-```mermaid
-flowchart LR
-    S["Strategy<br/>proposes ideas"] --> P["Candidate producers<br/>edit isolated workspaces"]
-    P --> E["Evaluation backends<br/>score versioned reports"]
-    E --> Sel["Selection keeps the<br/>best feasible candidate"]
-    Sel -->|"next round"| S
+```
+  ┌─────────────────────────┐   submit candidate    ┌─────────────────────────┐
+  │  candidate production   ├──────────────────────►│  evaluation service     │
+  │                         │                       │                         │
+  │  coding agent, command, │◄──────────────────────┤  owns cases + scoring   │
+  │  or custom strategy;    │  score + diagnostics  │                         │
+  │  edits its own Git      │                       │  development: may ask   │
+  │  worktree per candidate │                       │  validation:  aggregate │
+  └───────────┬─────────────┘                       │  test:        withheld  │
+              │ commit                              └───────────┬─────────────┘
+              ▼                                                 │ report
+  ┌─────────────────────────┐    next round     ┌───────────────▼─────────────┐
+  │  candidate history:     │◄──────────────────┤  selection: keep the best   │
+  │  every version kept,    │                   │  feasible candidate         │
+  │  each one re-selectable │                   └─────────────────────────────┘
+  └─────────────────────────┘
+
+  Every model call on both sides goes through the inference gateway, which holds
+  the provider key and meters spend in tokens against a per-scope budget.
 ```
 
 The target and evaluator do not need to be Python. External evaluators and

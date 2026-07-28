@@ -56,6 +56,34 @@ class FakeRunResult:
         ]
 
 
+def test_agent_credentials_fall_back_to_the_openai_pair(monkeypatch):
+    """The native optimizer must work with the OPENAI_* env the rest of vero uses.
+
+    It read only LITELLM_*, so an environment holding just OPENAI_BASE_URL left
+    base_url unset and litellm's own resolution posted to a route the proxy does
+    not serve -- answering 403 "This route is not publicly accessible", which
+    reads like an auth failure rather than a misrouted request.
+    """
+    from vero.agents.vero import _default_oai_agent
+
+    for name in ("LITELLM_API_KEY", "LITELLM_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.example/v1/")
+    agent = _default_oai_agent(model="openai/some-model")
+    # trailing slash stripped: litellm appends its own route
+    assert agent.model.base_url == "https://proxy.example/v1"
+    assert agent.model.api_key == "openai-key"
+
+    # LITELLM_* still wins where both are present.
+    monkeypatch.setenv("LITELLM_API_KEY", "litellm-key")
+    monkeypatch.setenv("LITELLM_BASE_URL", "https://gateway.example/v1")
+    agent = _default_oai_agent(model="openai/some-model")
+    assert agent.model.base_url == "https://gateway.example/v1"
+    assert agent.model.api_key == "litellm-key"
+
+
 def test_default_tools_use_canonical_evaluation_capability():
     names = {type(tool).__name__ for tool in default_tool_sets()}
 

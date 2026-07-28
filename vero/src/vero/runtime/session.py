@@ -271,6 +271,16 @@ class OptimizationSession:
             config_digest=hashlib.sha256(encoded).hexdigest(),
         )
 
+    @staticmethod
+    def _differing_fields(persisted: BaseModel, current: BaseModel) -> list[str]:
+        """Name the top-level fields that differ, to make a mismatch diagnosable."""
+
+        left = persisted.model_dump(mode="json")
+        right = current.model_dump(mode="json")
+        return sorted(
+            name for name in set(left) | set(right) if left.get(name) != right.get(name)
+        ) or ["(no top-level field differs; a nested value does)"]
+
     def _run_spec(self) -> OptimizationRunSpec:
         if self.run_spec is not None:
             return self.run_spec
@@ -388,7 +398,20 @@ class OptimizationSession:
         if manifest.objective != self.optimizer.objective:
             raise ValueError("session objective does not match the persisted manifest")
         if manifest.run != self._run_spec():
-            raise ValueError("session run protocol does not match the persisted manifest")
+            # A session directory is bound to the protocol it was created with,
+            # on purpose: reusing it under another would let its recorded history
+            # misdescribe what produced the candidates. The usual cause is an
+            # edited config -- changing `optimizer.model` between two commands is
+            # enough, since the model is part of the producer's identity -- and
+            # the bare message named neither the field nor the remedy.
+            differing = ", ".join(self._differing_fields(manifest.run, self._run_spec()))
+            raise ValueError(
+                "session run protocol does not match the persisted manifest"
+                f" (differs in: {differing}). A session records the protocol it was"
+                " created with, so a changed strategy, producer, model, or proposal"
+                " count needs a fresh session directory -- or discard the existing"
+                f" state with `vero session clear {self.session_dir} --yes`."
+            )
         if manifest.parameters != self.optimizer.parameters:
             raise ValueError(
                 "session evaluation parameters do not match the persisted manifest"

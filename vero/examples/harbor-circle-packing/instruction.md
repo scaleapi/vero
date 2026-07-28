@@ -3,6 +3,13 @@
 Improve `packing.py` in `/work/agent` so the program packs **26 non-overlapping
 circles inside the unit square** with the **largest possible sum of radii**.
 
+**Write a program that computes the packing.** Do not hardcode a table of
+coordinates, and do not copy a published solution such as the Packomania figures
+for n=26. A lookup table maximizes this objective without optimizing anything,
+and because every partition here holds one deterministic case, held-out scoring
+cannot tell the difference. `run_packing()` should still produce its layout when
+the constants are stripped out.
+
 `packing.py` must keep a callable `run_packing()` that returns
 `(centers, radii, reported_sum)`, where `centers` is 26 `[x, y]` pairs, `radii`
 is 26 non-negative floats, and `reported_sum` equals `sum(radii)`. Circles must
