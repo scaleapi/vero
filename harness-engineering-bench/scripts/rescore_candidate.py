@@ -195,8 +195,17 @@ def trial_rewards(round_dir: Path) -> list[float]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--session", required=True,
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--session",
                         help="session.tar.gz, or an extracted session dir")
+    source.add_argument(
+        "--seed", action="store_true",
+        help=(
+            "score the benchmark's own seed harness instead of a candidate, to "
+            "re-pin baseline_reward. Uses the same path and aggregation as a "
+            "candidate rescore, so the two stay comparable."
+        ),
+    )
     parser.add_argument("--benchmark", required=True)
     parser.add_argument("--version", help="candidate sha (default: the shipped one)")
     parser.add_argument("--partition", default="test")
@@ -216,12 +225,28 @@ def main() -> int:
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)
 
-    session_dir = open_session(args.session, outdir)
-    version = shipped_version(session_dir, Path(args.session).resolve(), args.version)
-    workspace = outdir / "candidate"
-    if workspace.exists():
-        shutil.rmtree(workspace)
-    extract_candidate(session_dir, version, workspace)
+    if args.seed:
+        # The seed harness lives beside the build config, at the path build.yaml
+        # names in agent_repo. Copy it so the run cannot mutate the checkout.
+        origin = (build_path.parent / str(build.get("agent_repo", "target"))).resolve()
+        if not origin.is_dir():
+            sys.exit(f"no seed harness at {origin}")
+        workspace = outdir / "seed"
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        shutil.copytree(origin, workspace, ignore=shutil.ignore_patterns(
+            "__pycache__", "*.pyc", ".venv", ".git"))
+        version = "seed"
+        log(f"seed harness from {origin}")
+    else:
+        session_dir = open_session(args.session, outdir)
+        version = shipped_version(
+            session_dir, Path(args.session).resolve(), args.version
+        )
+        workspace = outdir / "candidate"
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        extract_candidate(session_dir, version, workspace)
 
     partition_file = build["partition_files"][args.partition]
     tasks = json.loads((build_path.parent / partition_file).read_text())
@@ -273,7 +298,8 @@ def main() -> int:
         if target.get("partition") == args.partition:
             pinned = target.get("baseline_reward")
     print()
-    print(f"  candidate       {version[:12]}")
+    label = "seed harness" if version == "seed" else f"candidate {version[:12]}"
+    print(f"  {label}")
     print(f"  {args.partition:15s} n={len(pooled)} reward={reward:.4f} sd={sd:.4f}")
     print(f"  rounds          {' / '.join(f'{m:.3f}' for m in round_means)}")
     if pinned is not None:
