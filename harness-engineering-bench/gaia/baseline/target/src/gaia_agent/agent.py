@@ -17,6 +17,16 @@ MAX_TURNS = 24
 MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
+
+def _is_reasoning_model(model: str) -> bool:
+    """Whether `model` accepts `reasoning.effort`.
+
+    gpt-4o and other non-reasoning models reject it with HTTP 400, so every
+    request that sets it has to ask first -- including the forced-final one.
+    """
+    name = model.lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
+
 INSTRUCTIONS = """You are a careful general-purpose research agent solving a GAIA task.
 
 Work until you have a well-supported exact answer. You can search the web, run shell
@@ -191,10 +201,7 @@ class GaiaAgent(BaseAgent):
                 "max_output_tokens": 8000,
                 "parallel_tool_calls": False,
             }
-            # gpt-4o and other non-reasoning models reject `reasoning.effort`
-            # with HTTP 400; only send it to reasoning-capable models.
-            _model = self._api_model.lower()
-            if _model.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in _model:
+            if _is_reasoning_model(self._api_model):
                 request["reasoning"] = {"effort": "medium"}
             if previous_response_id is not None:
                 request["previous_response_id"] = previous_response_id
@@ -323,14 +330,16 @@ class GaiaAgent(BaseAgent):
                     ],
                 }
             )
-            final = await self._client.responses.create(
-                model=self._api_model,
-                instructions=INSTRUCTIONS,
-                input=next_input,
-                reasoning={"effort": "medium"},
-                max_output_tokens=8000,
-                previous_response_id=previous_response_id,
-            )
+            final_request: dict[str, Any] = {
+                "model": self._api_model,
+                "instructions": INSTRUCTIONS,
+                "input": next_input,
+                "max_output_tokens": 8000,
+                "previous_response_id": previous_response_id,
+            }
+            if _is_reasoning_model(self._api_model):
+                final_request["reasoning"] = {"effort": "medium"}
+            final = await self._client.responses.create(**final_request)
             input_tokens += self._usage_value(final.usage, "input_tokens")
             output_tokens += self._usage_value(final.usage, "output_tokens")
             cached_tokens += self._usage_value(
