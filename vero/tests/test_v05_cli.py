@@ -683,3 +683,41 @@ def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch
     assert "app_name=nested-only" not in command
     # Build-declared flags come first so a command-line `--ek` can override them.
     assert command.index("modal_vm_runtime=true") < command.index("--yes")
+def test_kimi_gateway_args_override_the_openai_default(tmp_path):
+    """kimi-cli reads OPENAI_BASE_URL inside the agent process, or ships to OpenAI.
+
+    Its openai_legacy provider defaults to https://api.openai.com/v1 and only
+    `augment_provider_with_env_vars` overrides it. The compose file sets the
+    variable on the container, but harbor gives the agent an explicit
+    environment, so a conformance run sent the scoped producer token to OpenAI
+    and took a 401 -- closed, but dead.
+    """
+    from vero.harbor.cli import _kimi_gateway_args
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps(
+            {
+                "producer_base_url": "http://inference-gateway:8001/scopes/p/o/v1",
+                "producer_api_key": "scoped-producer-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    values = _kimi_gateway_args("kimi-cli", task)[1::2]
+    assert "OPENAI_BASE_URL=http://inference-gateway:8001/scopes/p/o/v1" in values
+    assert "OPENAI_API_KEY=scoped-producer-token" in values
+    assert not any("api.openai.com" in value for value in values)
+
+    # Other harnesses route their own way and must not be handed these.
+    for other in ("claude-code", "opencode", "mini-swe-agent"):
+        assert _kimi_gateway_args(other, task) == []
+    # No compiled gateway, or a launch.json missing the key: emit nothing rather
+    # than half-configuring the provider.
+    assert _kimi_gateway_args("kimi-cli", tmp_path / "none") == []
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps({"producer_base_url": "http://gw/v1"}), encoding="utf-8"
+    )
+    assert _kimi_gateway_args("kimi-cli", task) == []

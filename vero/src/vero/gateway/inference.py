@@ -932,19 +932,26 @@ def create_inference_gateway_app(
                 store.complete(scope_name, attribution, upstream_error=True)
             )
             raise
+        else:
+            # Account before closing, so the slot's release does not depend on
+            # what happens during cleanup. Ordering it the other way was safe --
+            # aread() swaps in an in-memory stream whose aclose() cannot fail,
+            # and shield() finishes its inner task even if the outer await is
+            # cancelled -- but it took both of those facts to see it. This
+            # matches the streaming branch's finish() and needs neither.
+            await asyncio.shield(
+                store.complete(
+                    scope_name,
+                    attribution,
+                    input_tokens=tokens[0],
+                    output_tokens=tokens[1],
+                    total_tokens=tokens[2],
+                    cached_input_tokens=tokens[3],
+                    upstream_error=upstream.status_code >= 400,
+                )
+            )
         finally:
             await upstream.aclose()
-        await asyncio.shield(
-            store.complete(
-                scope_name,
-                attribution,
-                input_tokens=tokens[0],
-                output_tokens=tokens[1],
-                total_tokens=tokens[2],
-                cached_input_tokens=tokens[3],
-                upstream_error=upstream.status_code >= 400,
-            )
-        )
         if attributor is not None:
             attributor.register_response(thread_fields, content[:8192])
         await log_request(
