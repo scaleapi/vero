@@ -288,6 +288,13 @@ async def test_evaluation_plan_reports_partition_size(tmp_path: Path):
     )
 
     plan = json.loads((tmp_path / "ctx" / "plan.json").read_text(encoding="utf-8"))
+    # The backend serving each partition, so `evals run --backend/--partition`
+    # can be taken from one row. Mismatching them is refused as an opaque
+    # "evaluation denied", which cost swe-atlas-qna's optimizer a round trip.
+    assert {row["partition"]: row["backend"] for row in plan["evaluations"]} == {
+        "development": "harbor-development",
+        "validation": "harbor-validation",
+    }
     sizes = {row["partition"]: row["cases"] for row in plan["evaluations"]}
     # A backend that cannot cost itself degrades to no count, not a broken plan.
     assert sizes == {"development": 49, "validation": None}

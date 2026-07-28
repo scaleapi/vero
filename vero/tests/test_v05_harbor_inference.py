@@ -81,7 +81,9 @@ def test_gateway_replaces_credentials_enforces_scope_and_persists_usage(tmp_path
     assert denied.status_code == 403
     assert wrong_model.status_code == 403
     assert accepted.status_code == 200
-    assert exhausted.status_code == 429
+    # 402, not 429: budget exhaustion is terminal, and 429 would be retried
+    # by EvaluationLimits.retry_status_codes and by target-agent SDKs.
+    assert exhausted.status_code == 402
     assert len(observed) == 1
     assert observed[0].headers["authorization"] == "Bearer upstream-secret"
     assert b"scoped-token" not in observed[0].content
@@ -257,7 +259,7 @@ def test_gateway_reloads_usage_and_enforces_budget(tmp_path):
             json={"model": "gpt-test", "input": "hello"},
         )
 
-    assert exhausted.status_code == 429
+    assert exhausted.status_code == 402
     assert app.state.usage_store.ledger.scopes["producer"].active_requests == 0
 
 
@@ -440,7 +442,7 @@ def test_gateway_request_log_captures_responses_streams_and_denials(tmp_path):
         )
 
     records = _log_records(tmp_path)
-    assert [record["status"] for record in records] == [200, 200, 403, 429]
+    assert [record["status"] for record in records] == [200, 200, 403, 402]
     plain, stream, denied, exhausted = records
     assert plain["scope"] == "producer"
     assert plain["attribution"] == "optimizer"
@@ -688,3 +690,19 @@ def test_gateway_attribution_disabled_by_default_and_memory_bounded(tmp_path):
     assert len(attributor._root_threads) <= 10
     assert len(attributor._response_threads) <= 10
     assert attributor.errors == 0
+
+
+def test_budget_exhaustion_status_is_not_retryable():
+    """Budget exhaustion must not wear a status anything will retry.
+
+    It is terminal -- waiting never restores the quota -- so returning 429 made
+    every layer above retry it: EvaluationLimits.retry_status_codes defaults to
+    [429, 503, 529], and target-agent SDKs retry 429 on their own. officeqa run
+    #2 reissued 3672 doomed requests after exhausting its finalization scope.
+    """
+    from vero.evaluation.models import EvaluationLimits
+
+    budget_exhausted_status = 402
+    assert budget_exhausted_status not in EvaluationLimits().retry.retry_status_codes
+    # The transient ones stay retryable.
+    assert 429 in EvaluationLimits().retry.retry_status_codes

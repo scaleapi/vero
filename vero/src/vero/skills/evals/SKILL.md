@@ -17,7 +17,7 @@ subcommand.
 ## The loop
 
 ```bash
-evals plan                             # what you may run, partition sizes, budget
+evals plan                             # backend+partition pairs, sizes, budget
 evals run --backend B --evaluation-set S --partition P   # BLOCKS, returns the result
 evals list --sort score --desc        # every past result, one row each
 evals diff BASELINE_ID CANDIDATE_ID   # which cases improved / regressed
@@ -105,6 +105,10 @@ are enforced by the evaluator; `evals plan` shows what remains.
   disk under `.evals/results/`; read it back with `evals show` / `evals cases`.
 - Confusing ids: evaluation ids come from `evals list`; case ids from
   `evals cases`; job ids only from `evals run --detach`.
+- Mismatching `--backend` and `--partition`. Each partition is served by exactly
+  one backend, and asking a different one is refused as `evaluation denied` — a
+  denial is deliberately opaque, so it will not tell you that is the reason. Take
+  both from the same row of `evals plan`.
 - Scores may be noisy: replicate an important comparison before acting on it, by
   re-running the identical case selection.
 - Backgrounding the wait. Putting `evals run`/`evals wait` in a background task

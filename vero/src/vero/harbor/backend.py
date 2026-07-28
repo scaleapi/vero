@@ -1255,8 +1255,9 @@ class HarborBackend:
             exception_counts[key] = exception_counts.get(key, 0) + 1
             signals.append(key)
             # The gateway embeds a distinct "budget_exhausted" code in the error
-            # body; the in-container client collapses the type to a generic
-            # rate-limit, but the message survives, so classify on it too.
+            # body. Classify on the message rather than the status or exception
+            # type: the in-container client collapses the type to whatever its
+            # SDK maps the status to, but the message survives intact.
             for detail_key in ("message", "detail", "exception_message"):
                 detail = info.get(detail_key)
                 if isinstance(detail, str) and detail:

@@ -224,6 +224,48 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+# opencode's own default is 100 agentic iterations, after which it forces a
+# text-only response and stops. That is well inside a real optimization run:
+# gaia's optimizer used all 100 and never reached `evals submit`. Set high
+# enough that the harness never truncates the search -- the case budget and
+# the gateway token cap are the intended limits.
+OPENCODE_STEP_LIMIT = 1000
+
+# Harnesses that drive the model through litellm rather than a provider SDK.
+# litellm reads the base URL as <PROVIDER>_API_BASE; the SDKs read
+# <PROVIDER>_BASE_URL. vero sets the SDK names, so a litellm-based harness sees no
+# override and calls the provider's public endpoint instead of the gateway.
+_LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
+
+
+def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
+    """Give litellm-based harnesses the gateway URL under the name they read.
+
+    mini-swe-agent installs `litellm[proxy]` and resolves `anthropic/<model>`
+    through it. Without ANTHROPIC_API_BASE it reaches api.anthropic.com holding
+    only a scoped gateway token, and fails with
+    ``AuthenticationError: invalid x-api-key`` -- fails closed, so nothing leaks,
+    but the harness cannot run at all. Set both provider aliases from the
+    compiled producer scope so whichever provider the model names is covered.
+    """
+
+    if agent not in _LITELLM_AGENTS:
+        return []
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return []
+    try:
+        base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
+    # The Anthropic SDK re-appends /v1, litellm does not, so anthropic keeps the
+    # full path here -- matching how the gateway is addressed for openai.
+    arguments: list[str] = []
+    for name in ("OPENAI_API_BASE", "ANTHROPIC_API_BASE"):
+        arguments.extend(["--ae", f"{name}={base_url}"])
+    return arguments
+
+
 def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
     """Route opencode's non-openai providers through the gateway.
 
@@ -244,22 +286,64 @@ def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[st
     and metered. The adapter deep-merges job kwargs last, so this wins.
     """
 
-    if agent != "opencode" or not model or "/" not in model:
+    if agent != "opencode" or not model:
         return []
+
+    # opencode caps agentic iterations at 100 by default and then "forces a
+    # text-only response" (its own config schema's words for `steps`). A gaia
+    # optimizer hit that cap after ~2h, and the forced final message reads like a
+    # considered wrap-up, so the truncation is invisible unless you notice the
+    # step count is exactly 100 -- it never reached `evals submit`. claude-code
+    # takes harbor's --max-turns instead, so leaving this at the default makes
+    # the two harnesses incomparable. `build` is opencode's primary agent.
+    payload: dict[str, object] = {
+        "agent": {"build": {"steps": OPENCODE_STEP_LIMIT}}
+    }
+
     provider, _, _ = model.partition("/")
-    if provider == "openai":
-        return []  # the adapter already injects the baseURL for this one
-    path = task / "environment/gateway/launch.json"
-    if not path.exists():
-        return []
-    try:
-        base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
-    except (OSError, json.JSONDecodeError, KeyError):
-        return []
-    # producer_base_url ends in /v1 and provider SDKs append their own route
-    # (/messages), matching how ANTHROPIC_BASE_URL is handed to claude-code.
-    payload = {"provider": {provider: {"options": {"baseURL": base_url}}}}
+    if "/" in model and provider != "openai":
+        # The adapter injects a baseURL only for the openai provider; for any
+        # other it writes none and opencode calls that provider's public
+        # endpoint. Supply it ourselves so the traffic stays metered.
+        path = task / "environment/gateway/launch.json"
+        if path.exists():
+            try:
+                base_url = json.loads(path.read_text(encoding="utf-8"))[
+                    "producer_base_url"
+                ]
+            except (OSError, json.JSONDecodeError, KeyError):
+                base_url = None
+            if base_url:
+                # producer_base_url ends in /v1 and provider SDKs append their
+                # own route (/messages), matching ANTHROPIC_BASE_URL for
+                # claude-code.
+                payload["provider"] = {provider: {"options": {"baseURL": base_url}}}
     return ["--ak", f"opencode_config={json.dumps(payload, separators=(',', ':'))}"]
+
+
+def _outer_app_name_args(
+    environment: str, config_name: str, extra: tuple[str, ...]
+) -> list[str]:
+    """Name the outer trial's Modal app so its sandbox can be found.
+
+    Inner evaluation sandboxes are already grouped by an explicit
+    ``--ek app_name=...`` in each build's ``extra_harbor_args``, but the outer
+    trial had none and so landed in Modal's default ``__harbor__`` app. That
+    costs twice: the workspace holds thousands of containers, so an unnamed outer
+    sandbox is effectively unfindable in the UI, and recovering the session from
+    a run that must be killed begins with identifying its container.
+
+    Derived from the build name (``vero/optimize-gaia-baseline`` ->
+    ``vero-optimize-gaia-baseline``) so outer trials group per benchmark. A
+    caller passing its own ``--ek app_name=`` wins.
+    """
+
+    if environment != "modal":
+        return []
+    if any("app_name=" in argument for argument in extra):
+        return []
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", config_name).strip("-")
+    return ["--ek", f"app_name={slug or 'vero'}"]
 
 
 def _compiled_run_environment(
@@ -611,9 +695,21 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(_opencode_gateway_args(agent, model, task))
+        command.extend(_litellm_base_url_args(agent, task))
         # Build-declared outer-trial flags first, so a command-line arg can still
         # override them (harbor's `--ek` takes the last value for a key).
         command.extend(config.optimizer_harbor_args)
+        # The derived app name defers to an explicit one from *either* source: a
+        # build may declare `--ek app_name=` in optimizer_harbor_args just as a
+        # caller may pass it on the command line, and appending ours after the
+        # build's would silently win on harbor's last-value-per-key rule.
+        command.extend(
+            _outer_app_name_args(
+                environment,
+                config.name,
+                (*config.optimizer_harbor_args, *extra),
+            )
+        )
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(
@@ -674,7 +770,11 @@ def inference_gateway_command(config_path, host, port):
 @harbor.command("eval")
 @click.option(
     "--backend", "backend_id", required=True,
-    help="Evaluation backend to score against (e.g. the selection partition's backend; see `evals plan`).",
+    help=(
+        "Evaluation backend to score against. Must match --partition: each "
+        "partition is served by exactly one backend and asking a different one "
+        "is denied. `evals plan` lists the pair for every partition you may run."
+    ),
 )
 @click.option(
     "--evaluation-set", "evaluation_set_name", required=True,
