@@ -224,6 +224,14 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+# opencode's own default is 100 agentic iterations, after which it forces a
+# text-only response and stops. That is well inside a real optimization run:
+# gaia's optimizer used all 100 and never reached `evals submit`. Set high
+# enough that the harness never truncates the search -- the case budget and
+# the gateway token cap are the intended limits.
+OPENCODE_STEP_LIMIT = 1000
+
+
 def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
     """Route opencode's non-openai providers through the gateway.
 
@@ -244,21 +252,38 @@ def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[st
     and metered. The adapter deep-merges job kwargs last, so this wins.
     """
 
-    if agent != "opencode" or not model or "/" not in model:
+    if agent != "opencode" or not model:
         return []
+
+    # opencode caps agentic iterations at 100 by default and then "forces a
+    # text-only response" (its own config schema's words for `steps`). A gaia
+    # optimizer hit that cap after ~2h, and the forced final message reads like a
+    # considered wrap-up, so the truncation is invisible unless you notice the
+    # step count is exactly 100 -- it never reached `evals submit`. claude-code
+    # takes harbor's --max-turns instead, so leaving this at the default makes
+    # the two harnesses incomparable. `build` is opencode's primary agent.
+    payload: dict[str, object] = {
+        "agent": {"build": {"steps": OPENCODE_STEP_LIMIT}}
+    }
+
     provider, _, _ = model.partition("/")
-    if provider == "openai":
-        return []  # the adapter already injects the baseURL for this one
-    path = task / "environment/gateway/launch.json"
-    if not path.exists():
-        return []
-    try:
-        base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
-    except (OSError, json.JSONDecodeError, KeyError):
-        return []
-    # producer_base_url ends in /v1 and provider SDKs append their own route
-    # (/messages), matching how ANTHROPIC_BASE_URL is handed to claude-code.
-    payload = {"provider": {provider: {"options": {"baseURL": base_url}}}}
+    if "/" in model and provider != "openai":
+        # The adapter injects a baseURL only for the openai provider; for any
+        # other it writes none and opencode calls that provider's public
+        # endpoint. Supply it ourselves so the traffic stays metered.
+        path = task / "environment/gateway/launch.json"
+        if path.exists():
+            try:
+                base_url = json.loads(path.read_text(encoding="utf-8"))[
+                    "producer_base_url"
+                ]
+            except (OSError, json.JSONDecodeError, KeyError):
+                base_url = None
+            if base_url:
+                # producer_base_url ends in /v1 and provider SDKs append their
+                # own route (/messages), matching ANTHROPIC_BASE_URL for
+                # claude-code.
+                payload["provider"] = {provider: {"options": {"baseURL": base_url}}}
     return ["--ak", f"opencode_config={json.dumps(payload, separators=(',', ':'))}"]
 
 

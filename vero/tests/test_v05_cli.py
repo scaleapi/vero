@@ -333,21 +333,32 @@ def test_opencode_non_openai_provider_gets_a_gateway_base_url(tmp_path):
     assert args[0] == "--ak"
     key, _, value = args[1].partition("=")
     assert key == "opencode_config"
-    assert json.loads(value) == {
-        "provider": {
-            "anthropic": {
-                "options": {"baseURL": "http://inference-gateway:8001/scopes/p/o/v1"}
-            }
+    payload = json.loads(value)
+    assert payload["provider"] == {
+        "anthropic": {
+            "options": {"baseURL": "http://inference-gateway:8001/scopes/p/o/v1"}
         }
     }
+    # The same config carries the step limit; see the step-limit test below.
+    assert payload["agent"]["build"]["steps"] > 100
 
-    # openai is the one provider the adapter already handles; don't fight it.
-    assert _opencode_gateway_args("opencode", "openai/gpt-5.4", task) == []
-    # Other agents and bare model names are untouched.
+    # openai is the one provider the adapter already handles for baseURL; don't
+    # fight it -- but opencode still needs its step limit raised.
+    openai = _opencode_gateway_args("opencode", "openai/gpt-5.4", task)
+    assert "provider" not in json.loads(openai[1].removeprefix("opencode_config="))
+    # Other agents are untouched -- claude-code controls turns via --max-turns.
     assert _opencode_gateway_args("claude-code", "anthropic/claude-sonnet-5", task) == []
-    assert _opencode_gateway_args("opencode", "claude-sonnet-5", task) == []
-    # A task compiled without a gateway simply gets no override.
-    assert _opencode_gateway_args("opencode", "anthropic/x", tmp_path / "none") == []
+    # For opencode the step limit is unconditional: it does not depend on the
+    # model spelling or on a gateway being present, because a truncated search is
+    # a problem either way. Only the baseURL injection is conditional.
+    bare = _opencode_gateway_args("opencode", "claude-sonnet-5", task)
+    assert json.loads(bare[1].removeprefix("opencode_config="))["agent"]["build"][
+        "steps"
+    ] > 100
+    no_gateway = _opencode_gateway_args("opencode", "anthropic/x", tmp_path / "none")
+    payload = json.loads(no_gateway[1].removeprefix("opencode_config="))
+    assert payload["agent"]["build"]["steps"] > 100
+    assert "provider" not in payload
 
 
 def test_outer_modal_trial_gets_a_named_app():
@@ -373,3 +384,32 @@ def test_outer_modal_trial_gets_a_named_app():
     ) == []
     # A name that is entirely punctuation still yields a usable app.
     assert _outer_app_name_args("modal", "///", ()) == ["--ek", "app_name=vero"]
+
+
+def test_opencode_gets_a_step_limit_that_does_not_truncate_the_search(tmp_path):
+    """opencode caps agentic iterations at 100 and then forces a text-only reply.
+
+    That is inside a real run: gaia's optimizer used exactly 100 and stopped
+    without ever calling `evals submit`, and because the cap produces a fluent
+    final message the truncation is invisible unless you count the steps.
+    claude-code takes harbor's --max-turns instead, so leaving opencode at its
+    default makes the two harnesses incomparable on the one axis the grid varies.
+    """
+    from vero.harbor.cli import OPENCODE_STEP_LIMIT, _opencode_gateway_args
+
+    args = _opencode_gateway_args("opencode", "anthropic/claude-sonnet-5", tmp_path)
+    assert args[0] == "--ak"
+    payload = json.loads(args[1].removeprefix("opencode_config="))
+    assert payload["agent"]["build"]["steps"] == OPENCODE_STEP_LIMIT
+    assert OPENCODE_STEP_LIMIT > 100
+
+    # Still set for the openai provider, which needs no baseURL injection.
+    openai = json.loads(
+        _opencode_gateway_args("opencode", "openai/gpt-5.4", tmp_path)[1]
+        .removeprefix("opencode_config=")
+    )
+    assert openai["agent"]["build"]["steps"] == OPENCODE_STEP_LIMIT
+    assert "provider" not in openai
+
+    # claude-code is untouched; it has its own turn control.
+    assert _opencode_gateway_args("claude-code", "claude-sonnet-5", tmp_path) == []
