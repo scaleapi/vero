@@ -258,12 +258,25 @@ def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
         base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
     except (OSError, json.JSONDecodeError, KeyError):
         return []
-    # The Anthropic SDK re-appends /v1, litellm does not, so anthropic keeps the
-    # full path here -- matching how the gateway is addressed for openai.
-    arguments: list[str] = []
-    for name in ("OPENAI_API_BASE", "ANTHROPIC_API_BASE"):
-        arguments.extend(["--ae", f"{name}={base_url}"])
-    return arguments
+    # litellm appends its own route to whatever base it is given, and the two
+    # providers want different bases. Its openai path adds `/chat/completions`,
+    # so that one takes the `/v1` producer URL as-is. Its anthropic path adds
+    # `/v1/messages` unless the base already ends in exactly that (main.py
+    # `anthropic_chat_completions`), so the same URL there yields a doubled
+    # `/v1/v1/messages`, which the gateway forwards upstream as a route nobody
+    # serves -- a 403 that reads like an auth failure. Hand anthropic the fully
+    # qualified messages path, which litellm leaves alone either way.
+    root = base_url.rstrip("/")
+    for suffix in ("/v1/messages", "/v1"):
+        if root.endswith(suffix):
+            root = root[: -len(suffix)]
+            break
+    return [
+        "--ae",
+        f"OPENAI_API_BASE={base_url}",
+        "--ae",
+        f"ANTHROPIC_API_BASE={root}/v1/messages",
+    ]
 
 
 def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
