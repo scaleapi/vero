@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+cd {{ layout.target_repo }}
+git config user.name optimizer
+git config user.email optimizer@example.test
+echo "# optimizer candidate" >> README.md 2>/dev/null || echo "candidate" > NOTES.md
+git add -A
+git commit -m "optimizer candidate"
+evals run \
+  --backend {{ selection_backend }} \
+  --evaluation-set {{ evaluation_set_name }} \
+  --partition {{ selection_partition }}
+{% if submit_enabled %}
+evals submit
+{% endif %}
+evals status

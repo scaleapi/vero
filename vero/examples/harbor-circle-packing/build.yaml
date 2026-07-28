@@ -1,0 +1,112 @@
+# The same circle-packing problem as the hand-written task in this directory,
+# but compiled by `vero harbor build` instead of wired by circle_factory.py.
+#
+# Two things this demonstrates that the custom-factory path does not:
+#
+#   - `evaluation_backend: command` — a non-agent target scored by a program,
+#     built through the compiler. There is nothing for a nested `harbor run` to
+#     drive, so none of the Harbor-only knobs apply.
+#   - An inference gateway. The optimizer reaches its model only through a
+#     scoped, allow-listed, metered token; the raw upstream credential stays in
+#     the gateway container. The hand-written task hands the agent the real
+#     OPENAI_* credentials instead, which is convenient but unmetered.
+#
+# Build and run:
+#   cp -r <repo>/vero environment/vero          # VeRO is not on public PyPI
+#   vero harbor run --config build.yaml --agent codex --model gpt-5.4 \
+#       --environment docker
+#
+# Either optimizer family works. `vero harbor run` points both surfaces at the
+# same producer scope: OPENAI_* lands in the compose environment for codex, and
+# ANTHROPIC_* is set on the host, where harbor's claude-code agent reads it and
+# injects it into the agent (with /v1 stripped, which the Anthropic SDK
+# re-appends). Swap in `--agent claude-code --model claude-sonnet-4-5` and the
+# producer allow-list follows via ${optimizer_model}.
+#
+# Note the target and harness are shared with the hand-written task, so the two
+# wirings score identically and can be compared directly.
+
+name: vero/circle-packing-metered
+description: >-
+  Optimize packing.py to maximize the sum of 26 non-overlapping circle radii in
+  the unit square, with the optimizer metered through the inference gateway.
+
+# The editable target: a plain Python program, not an agent.
+agent_repo: environment/agent-seed
+harbor_requirement: harbor==0.20.0
+
+# The harness ignores case identity — one deterministic score per run — so each
+# partition holds a single nominal case. Held-out still means held-out: the
+# agent may reach development and validation, never test.
+partitions:
+  development: [dev]
+  validation: [val]
+  test: [holdout]
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    min_aggregate_cases: 1
+  - partition: validation
+    disclosure: aggregate
+    min_aggregate_cases: 1
+    total_runs: 10
+
+selection_partition: validation
+
+targets:
+  - partition: test
+    reward_key: sum_radii
+
+objective:
+  selector:
+    metric: sum_radii
+  direction: maximize
+  failure_value: 0.0
+  constraints:
+    - selector:
+        metric: valid
+      operator: "=="
+      value: 1.0
+
+# A program scores the candidate; there is no target agent to run.
+evaluation_backend: command
+command_backend:
+  harness_source: environment/sidecar/harness
+  # CommandBackend runs the harness with a deliberately minimal environment
+  # (PATH is os.defpath, i.e. /bin:/usr/bin) so the sidecar's own environment --
+  # which holds secrets -- is not handed to it wholesale. The base image keeps
+  # python in /usr/local/bin, so PATH has to be forwarded explicitly or the
+  # harness dies with "No such file or directory: 'python'".
+  passthrough_environment: [PATH, HOME, UV_CACHE_DIR]
+  command:
+    - python
+    - "{harness}/evaluate.py"
+    - --workspace
+    - "{workspace}"
+    - --request
+    - "{request}"
+    - --report
+    - "{report}"
+    - --artifacts
+    - "{artifacts}"
+
+# The optimizer's only route to a model. Its token is minted at build time and
+# never leaves the gateway config as anything but a digest; the raw upstream key
+# is read from OPENAI_API_KEY on the build host and stays in the gateway.
+#
+# `evaluation` is required by the schema but unused here: a command harness gets
+# no gateway token, so this target makes no model calls of its own.
+inference_gateway:
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_requests: 500
+    max_concurrency: 4
+  evaluation:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_requests: 1
+
+timeout_seconds: 900
+case_timeout_seconds: 300
+verifier_timeout_seconds: 1800

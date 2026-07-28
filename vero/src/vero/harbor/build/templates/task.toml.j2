@@ -1,0 +1,22 @@
+schema_version = "1.3"
+
+[task]
+name = {{ name_toml }}
+description = {{ description_toml }}
+
+[agent]
+user = "agent"
+
+[verifier]
+environment_mode = "shared"
+timeout_sec = {{ verifier_timeout }}
+
+[environment]
+build_timeout_sec = {{ build_timeout }}
+{% if secrets %}
+
+[environment.env]
+{% for secret in secrets %}
+{{ secret }} = "${{ '{' }}{{ secret }}{{ '}' }}"
+{% endfor %}
+{% endif %}

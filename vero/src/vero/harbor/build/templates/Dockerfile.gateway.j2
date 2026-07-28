@@ -1,0 +1,17 @@
+# Trusted inference gateway: upstream credential and durable usage ledger.
+FROM {{ base_image_sidecar }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+{% if use_local_vero %}
+COPY vero {{ layout.vero }}
+RUN uv pip install --system "{{ layout.vero }}[harbor]"
+{% else %}
+RUN uv pip install --system "{{ vero_requirement }}"
+{% endif %}
+
+COPY gateway/config.json {{ layout.inference_config }}
+
+WORKDIR /opt

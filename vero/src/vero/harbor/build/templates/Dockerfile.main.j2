@@ -1,0 +1,22 @@
+# Optimizer workbench: target repository plus the agent-facing VeRO CLI.
+FROM {{ base_image_main }}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+{% if use_local_vero %}
+COPY vero {{ layout.vero }}
+RUN uv pip install --system "{{ layout.vero }}[harbor]"
+{% else %}
+RUN uv pip install --system "{{ vero_requirement }}"
+{% endif %}
+
+COPY agent-seed {{ layout.seed_repo }}
+{% if overlay_present %}
+COPY overlay {{ layout.overlay }}
+{% endif %}
+COPY main/seed.sh {{ layout.seed_script }}
+RUN chmod +x {{ layout.seed_script }} && useradd -m -u 1001 agent
+
+WORKDIR {{ layout.target_repo }}

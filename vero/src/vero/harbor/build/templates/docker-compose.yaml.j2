@@ -1,0 +1,108 @@
+# Harbor merges this after its generated main-service configuration.
+services:
+  main:
+    command: ["{{ layout.seed_script }}"]
+    environment:
+      {{ layout.eval_url_env }}: "{{ layout.sidecar_url }}"
+{% for secret in scrubbed_main_environment %}
+      {{ secret }}: ""
+{% endfor %}
+{% if inference_gateway %}
+      {{ layout.producer_api_key_env }}: "{{ producer_inference_token }}"
+      {{ layout.producer_base_url_env }}: "{{ producer_base_url }}"
+{% elif layout.producer_api_key_env in secrets %}
+      {{ layout.producer_api_key_env }}: ""
+{% if layout.producer_base_url_env in secrets %}
+      {{ layout.producer_base_url_env }}: ""
+{% endif %}
+{% endif %}
+    volumes:
+      - agent_repo:{{ layout.target_repo }}
+      - agent_context:{{ layout.target_evals }}:ro
+      - token_state:{{ layout.token_dir }}:ro
+    depends_on:
+      {{ layout.sidecar_host }}:
+        condition: service_healthy
+{% if inference_gateway %}
+      {{ layout.gateway_host }}:
+        condition: service_healthy
+{% endif %}
+
+  {{ layout.sidecar_host }}:
+    build:
+      context: .
+      dockerfile: sidecar/Dockerfile
+    command:
+      - "vero"
+      - "harbor"
+      - "serve"
+      - "--factory"
+      - "{{ sidecar_factory }}"
+      - "--config"
+      - "{{ layout.serve_config }}"
+      - "--admin-token"
+      - "{{ layout.token_path }}"
+    environment:
+{% if sidecar_secrets %}
+{% for secret in sidecar_secrets %}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the eval sidecar{{ '}' }}"
+{% endfor %}
+{% else %}
+      LANG: "C.UTF-8"
+{% endif %}
+{% if task_services_use_upstream %}
+{# Trusted sidecar receives the real upstream so it can hand task-owned eval
+   services (LLM user-sims/graders) a reachable provider. The optimizer/main keeps
+   these scrubbed to "" so it never sees the raw upstream credential. #}
+{% for secret in gateway_environment %}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the eval sidecar{{ '}' }}"
+{% endfor %}
+{% endif %}
+    volumes:
+      - agent_repo:{{ layout.target_repo }}:ro
+      - agent_context:{{ layout.agent_volume }}
+      - admin_state:{{ layout.admin_volume }}
+      - token_state:{{ layout.token_dir }}
+{% if inference_gateway %}
+      - inference_state:{{ layout.inference_dir }}:ro
+{% endif %}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ layout.sidecar_port }}/health')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+
+{% if inference_gateway %}
+  {{ layout.gateway_host }}:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    command:
+      - "vero"
+      - "harbor"
+      - "{{ layout.gateway_host }}"
+      - "--config"
+      - "{{ layout.inference_config }}"
+    environment:
+{% for secret in gateway_environment %}
+      {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the inference gateway{{ '}' }}"
+{% endfor %}
+    volumes:
+      - inference_state:{{ layout.inference_dir }}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:{{ layout.gateway_port }}/health')"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 10s
+{% endif %}
+
+volumes:
+  agent_repo:
+  agent_context:
+  admin_state:
+  token_state:
+{% if inference_gateway %}
+  inference_state:
+{% endif %}

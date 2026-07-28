@@ -1,0 +1,130 @@
+# Optimize the program
+
+Improve the program in `{{ layout.target_repo }}` so it scores as highly as possible on the
+hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
+{% if disclose_budget %}budget, {% endif %}and final candidate selection.
+
+{% if description %}
+## Objective
+
+{{ description }}
+
+{% endif %}
+## Workflow
+
+1. Inspect and edit `{{ layout.target_repo }}`.
+2. Commit each candidate with Git.
+3. Evaluate the current commit on the selection set. By default `evals run`
+   **blocks** until scoring finishes and prints the result — one call, no
+   polling, no job to track:
+
+   ```bash
+   evals run \
+     --backend {{ selection_backend }} \
+     --evaluation-set {{ evaluation_set_name }} \
+     --partition {{ selection_partition }}
+   ```
+
+   An evaluation can take many minutes — that is expected; let the call block
+   and read the result it returns. Iterate cheaply on a subset first
+   (`--start 0 --stop N`, or repeated `--case-id ID`).
+   {% if seed_supported %}
+   Pass `--seed N` to reproduce a noisy comparison exactly.
+   {% else %}
+   To replicate a noisy comparison, re-run the identical selection; this backend
+   fixes its own sampling and rejects `--seed`.
+   {% endif %}
+   Run `evals run --help` for every option.
+
+   **Every result is persisted, so you never need to preserve the printed
+   output.** The full record — overall metrics, every per-case score, and the
+   trial artifacts — is written under `.evals/results/` before the command
+   returns, and stays there for the rest of the run. Piping a result through
+   `head`/`tail` therefore costs you nothing: recover any of it later with
+   `evals list` (one row per past evaluation), `evals show ID`, `evals cases ID`,
+   and `evals diff OLD NEW`. Do not re-run an evaluation to see a number you
+   truncated — look it up.
+
+   Add `--detach` **only** to run several evaluations at once: it returns a
+   `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks
+   until that job finishes and prints its result (or poll `evals status JOB_ID`,
+   which also shows elapsed time).
+
+   **Run every `evals` call in the foreground.** You are a single-shot headless
+   run: nothing exists to deliver a notification or wake you later. If you put a
+   long call in a background task, schedule a wake-up, or say you will "report
+   back when it finishes", the run simply ends there and whatever you have not
+   submitted is lost. A foreground call that blocks for half an hour is working
+   correctly — let it block. To wait on two jobs, `evals wait` the first, then
+   the second. Do not claim an improvement before its comparison baseline has
+   been scored on the same cases.
+
+4. Use `evals status` to inspect evaluation jobs and allowed evaluation
+   sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
+   Navigate finished results with `evals list`, `evals diff`, `evals cases`,
+   and `evals trace` (see `evals --help` and `skills/evals/SKILL.md`).
+{% if submit_enabled %}
+5. Before finishing, commit and nominate your **best** candidate with
+   `evals submit` — this is the commit that ships. Measure the baseline and
+   submit only a candidate you have confirmed beats it on the same cases. If you
+   never submit, VeRO falls back to auto-best over validation and then your last
+   commit, so an unvetted or half-finished edit can ship by default — submit
+   deliberately.
+{% else %}
+5. VeRO automatically pools your measurements, re-scores a shortlist with the
+   trusted evaluator, and selects the best candidate. The unmodified baseline is
+   used as a floor, so a regression is not shipped.
+{% endif %}
+
+{% if multifidelity and disclose_budget %}
+## Allocate the evaluation budget
+
+You decide how to allocate the finite case budget. Use `--start 0 --stop N` or
+repeated `--case-id ID` flags for subsets, or omit them to evaluate the complete
+set. A request may consume the entire remaining case budget. VeRO does not
+reserve cases for later runs, so keep enough only if your strategy requires a
+final confirmation.
+{% if minimum_subset_cases > 1 %}
+Aggregate-only subsets must include at least {{ minimum_subset_cases }} cases;
+this prevents singleton aggregates from exposing individual hidden results.
+{% else %}
+You may use arbitrary subsets, including a single case; validation feedback is
+optimization data, while the final evaluation remains hidden.
+{% endif %}
+
+{% endif %}
+{% if exposed_partitions %}
+## Inspect cases and traces
+
+Complete task resources for the following authorized partitions are mounted
+read-only under `.evals/tasks/`: {{ exposed_partitions | join(", ") }}. Start at
+`.evals/tasks/index.json`; each listed partition has its own task index,
+attachments, instructions, and task files.
+
+After a full-disclosure evaluation, `.evals/results/` contains one file per
+case plus the complete Harbor trial records: exact failure results, exception
+tracebacks, trial logs, and target-agent artifacts. Use these files to inspect
+successful as well as failed trajectories without putting long traces into the
+CLI response.
+{% endif %}
+## Rules
+
+- Only the sidecar evaluates candidates. Only explicitly authorized case
+  resources are mounted; validation and final targets remain outside this
+  container.
+{% if disclose_budget %}
+- Evaluation budgets are finite and are charged by backend and evaluation set.
+{% endif %}
+- Scores may be noisy; compare candidates on the same selection whenever possible.
+- Reusing the same cases removes case-sampling differences, but target-model
+  randomness remains. Replicate important comparisons before assigning causality.
+- Each case has a wall-clock limit: a case that runs past it is stopped and
+  scores the failure value. A change that is more thorough but slower can
+  therefore score *worse* by pushing cases over the limit — treat per-case
+  latency as a real constraint, not only accuracy.
+{% if exhaust_budget and disclose_budget %}
+- Unspent evaluation budget is wasted. Use remaining calls to re-measure the
+  strongest candidate or try another plausible change.
+{% endif %}
+- Paths marked read-only are guardrails. The authoritative evaluator lives in the
+  sidecar, outside the candidate repository.

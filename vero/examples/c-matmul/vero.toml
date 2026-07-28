@@ -1,0 +1,50 @@
+[target]
+root = "./target"
+ref = "HEAD"
+
+[backend]
+id = "command"
+kind = "command"
+harness_root = "./harness"
+command = [
+  "python3",
+  "evaluate.py",
+  "--workspace", "{workspace}",
+  "--request", "{request}",
+  "--report", "{report}",
+  "--artifacts", "{artifacts}",
+]
+
+[[evaluations]]
+name = "performance"
+agent_can_evaluate = true
+agent_visible = true
+agent_selection = "arbitrary"
+disclosure = "full"
+
+[protocol]
+selection_evaluation = "performance"
+timeout_seconds = 120
+max_proposals = 1
+
+[protocol.retry]
+max_attempts = 1
+
+[objective]
+metric = "latency_ms"
+direction = "minimize"
+
+[[objective.constraints]]
+metric = "correct"
+operator = "=="
+value = 1.0
+
+[optimizer]
+kind = "command"
+root = "./optimizer"
+command = ["python3", "optimize.py", "--workspace", "{workspace}"]
+description = "Use a cache-friendly matrix kernel"
+
+[session]
+id = "c-matmul-example"
+directory = "./.vero/session"
