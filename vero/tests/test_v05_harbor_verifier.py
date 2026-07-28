@@ -504,6 +504,44 @@ async def test_verifier_uses_pinned_baseline_reward_without_scoring(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_verifier_submit_mode_without_a_submission_falls_back(tmp_path):
+    """`submit` mode with no submission written must not crash.
+
+    Only `auto_best` selection is validated to carry backend_id, evaluation_set
+    and objective, but candidate selection tries the submission and then falls
+    through to `_auto_best` regardless of mode. With no submission on disk that
+    reached three bare asserts -- an AssertionError with no diagnostic, and
+    nothing at all under `-O`. It should decline and drop to the last-resort
+    candidate instead.
+    """
+    cand = _candidate("cand", seconds=1)
+    engine = FakeEngine({("cand", "test"): 0.7})
+    engine.database.add_evaluation(
+        _record("r", cand, EvaluationSet(name="selection"), 0.8)
+    )
+    verifier = CanonicalVerifier(
+        engine=engine,
+        selection=VerificationSelection(mode="submit"),
+        targets=[
+            VerificationTarget(
+                reward_key="reward",
+                backend_id="backend",
+                evaluation_set=EvaluationSet(name="test"),
+                objective=OBJECTIVE,
+                max_attempts=1,
+            )
+        ],
+        admin_volume=tmp_path,
+        score_baseline=False,
+    )
+
+    result = await verifier.finalize()
+
+    assert result.candidate == cand  # the last measured candidate, not a crash
+    assert result.rewards == {"reward": 0.7}
+
+
+@pytest.mark.asyncio
 async def test_verifier_reports_pinned_baseline_without_score_baseline(tmp_path):
     """`score_baseline: false` must still report the pin the delta is measured from.
 

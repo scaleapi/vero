@@ -364,6 +364,17 @@ class CanonicalVerifier:
         return latest.request.candidate
 
     async def _auto_best(self) -> Candidate | None:
+        # Only `auto_best` selection is validated to carry these; a `submit`-mode
+        # run whose agent never wrote a submission falls through to here, and
+        # asserting on them raised a bare AssertionError with no diagnostic (and
+        # nothing at all under -O). Decline instead, so the caller drops to
+        # `_pick_last`, which is the intended last resort.
+        if (
+            self.selection.backend_id is None
+            or self.selection.evaluation_set is None
+            or self.selection.objective is None
+        ):
+            return None
         rescored: list[EvaluationRecord] = []
         for candidate in self._shortlist():
             record, _ = await self._rescore_candidate(candidate)
