@@ -87,6 +87,43 @@ def test_benchmarks_route_all_inference_through_the_gateway(benchmark):
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
+def test_upstream_rerouting_benchmarks_keep_their_agent_on_the_gateway(benchmark):
+    """`task_services_use_upstream` obliges the target agent to read dedicated vars.
+
+    That flag exists so an in-container grader or user-simulator can reach the
+    provider, and it does that by pointing OPENAI_* at the real upstream. The
+    candidate agent's metered, allow-listed credential then arrives only on
+    VERO_AGENT_INFERENCE_*. An agent that does not read those falls through to
+    OPENAI_* and runs on the raw upstream: unmetered, and with the pinned target
+    model unenforced.
+
+    The config-level test above cannot see this -- the build still declares a
+    gateway, and vero injects the upstream deliberately -- so it passed while
+    browsecomp-plus ran every evaluation off-gateway. This asserts against the
+    agent source, which is where the contract is actually kept.
+    """
+    from vero.harbor.backend import (
+        AGENT_INFERENCE_API_KEY_ENV,
+        AGENT_INFERENCE_BASE_URL_ENV,
+    )
+
+    config = _config(benchmark)
+    if not config.task_services_use_upstream:
+        pytest.skip(f"{benchmark} does not reroute OPENAI_* to the upstream")
+
+    sources = sorted(
+        (BENCHMARK_ROOT / benchmark / "baseline" / "target" / "src").rglob("*.py")
+    )
+    assert sources, f"{benchmark} has no target agent source to check"
+    text = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    for name in (AGENT_INFERENCE_API_KEY_ENV, AGENT_INFERENCE_BASE_URL_ENV):
+        assert name in text, (
+            f"{benchmark} reroutes OPENAI_* to the upstream but its agent never "
+            f"reads {name}, so its target inference bypasses the gateway"
+        )
+
+
+@pytest.mark.parametrize("benchmark", BENCHMARKS)
 def test_target_model_is_the_only_model_the_evaluation_scope_allows(benchmark):
     """The measurement substrate is fixed: one target model, allow-listed.
 

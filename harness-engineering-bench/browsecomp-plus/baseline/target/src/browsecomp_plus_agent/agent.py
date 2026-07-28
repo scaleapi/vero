@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 from typing import Any, override
 
@@ -109,7 +110,20 @@ class BrowseCompPlusAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("BrowseComp-Plus agent requires a Harbor model")
         self._api_model = self.model_name.removeprefix("openai/")
-        self._client = AsyncOpenAI(max_retries=8)
+        # This benchmark sets task_services_use_upstream, which points OPENAI_* at
+        # the real upstream so the in-container grader can reach it. The candidate
+        # agent's metered, allow-listed gateway arrives on dedicated vars instead,
+        # and reading them is what keeps target inference on the gateway -- without
+        # this, the agent silently ran on the raw upstream credential: unmetered,
+        # and with the pinned target model unenforced.
+        gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
+        gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
+        if gateway_key and gateway_url:
+            self._client = AsyncOpenAI(
+                api_key=gateway_key, base_url=gateway_url, max_retries=8
+            )
+        else:
+            self._client = AsyncOpenAI(max_retries=8)  # OPENAI_* from the env
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:
