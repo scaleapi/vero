@@ -312,37 +312,36 @@ share a pool. `max_requests` is 200 000 on both everywhere (a full officeqa
 finalize needs ~12 000, so this is not the binding constraint either). Sizing is
 per benchmark from its own case counts; see each `build.yaml` for the arithmetic.
 
-§ **Concurrency: the binding ceiling is the target provider's generated-token
-limit, not the LiteLLM key.** Both are real, they sit at different layers, and the
-numbers are measurable rather than a matter of opinion — LiteLLM returns its own
-key limits and passes the provider's through on every response:
+§ **Concurrency scales with the number of LiteLLM keys.** The binding ceiling is
+the per-key bucket, so more keys buy proportionally more parallel runs:
 
-| layer | limit | scope |
+| counter | limit | scope |
 |---|---|---|
-| LiteLLM key (`x-litellm-key-{tpm,rpm}-limit`) | 10 M TPM, 5 000 RPM | per key |
-| Fireworks account (`llm_provider-x-ratelimit-limit-tokens-*`) | 216 k generated/min, 2.25 M uncached prompt, 14.06 M total prompt | behind the key |
+| `x-ratelimit-api_key-limit-tokens` | 10 M TPM | **per key** |
+| `x-ratelimit-api_key-limit-requests` | 5 000 RPM | **per key** |
 
-One officeqa run at `max_concurrency: 24` draws 2.90 M metered TPM — 347 k fresh
-prompt + 2.47 M cache reads + **82 k generated** — at ~182 peak RPM. Dividing
-through: LiteLLM TPM allows 3.4 runs, LiteLLM RPM 27, Fireworks uncached prompt
-6.5, Fireworks total prompt 5.0, and **Fireworks generated tokens only 2.6**. That
-last one binds, and because it is an *account* limit reached through the key,
-**adding keys does not raise it** — only a key routing to a different provider
-account would.
+One officeqa run at `max_concurrency: 24` peaks at 2.90 M metered TPM and ~182
+RPM, so **roughly 3 concurrent runs per key**, TPM-bound. Two keys comfortably
+cover the suite; three leave headroom.
 
-Practical consequences: the deepseek trio (officeqa, tau3, browsecomp-plus) is
-capped near **2 concurrent runs** however many keys are in play, while **gaia is
-free** — `gpt-5.4-mini` never touches Fireworks, so it pairs with anything at no
-cost on the binding axis. The single `502 upstream_error` seen so far (1 in 4 750
-requests at 24 slots) was Fireworks.
+**Do not read the `llm_provider-x-ratelimit-*` headers as a shared provider
+budget.** They are the provider's limits *echoed per request*, not a depleting
+meter. Proof: `remaining-tokens-prompt` reads `14062495` both on an idle probe and
+while ~120 cases were running — byte-identical, and in both cases exactly
+`limit − 5`, where 5 is that one probe's own prompt tokens. Meanwhile the
+`x-ratelimit-api_key-*` counters moved as expected under the same load
+(4999 → 4863 requests, 10 M → 9.52 M tokens). An earlier revision of this note
+mistook those headers for a Fireworks account bucket and concluded the suite was
+capped near 2 concurrent runs regardless of keys; that was wrong, and the
+per-request arithmetic above is what disproves it.
 
-A distinct `--env-file` per run is still worth having for independent LiteLLM
-TPM/RPM and attributable spend: copy `secrets.env.example` to a `*.secrets.env`
-name (that glob is gitignored; `secrets.2.env` is **not**). Modal sandbox capacity
-is a third, independent ceiling. Note that Fireworks meters cached and uncached
-prompt tokens against separate limits (14.06 M vs 2.25 M), which is why a
-workload that is ~90% cache reads sits far below its prompt ceiling while its
-generated tokens are the scarce resource.
+Give each concurrent run its own `--env-file` so the per-key buckets are actually
+independent and spend stays attributable: copy `secrets.env.example` to a
+`*.secrets.env` name (that glob is gitignored; `secrets.2.env` is **not**). Modal
+sandbox capacity is a separate ceiling. Target models still differ per benchmark
+(gaia is the only non-Fireworks one), which spreads load across providers as a
+side benefit, but it is not the constraint. The single `502 upstream_error` seen
+so far is 1 in 4 750 requests at 24 slots.
 
 `max_concurrency` is cases in flight per evaluation, raised 8 → 24 across the
 board. It is the throughput lever: finalize wall time is
