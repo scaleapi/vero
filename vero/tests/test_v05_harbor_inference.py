@@ -151,6 +151,73 @@ def test_gateway_records_cached_input_tokens(tmp_path):
     assert scope["attributions"]["eval-1"]["cached_input_tokens"] == 32
 
 
+def test_gateway_folds_anthropic_cache_tokens_into_input(tmp_path):
+    """Anthropic counts only the uncached slice of the prompt as input_tokens.
+
+    A cached optimizer turn answers ``"input_tokens": 2`` and carries the real
+    prompt in the cache siblings. Metering the bare 2 read producer input about
+    four orders of magnitude low on every live run -- output was right, so it
+    looked plausible -- and left the producer scope budget effectively unbound.
+    """
+
+    def upstream(request: httpx.Request):
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            # Streaming splits usage: input arrives nested under `message` in
+            # message_start, output accumulates in message_delta.
+            payload = (
+                'event: message_start\ndata: {"type":"message_start","message":'
+                '{"usage":{"input_tokens":2,"cache_read_input_tokens":900,'
+                '"cache_creation_input_tokens":100,"output_tokens":1}}}\n\n'
+                'event: message_delta\ndata: {"type":"message_delta",'
+                '"usage":{"output_tokens":40}}\n\n'
+            )
+            return httpx.Response(
+                200, content=payload, headers={"content-type": "text/event-stream"}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "usage": {
+                    "input_tokens": 2,
+                    "cache_read_input_tokens": 4000,
+                    "cache_creation_input_tokens": 1000,
+                    "output_tokens": 50,
+                }
+            },
+        )
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=None, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/messages",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "messages": []},
+        )
+        client.post(
+            "/scopes/producer/stream-1/v1/messages",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "messages": [], "stream": True},
+        )
+
+    scope = json.loads((tmp_path / "usage.json").read_text())["scopes"]["producer"]
+    blocking = scope["attributions"]["optimizer"]
+    assert blocking["input_tokens"] == 5002  # 2 uncached + 4000 read + 1000 written
+    assert blocking["cached_input_tokens"] == 4000  # the documented subset
+    assert blocking["total_tokens"] == 5052  # derived; Anthropic sends no total
+    streamed = scope["attributions"]["stream-1"]
+    assert streamed["input_tokens"] == 1002
+    assert streamed["cached_input_tokens"] == 900
+    # message_delta must not clobber the input that only message_start carried,
+    # and the total must follow the raised output rather than stay at 1003.
+    assert streamed["output_tokens"] == 40
+    assert streamed["total_tokens"] == 1042
+    assert scope["input_tokens"] == 6004
+
+
 def test_gateway_records_usage_without_enforcing_omitted_limits(tmp_path):
     def upstream(_request: httpx.Request):
         return httpx.Response(
