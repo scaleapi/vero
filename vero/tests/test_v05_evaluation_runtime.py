@@ -790,6 +790,65 @@ async def test_execution_error_refunds_reservation(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_engine_refund_failure_preserves_the_cancellation(
+    tmp_path: Path, monkeypatch
+):
+    """A refund that fails on its own must not replace the CancelledError.
+
+    The engine's last-line-of-defence handler shields the refund against
+    cancellation, but not against the refund raising by itself. An OSError from
+    the ledger's write then propagated in place of the cancellation, so the
+    caller's structured scope never saw the teardown signal while the
+    reservation stayed charged -- the exact leak this handler exists to prevent.
+    """
+
+    class BlockingBackend(StubBackend):
+        async def evaluate(self, *, context, request):
+            self.evaluate_calls += 1
+            await asyncio.Event().wait()
+
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = BlockingBackend()
+    evaluation_set = request().evaluation_set
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="default",
+                evaluation_set_key=evaluation_set.budget_key("default"),
+                total_runs=1,
+            )
+        ],
+        path=tmp_path / "budgets.json",
+    )
+    ledger.save()
+
+    async def failing_refund(*args, **kwargs):
+        raise OSError("durable refund write failed")
+
+    monkeypatch.setattr(ledger, "refund", failing_refund)
+
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=EvaluationDatabase(id="session"),
+        database_path=tmp_path / "database.json",
+        budget_ledger=ledger,
+        authorization_resolver=allow_all_evaluations,
+    )
+    evaluation = asyncio.create_task(
+        engine.evaluate_record(backend_id="default", request=request())
+    )
+    while backend.evaluate_calls == 0:
+        await asyncio.sleep(0)
+    evaluation.cancel()
+
+    # The cancellation wins; the refund failure is chained, not substituted.
+    with pytest.raises(asyncio.CancelledError) as raised:
+        await evaluation
+    assert isinstance(raised.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_evaluation_is_terminal_indexed_and_refunded(tmp_path: Path):
     class BlockingBackend(StubBackend):
         async def evaluate(self, *, context, request):
