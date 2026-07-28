@@ -285,16 +285,18 @@ def _kimi_gateway_args(agent: str, task: Path) -> list[str]:
     kimi-cli only accepts a model whose provider half is in its own table, and
     ``fireworks_ai`` is not; prefixing with ``openai/`` selects its
     ``openai_legacy`` provider and leaves the rest of the string as the model.
-    That provider's base URL defaults to ``https://api.openai.com/v1``, and the
-    only thing that overrides it is ``OPENAI_BASE_URL`` read *inside the agent
-    process* (``augment_provider_with_env_vars`` in kimi_cli/llm.py). The
-    compose file sets that variable on the container, but harbor hands the agent
-    an explicit environment, so without this the harness sent its scoped
-    producer token to OpenAI and got a 401 -- failing closed, so nothing leaked,
-    but unable to run at all.
+    That provider's base URL defaults to ``https://api.openai.com/v1``, so
+    without an override the harness sends its scoped producer token to OpenAI
+    and gets a 401 -- failing closed, so nothing leaks and the upstream key is
+    never involved, but unable to run at all.
 
-    Both values are set so the agent process does not depend on harbor
-    resolving the key from the launching shell's environment.
+    The override goes through ``--ak base_url``, which harbor passes to the
+    adapter's constructor and which lands in the provider block of the config
+    file kimi-cli loads. kimi-cli *also* reads ``OPENAI_BASE_URL`` from its own
+    process environment, but that never arrived: the variable is set on the
+    container and passed as an agent env var, and neither reaches the harness
+    here. Writing the config directly does not depend on any of that. The env
+    pair is still set, harmlessly, for the key.
     """
 
     if agent != "kimi-cli":
@@ -309,6 +311,8 @@ def _kimi_gateway_args(agent: str, task: Path) -> list[str]:
     except (OSError, json.JSONDecodeError, KeyError):
         return []
     return [
+        "--ak",
+        f"base_url={base_url}",
         "--ae",
         f"OPENAI_BASE_URL={base_url}",
         "--ae",
