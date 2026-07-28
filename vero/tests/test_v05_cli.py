@@ -706,7 +706,13 @@ def test_kimi_gateway_args_override_the_openai_default(tmp_path):
         encoding="utf-8",
     )
 
-    values = _kimi_gateway_args("kimi-cli", task)[1::2]
+    args = _kimi_gateway_args("kimi-cli", task)
+    values = args[1::2]
+    # --ak writes the provider block of the config file kimi-cli loads, which is
+    # the only override that actually arrived; the env pair never reached the
+    # harness process.
+    assert "--ak" in args
+    assert "base_url=http://inference-gateway:8001/scopes/p/o/v1" in values
     assert "OPENAI_BASE_URL=http://inference-gateway:8001/scopes/p/o/v1" in values
     assert "OPENAI_API_KEY=scoped-producer-token" in values
     assert not any("api.openai.com" in value for value in values)
