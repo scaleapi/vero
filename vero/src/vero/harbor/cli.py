@@ -536,7 +536,11 @@ def inference_gateway_command(config_path, host, port):
 @harbor.command("eval")
 @click.option(
     "--backend", "backend_id", required=True,
-    help="Evaluation backend to score against (e.g. the selection partition's backend; see `evals plan`).",
+    help=(
+        "Evaluation backend to score against. Must match --partition: each "
+        "partition is served by exactly one backend and asking a different one "
+        "is denied. `evals plan` lists the pair for every partition you may run."
+    ),
 )
 @click.option(
     "--evaluation-set", "evaluation_set_name", required=True,

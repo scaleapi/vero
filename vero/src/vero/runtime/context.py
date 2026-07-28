@@ -447,6 +447,10 @@ it into the program: candidate versions that track `.evals` are rejected.
                 {
                     "name": entry.evaluation_set.name,
                     "partition": entry.evaluation_set.partition,
+                    # Which backend serves this partition. `evals run` needs the
+                    # pair to match — asking one partition's backend for another
+                    # is denied — and `--backend`'s help points here for it.
+                    "backend": entry.backend_id,
                     "cases": case_count,
                     "base_selection": entry.evaluation_set.selection.model_dump(
                         mode="json"

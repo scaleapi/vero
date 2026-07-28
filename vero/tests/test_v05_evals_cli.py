@@ -113,6 +113,7 @@ async def context_dir(tmp_path: Path) -> Path:
                         "agent_selection": "arbitrary",
                         "disclosure": "full",
                         "expose_case_resources": True,
+                        "backend": "harbor-validation",
                         "cases": 12,
                         "budget": {"remaining_runs": 3, "remaining_cases": 40},
                     }
@@ -232,6 +233,7 @@ async def test_plan_shows_budget(context_dir: Path):
         {
             "evaluation": "validation",
             "partition": "validation",
+            "backend": "harbor-validation",
             "cases": 12,
             "can_evaluate": True,
             "selection": "arbitrary",
