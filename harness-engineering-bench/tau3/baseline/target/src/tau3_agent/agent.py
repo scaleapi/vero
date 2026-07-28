@@ -28,6 +28,16 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
+def _is_reasoning_model(model: str) -> bool:
+    """Whether `model` is an OpenAI reasoning model.
+
+    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
+    reasoning_effort, and every gpt-5 model rejects max_tokens. Fireworks-served
+    open models match none of these prefixes, so they keep the legacy shape.
+    """
+    name = model.lower()
+    return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
+
 MAX_TURNS = 80
 MAX_TOOL_OUTPUT_CHARS = 30_000
 PROTOCOL_VERSION = "2025-06-18"
@@ -315,15 +325,22 @@ class Tau3Agent(BaseAgent):
 
         for turn in range(1, MAX_TURNS + 1):
             turns = turn
+            # Reasoning models replaced max_tokens with max_completion_tokens and
+            # reject the old name outright ("Unsupported parameter: 'max_tokens'
+            # is not supported with this model"). Same capability test as the
+            # reasoning_effort gate below, so the two stay consistent.
+            _token_limit_key = (
+                "max_completion_tokens"
+                if _is_reasoning_model(self._api_model)
+                else "max_tokens"
+            )
             kwargs: dict[str, Any] = {
                 "model": self._api_model,
                 "messages": messages,
                 "tools": openai_tools,
-                "max_tokens": 8_000,
             }
-            # OpenAI reasoning models accept reasoning_effort; other providers
-            # (e.g. Fireworks-served open models) reject it.
-            if "fireworks" not in self._api_model:
+            kwargs[_token_limit_key] = 8_000
+            if _is_reasoning_model(self._api_model):
                 kwargs["reasoning_effort"] = "medium"
             response = await client.chat.completions.create(**kwargs)
             usage = response.usage
