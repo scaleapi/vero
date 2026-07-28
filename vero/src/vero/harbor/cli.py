@@ -262,6 +262,31 @@ def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[st
     return ["--ak", f"opencode_config={json.dumps(payload, separators=(',', ':'))}"]
 
 
+def _outer_app_name_args(
+    environment: str, config_name: str, extra: tuple[str, ...]
+) -> list[str]:
+    """Name the outer trial's Modal app so its sandbox can be found.
+
+    Inner evaluation sandboxes are already grouped by an explicit
+    ``--ek app_name=...`` in each build's ``extra_harbor_args``, but the outer
+    trial had none and so landed in Modal's default ``__harbor__`` app. That
+    costs twice: the workspace holds thousands of containers, so an unnamed outer
+    sandbox is effectively unfindable in the UI, and recovering the session from
+    a run that must be killed begins with identifying its container.
+
+    Derived from the build name (``vero/optimize-gaia-baseline`` ->
+    ``vero-optimize-gaia-baseline``) so outer trials group per benchmark. A
+    caller passing its own ``--ek app_name=`` wins.
+    """
+
+    if environment != "modal":
+        return []
+    if any("app_name=" in argument for argument in extra):
+        return []
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", config_name).strip("-")
+    return ["--ek", f"app_name={slug or 'vero'}"]
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -476,6 +501,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(_opencode_gateway_args(agent, model, task))
+        command.extend(_outer_app_name_args(environment, config.name, extra))
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(

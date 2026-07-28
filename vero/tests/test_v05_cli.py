@@ -348,3 +348,28 @@ def test_opencode_non_openai_provider_gets_a_gateway_base_url(tmp_path):
     assert _opencode_gateway_args("opencode", "claude-sonnet-5", task) == []
     # A task compiled without a gateway simply gets no override.
     assert _opencode_gateway_args("opencode", "anthropic/x", tmp_path / "none") == []
+
+
+def test_outer_modal_trial_gets_a_named_app():
+    """The outer trial must not land in Modal's anonymous default app.
+
+    Inner eval sandboxes are already grouped by app_name via each build's
+    extra_harbor_args, but the outer trial had none, so it went to __harbor__
+    alongside every other workspace container -- ~1800 of them -- which makes it
+    unfindable in the UI and turns "copy the session out before killing this run"
+    into a search problem.
+    """
+    from vero.harbor.cli import _outer_app_name_args
+
+    assert _outer_app_name_args("modal", "vero/optimize-gaia-baseline", ()) == [
+        "--ek",
+        "app_name=vero-optimize-gaia-baseline",
+    ]
+    # Docker outer trials are found via `docker ps`; no app applies.
+    assert _outer_app_name_args("docker", "vero/optimize-gaia-baseline", ()) == []
+    # An explicit choice wins.
+    assert _outer_app_name_args(
+        "modal", "vero/optimize-gaia-baseline", ("--ek", "app_name=mine")
+    ) == []
+    # A name that is entirely punctuation still yields a usable app.
+    assert _outer_app_name_args("modal", "///", ()) == ["--ek", "app_name=vero"]

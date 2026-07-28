@@ -260,7 +260,13 @@ def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkey
 
     config_path = tmp_path / "build.yaml"
     config_path.write_text("task_name: unused\n")
-    config = SimpleNamespace(harbor_requirement="harbor[modal]==0.20.0", agent_env={})
+    config = SimpleNamespace(
+        harbor_requirement="harbor[modal]==0.20.0",
+        agent_env={},
+        # Real configs always carry a name; the outer trial derives its
+        # Modal app name from it so the sandbox is findable.
+        name="vero/stub-benchmark",
+    )
     observed = {}
 
     def compile_task(_config, output):
@@ -313,7 +319,13 @@ def test_harbor_run_env_file_secrets_reach_subprocess_not_command_line(
     config_path.write_text("task_name: unused\n")
     env_file = tmp_path / "secrets.env"
     env_file.write_text("MODAL_TOKEN_ID=mt-id\nMODAL_TOKEN_SECRET=mt-secret\n")
-    config = SimpleNamespace(harbor_requirement="harbor[modal]==0.20.0", agent_env={})
+    config = SimpleNamespace(
+        harbor_requirement="harbor[modal]==0.20.0",
+        agent_env={},
+        # Real configs always carry a name; the outer trial derives its
+        # Modal app name from it so the sandbox is findable.
+        name="vero/stub-benchmark",
+    )
     observed = {}
 
     def compile_task(_config, output):
