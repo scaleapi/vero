@@ -15,6 +15,3 @@ wheels/
 secrets.env
 *.secrets.env
 !*.example
-
-# Local benchmark scoping notes (paper planning; not tracked)
-harness-engineering-bench/benchmark-scoping.md

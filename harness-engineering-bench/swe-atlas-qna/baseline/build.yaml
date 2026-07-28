@@ -1,0 +1,153 @@
+name: vero/optimize-swe-atlas-qna-baseline
+description: >-
+  Improve a codebase investigation agent on canonical SWE-Atlas-QnA tasks.
+  The target must inspect /app without modifying it and write a comprehensive,
+  evidence-backed answer to /logs/agent/answer.txt.
+agent_repo: target
+task_source: scale-ai/swe-atlas-qna@sha256:0e26bc0313ae2fc6f912b67b928e648c7f20d17d91f765f702a93042ce5be0e4
+task_manifest: ../partitions/manifest.json
+agent_import_path: atlas_agent.agent:AtlasAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 100
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 196
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    baseline_reward: 0.0676  # re-pinned 0.061 / 0.102 / 0.040 (sd 0.0257); was 0.0966. See runs/BASELINES.md
+    failure_value: 0.0
+    max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the pinned baseline, which was
+    # itself pooled over 3 rounds. Without this the candidate carries ~sqrt(3) more
+    # standard error than the floor it is judged against.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: swe-atlas-qna
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: fireworks_ai/gpt-oss-120b
+environment_name: ${inner_env:-modal}
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default.
+# keepalive: these images set ENTRYPOINT ["/bin/bash"], which Modal prepends to the
+# sandbox command; harbor's default keepalive ["sh","-c","sleep infinity"] then dies
+# instantly (bash interprets the sh binary as a script) and every trial fails with
+# "Sandbox already shut down". Passing bash's own args keeps the sandbox alive.
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", 'keepalive=["-c","sleep infinity"]']
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Unreachable: worst case is ceil(150/24) x 10800 = 75600s, every
+# finalize trial (50 held-out x n_attempts=3) hitting its own cap. Assumes
+# max_concurrency=24; recompute if that drops.
+timeout_seconds: 90000
+# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
+# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
+# clock the benchmark intends. Harbor times agent setup, environment build and
+# verification on separate clocks with separate multipliers, so none of them
+# eat into this budget and no buffer is warranted.
+case_timeout_seconds: 10800
+task_agent_timeout_seconds: 10800
+max_concurrency: 24  # 8 -> 24; see officeqa for the measured headroom argument
+error_rate_threshold: 0.1
+# Unreachable: worst-case finalize (75600) + worst-case rescore_top_k=3
+# validation rescore (75600). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 176400
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL  # self-hosted or cloud W&B
+
+wandb:
+  project: harness-engineering-bench  # one project for the whole suite
+  group: swe-atlas-qna  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-swe-atlas-qna}  # per-launch label, e.g. --param wandb_run=swe-atlas-qna__claude-sonnet-5
+  tags: [swe-atlas-qna]
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    max_concurrency: 8
+  # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
+  # the spend control, so a token cap only needs to stop a runaway.
+  evaluation:
+    allowed_models: [fireworks_ai/gpt-oss-120b]
+    max_requests: 200000
+    max_tokens: 2000000000  # 296 agent case-runs (100 dev + 196 validation)
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  finalization:
+    allowed_models: [fireworks_ai/gpt-oss-120b]
+    max_requests: 200000
+    max_tokens: 2000000000  # 50 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
+# The rubric judge runs inside the Modal task container and cannot reach the
+# compose-internal gateway; it gets the real upstream on OPENAI_* while the
+# candidate agent keeps the metered gateway on VERO_AGENT_INFERENCE_*.
+task_services_use_upstream: true
+# ACCEPTED EXPOSURE (non-adversarial optimizer): with isolation off, candidate
+# harness code shares the sidecar uid, so it could read the upstream key and
+# the held-out session state. Runs using this config get a post-run leakage
+# audit of every candidate version. Proper fix: per-role egress isolation.
+harness_user: null
+# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
+# Claude Code's Bash tool caps a single call at BASH_MAX_TIMEOUT_MS (default
+# 600000=10min), well under one inner eval, which pushed the officeqa optimizer
+# into --detach + background-poll + end-turn -- and a headless --print run is
+# never re-woken, so the search died there. Raise the cap so a whole eval fits in
+# one blocking call. The background-task vars are defence in depth only: they gate
+# *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
+# parameter, which the model can still choose. The instruction forbids that.
+agent_env:
+  # Above this benchmark's widest single eval: a full validation pass is
+  # ceil(49/24) x 10800 = 32400s worst case.
+  BASH_MAX_TIMEOUT_MS: "39600000"
+  BASH_DEFAULT_TIMEOUT_MS: "39600000"  # same as max: an un-timed eval must still block
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)
+  # default to symlinking their entry point into /usr/local/bin, which the
+  # unprivileged optimizer user cannot write: "Failed to install executable
+  # ... Permission denied". npm/nvm-based harnesses (claude-code, opencode)
+  # are unaffected, so this only bites when the harness changes.
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+

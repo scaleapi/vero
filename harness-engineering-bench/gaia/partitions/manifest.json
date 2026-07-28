@@ -1,0 +1,1187 @@
+{
+  "schema_version": 1,
+  "task_source": "gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761",
+  "dataset_name": "gaia/gaia",
+  "dataset_version": "sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761",
+  "seed": "vero-gaia-v1",
+  "ratios": {
+    "development": 0.2,
+    "validation": 0.4,
+    "test": 0.4
+  },
+  "stratified_by": [
+    "level",
+    "attachment_presence"
+  ],
+  "partition_counts": {
+    "development": 33,
+    "validation": 66,
+    "test": 66
+  },
+  "partition_digest": "sha256:438f4a6c2c8866a230b9f469c713dfa08be14950dcf2bea35dbbc820e22f8c33",
+  "stratum_counts": {
+    "level1:attached": 11,
+    "level1:none": 42,
+    "level2:attached": 20,
+    "level2:none": 66,
+    "level3:attached": 7,
+    "level3:none": 19
+  },
+  "tasks": [
+    {
+      "name": "gaia/00d579ea-0889-4fd9-a771-2c8d79835c8d",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:7ae5898dd8372969c70b6def080bfdcfe2c8327fb82f47f16df556962f1580d2",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/023e9d44-96ae-4eed-b912-244ee8c3b994",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:290bb90950b1972217d1c9743f3b0d348920f6e0dde8bea22b4182aa06a30008",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/0383a3ee-47a7-41a4-b493-519bdefe0488",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:64e95161a34f008e2a0ae712fb727d600ac2a64fd0d2ad7f4ce2cfb1fdfe57ab",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/04a04a9b-226c-43fd-b319-d5e89743676f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:2542609e64509182141341ddb08b398df78d0cba19fb9a883f0c707bde4fbc57",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/0512426f-4d28-49f0-be77-06d05daec096",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:c15175c6946aec6cb59e9e6a4e9e81cb7f630123923b630998fa478c05201b26",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/05407167-39ec-4d3a-a234-73a9120c325d",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:d56953958a909a27e53bd9ab996dafa0e1c682fe17cb131c874701377de8fc0e",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/076c8171-9b3b-49b9-a477-244d2a532826",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:172ed81974cfc759240784bb87036c83242e9dcceaa532d7ada64d8e11280210",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/08c0b6e9-1b43-4c2e-ae55-4e3fce2c2715",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:59b1701558680524a084da6afbb06cd928a16c2f4c521693380862fac2db8cce",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/08cae58d-4084-4616-b6dd-dd6534e4825b",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:16432ba7798ad5a23fec0ef9ef3d62a61836a89bccd63524e158a4706b87e75e",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/08f3a05f-5947-4089-a4c4-d4bcfaa6b7a0",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:80c4497c62dd961d1aab13d3916e1fbc4403ce84d1f91c13600216759660fd71",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/0a3cd321-3e76-4622-911b-0fda2e5d6b1a",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:911d58478041914b9ed959f4706d6d696fc1602107bb50f54abc8d702f67d7f3",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/0a65cb96-cb6e-4a6a-8aae-c1084f613456",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8ac56e69d057da3ec41956edd7d2c60c54b544ea37f9d532b8434c10d9541417",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/0b260a57-3f3a-4405-9f29-6d7a1012dbfb",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:23640a31b124b10ddec76bcac067da0d7725388fee8ef5605a858750650fc247",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/0bb3b44a-ede5-4db5-a520-4e844b0079c5",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:d40e60ed9bedc848b2f1dfadb031c1fc241bb5e8aaa34b53d37cf82955b12c9c",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/0bdb7c40-671d-4ad1-9ce3-986b159c0ddc",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:2537e21c6a7d1e6e2e74f0b78b57f5c4c94fec8b2944af6abf035d5979f26d98",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/0e9e85b8-52b9-4de4-b402-5f635ab9631f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:3ddd0e2357f397dcf210cb1d997a80846e681c7e56c5192be5156d0d69e82fe3",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/0ff53813-3367-4f43-bcbd-3fd725c1bf4b",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:6c800d7b6c4f87088445baeef9131e032d5082022359a6ace9c60119f8505711",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/114d5fd0-e2ae-4b6d-a65a-870da2d19c08",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:889dc5d4d8b003ae6f557d3b62952984416895c858052732f9bf560154a373a9",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/11af4e1a-5f45-467d-9aeb-46f4bb0bf034",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:27d6343d1d760cfc2ac8c19471623e71880c2039004b3a0b016d28302d9e9828",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/14569e28-c88c-43e4-8c32-097d35b9a67d",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b0c030b7931e3a86ab083014db0faaaef0f3a0705b2ea761dcd34d886dd4e5a7",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/16d825ff-1623-4176-a5b5-42e0f5c2b0ac",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:ba76e09ac5fcf0d847865bf43615178180942b46ae06ef79ce39f5497bd53856",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/17b5a6a3-bc87-42e8-b0fb-6ab0781ef2cc",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:ea6889533558470725e67a0b5a6bd1157c052441c23b4e4b746584c547356eff",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/1dcc160f-c187-48c2-b68e-319bd4354f3d",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:bf7be6c354fef6e84784818ebf8c69b44f2bef1c56e8717142eff550e7da787c",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/1f975693-876d-457b-a649-393859e79bf3",
+      "level": "level1",
+      "attachment": "mp3",
+      "ref": "sha256:ba7fdfcdb9dc6966330ed42e0c301f0acd2da92332bbab69d44dbb9ee59efe78",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/20194330-9976-4043-8632-f8485c6c71b2",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:d9dee8dea69cf87983bf0ba5fcad6e5651d7ff316f0c6be977630e28e796dbce",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/23dd907f-1261-4488-b21c-e9185af91d5e",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:3b65c6ab9f0093fe4c4bbae9c7c00f7f63b0e9f84adb07826469b2bbc500bc4d",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/27d5d136-8563-469e-92bf-fd103c28b57c",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:d3c2af0673deb1d4190c0276941c170d720d51b64f3b763e053527612e7c4637",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/2a649bb1-795f-4a01-b3be-9a01868dae73",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8004a391f1b3cc1ed13f3a851173820d820ba31d35f04385f10e97a603061626",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/2b3ef98c-cc05-450b-a719-711aee40ac65",
+      "level": "level2",
+      "attachment": "mp3",
+      "ref": "sha256:73b8cff3f94adc89fc7ad6ae0fe536da08ae1351fd1001803b40fe811a270cea",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/2d83110e-a098-4ebb-9987-066c06fa42d0",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:5516c5ccf367e6615d89b6bbb341e2adae216e04ca5d32c237bebb82b172da66",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/2dfc4c37-fec1-4518-84a7-10095d30ad75",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:2100022187d8ea4a32365584eee2b8283959599727bb06079f9bc32bee0f45f6",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/305ac316-eef6-4446-960a-92d80d542f82",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:63836872b5db17057893315d2878f07ba942b9ecada53698d41bce3651e97d8b",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/32102e3e-d12a-4209-9163-7b3a104efe5d",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:077018ca1cfd0fc915149fd1468f11d5b21be2a163c46c646a6427f8f2e0066f",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/33d8ea3b-6c6b-4ff1-803d-7e270dea8a57",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b46082df3f879f2fade63b274bf12a05c74ff85be0954cd90e0efbaf00be173c",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/3627a8be-a77f-41bb-b807-7e1bd4c0ebdf",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:a081886a7815ca26e3638bdb325727b430808a3b5ec32c12dc4c18276eab49ab",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/366e2f2b-8632-4ef2-81eb-bc3877489217",
+      "level": "level2",
+      "attachment": "pdf",
+      "ref": "sha256:e0ac1f2bd55eb2d32db78f37418ec762d3c8ba878c125c0751b87ea9e71a20c7",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/384d0dd8-e8a4-4cfe-963c-d37f256e7662",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:4d5105da084f822ac2d497b6303a3f4814173da633b18d88e7de206dd2b21eb7",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/389793a7-ca17-4e82-81cb-2b3a2391b4b9",
+      "level": "level1",
+      "attachment": "txt",
+      "ref": "sha256:83a0c0bc727c3136b328958352bad22e911ffe759e16eec28d37655ced845b56",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/3cef3a44-215e-4aed-8e3b-b1e3f08063b7",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:aebed0b98a77a578b3d6c16c5b77e945278167bab546c111fe5f2ebc5d40a889",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/3da89939-209c-4086-8520-7eb734e6b4ef",
+      "level": "level3",
+      "attachment": "xlsx",
+      "ref": "sha256:8895e05692c5f5f3c4bc0858b60cd6aea33d913afcfda47a7c983d3fd76f797e",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/3f57289b-8c60-48be-bd80-01f8099ca449",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:e628ff0b7f71ace53540d53380d1a923c8a9af5f8b282edd5177c622152c51bf",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/3ff6b7a9-a5bd-4412-ad92-0cd0d45c0fee",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:40df349808307f9fc8f30dc6819fc984ea62ffc92ce55afcf654f3037be0e3b0",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/42576abe-0deb-4869-8c63-225c2d75a95a",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:326de9c92b54e69c1ae8d62d6126d0422e4174a984bb0f8163c316a574cc6dc8",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/42d4198c-5895-4f0a-b0c0-424a66465d83",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:557485e291c0e847d1c84bb0013e5c7df8035870221049db81bd7dffe36e2815",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/46719c30-f4c3-4cad-be07-d5cb21eee6bb",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:f278ed4e081730e9a453e3855e3f6294cb1012c3e25d66261b558c053685c8fe",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/48eb8242-1099-4c26-95d4-ef22b002457a",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:6f633445cf53cfe9435a88f8faac1d1bb35277ef5a309306b79e750fb2d942a0",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/4b650a35-8529-4695-89ed-8dc7a500a498",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:c85a6d93d87e2af1b5f1c62d1b03c0d35c86b78d6a872bd9f6668abec674bbeb",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/4b6bb5f7-f634-410e-815d-e673ab7f8632",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:8ba146cd93affb66ffc9caf61f177aa0f3d083f537d35ce468b9195fbed72397",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/4d0aa727-86b1-406b-9b33-f870dd14a4a5",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:3f5406b802caeec1cc0aa1db813878ddba67286b02c8230aff1580037681d687",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/4d51c4bf-4b0e-4f3d-897b-3f6687a7d9f2",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:bdf996a0e18dc52b3c21c9eb2c66ae504af084099a586fdc691eeffce7afbe69",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/4fc2f1ae-8625-45b5-ab34-ad4433bc21f8",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:c44e4e075b9cc14c9ad85c2f2ed0da1515d8087bb61dd76422f158abfd5935e5",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/50ad0280-0819-4bd9-b275-5de32d3b5bcb",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:1337602e9422be6c149badf61a4eb495bb24b4005f91da5c5dd8a47866ca2f3d",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/50ec8903-b81f-4257-9450-1085afd2c319",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:78a4bb83bb0bc0e20d7841b7c83ed44ac126feefd9ec2900d15f0a3564319e65",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/50f58759-7bd6-406f-9b0d-5692beb2a926",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:bd59a25461f5e9435edc1c42fe162712c57f25781bd6b3aacb4b63a042c6bfd7",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/5188369a-3bbe-43d8-8b94-11558f909a08",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:cc5e7353d87f63e52c5d6eb3d861d1bf188c8d69f686b76d5c668b0cb6d87b6c",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/544b7f0c-173a-4377-8d56-57b36eb26ddf",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:6e9a80efcfc2c7edaf104e5db00aefe1396f38197188a912a5b81082e66cfa66",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/54612da3-fd56-4941-80f4-5eb82330de25",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:cccb01f7e448846cf94e8e8f23f271773181285635dfe486e3385092d2f0486e",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/56137764-b4e0-45b8-9c52-1866420c3df5",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8904e6f0256b0ec746ef713c2343c31aa168271a1089bd3948d1add088822649",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/56db2318-640f-477a-a82f-bc93ad13e882",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:2fe8424b37cd4f6a17cf49b5324971909132acd2f7a8980c1a44865affa73cbe",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/5a0c1adf-205e-4841-a666-7c3ef95def9d",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:3d4b8b82f7e92efa6c99b9736f95215cab928d80104f36c1fda1311bd1f3193b",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/5b2a14e8-6e59-479c-80e3-4696e8980152",
+      "level": "level3",
+      "attachment": "jpg",
+      "ref": "sha256:78338883e23c6db6bbbf96b3adba52653984002d6171d41585cc540ae00b4c5c",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/5cfb274c-0207-4aa7-9575-6ac0bd95d9b2",
+      "level": "level1",
+      "attachment": "xlsx",
+      "ref": "sha256:1f75764a274fc79de13495d7e5ca2c7320c9dcfe4996d4b1d8b0128273896a9f",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/5d0080cb-90d7-4712-bc33-848150e917d3",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:17bf0154d1240fe574ffea76a12868591c976e47a08b55c0e4aa7fe51cf79b0c",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/5f982798-16b9-4051-ab57-cfc7ebdb2a91",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:66da4ed6acdd795885e6e55cb463454fd63adfc19d3d5e066a345d532cefe0ba",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/624cbf11-6a41-4692-af9c-36b3e5ca3130",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:6daf38067c1dce8d32d088559126eda93728358a6dae2165efa35ced5617f3f2",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/6359a0b1-8f7b-499b-9336-840f9ab90688",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:92c5c9ae3a7919ae8db25344fea90f86b492a1b2fc730fe49760b6f01a7c6667",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/65638e28-7f37-4fa7-b7b9-8c19bb609879",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:deeeefac2ad2461e28411d2c59c445c0a7d5c93d051110bc7e8e694267b05207",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/65afbc8a-89ca-4ad5-8d62-355bb401f61d",
+      "level": "level1",
+      "attachment": "xlsx",
+      "ref": "sha256:5a44c663acbe09bdb215f2cb6722f4eee729786451453e8b5bad064bccfdf58a",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/65da0822-a48a-4a68-bbad-8ed1b835a834",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:818d2d6f4df8aa085f088eeae4ebc38d27098a5bd816926eacd280484cf436a3",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/676e5e31-a554-4acc-9286-b60d90a92d26",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:16863c1abf9def12ee151b4d9b2b569225b0083eebbbbfccce92872055bbd2da",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/67e8878b-5cef-4375-804e-e6291fdbe78a",
+      "level": "level2",
+      "attachment": "pdf",
+      "ref": "sha256:2b8025adbeab71174bc8782cb931bdd26d72a51ab7ca6344c981ff43f0bdd082",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/6b078778-0b90-464d-83f6-59511c811b01",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:262d16fa5cff6617a69427684e0714ec2b1a0ff0306238996e87567210c3d54d",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/6f37996b-2ac7-44b0-8e68-6d28256631b4",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:2a1cddcbfd93158b1de4a467d50d7b9aad32076ae1bccca17a6759d9b59dfe37",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/708b99c5-e4a7-49cb-a5cf-933c8d46470d",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0e2a0a82400c70245351d928fc7f84e802aa92faa4095a46ef10af6827e84502",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/71345b0a-9c7d-4b50-b2bf-937ec5879845",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:1b113ba4b0852373707ac73d3961b7549698107c612e7619c1ba3e190cf49a24",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/72c06643-a2fa-4186-aa5c-9ec33ae9b445",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:6f7c249bcaba279f7aa33ea836c32485ee1b21083943044a1236b82a80302522",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/72e110e7-464c-453c-a309-90a95aed6538",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:4199afa58d890dd96f8fa151d9e9a1aae3bf1c2f1794a23caefc59f098fdaa11",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/73c1b9fe-ee1d-4cf4-96ca-35c08f97b054",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b53b44169f614b45fb4127736d2d6ad243b8dcb221f227aecfc09134fd275f1e",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/7619a514-5fa8-43ef-9143-83b66a43d7a4",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:beac04fa1c58c7bd78875789718c82c5849403185bda66aca53df0ef73f78595",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/7673d772-ef80-4f0f-a602-1bf4485c9b43",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:82c1a5742c7aef6098ff956cadeba65194da4f2c4da516f35e404e96065fdc02",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/7a4a336d-dcfa-45a0-b014-824c7619e8de",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:a9440757ddc60c58b814829d85302f7699cb7cd414a362f526100b4f1dede492",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/7b5377b0-3f38-4103-8ad2-90fe89864c04",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:013d01082181531eab45b5bcf6daba1f682e85022a97a512e2a5a521d633129d",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/7bd855d8-463d-4ed5-93ca-5fe35145f733",
+      "level": "level1",
+      "attachment": "xlsx",
+      "ref": "sha256:ce812c79f6e15bbc6f722576fb91d557d0ac058f38016b4aba47e8bb7fa49a62",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/7cc4acfa-63fd-4acc-a1a1-e8e529e0a97f",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:3c2598c04b828e687c8c25d342ae6a1a570dcf2f068c4c73230fbae92d92cce1",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/7d4a7d1d-cac6-44a8-96e8-ea9584a70825",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:b687bf69f3b59e0987e038c77edce9f43672cc5fa2d377d766fcd50ed464787f",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/7dd30055-0198-452e-8c25-f73dbe27dcb8",
+      "level": "level2",
+      "attachment": "pdb",
+      "ref": "sha256:c6c0d1e6da52dd3f3aeeff8b163cefee38d6a8b9fe52df98553838c1f5b343c4",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/8131e2c0-0083-4265-9ce7-78c2d568425d",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:ddc5d6231dfccdfc4cb5d7d3c94640a98b1d2ae70220442b6cfd73cc40572467",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/840bfca7-4f7b-481a-8794-c560c340185d",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:8452bd8b6b60fe0c39cfae2f1f0d3e6366efdb87f0593f134f36bd554fa38e52",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/851e570a-e3de-4d84-bcfa-cc85578baa59",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:510aa9d9f2397b84c3ed4fe449afea76ff476054192aab180d349ca67cd729ef",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/853c8244-429e-46ca-89f2-addf40dfb2bd",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b2d22c593ea0a3341dfa4dc8f74411afab747d8b6035354f0c464629926d3482",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/872bfbb1-9ccf-49f6-8c5f-aa22818ccd66",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:99221610bfd833d50309a8011b17dedd0f27155459d6610a960a1e03ea50b2b1",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/87c610df-bef7-4932-b950-1d83ef4e282b",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:bf4c7bd091d12deac9bbe1eb9fac8e1754acaa7043f10bc58e67cb34af7e6df8",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/8b3379c0-0981-4f5b-8407-6444610cb212",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8615481ee6de2cd7cf09ffc8ff7f87c2b999eb244c7afca7b93d6dacb4c4e932",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/8d46b8d6-b38a-47ff-ac74-cda14cf2d19b",
+      "level": "level3",
+      "attachment": "csv",
+      "ref": "sha256:f1e7ae146ae5217658dcadcb7b5eba928f70715225514588c1e842881fe282a0",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:e6c566e5d1963953b5a7ef0857953ac61f4610cfc04ebfa69ac8b53197f91c67",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/8f80e01c-1296-4371-9486-bb3d68651a60",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:bff51865c3a2014f405432eee008eb1da2a113a885f84b9d819a695eb3ac9f94",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/9318445f-fe6a-4e1b-acbf-c68228c9906a",
+      "level": "level1",
+      "attachment": "png",
+      "ref": "sha256:36046518d2cadcee74af45a2034ab492d0ed42be1a10dce1496f41c061b71f6f",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/935e2cff-ae78-4218-b3f5-115589b19dae",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:1f20969401d4fa5a28e860eed8f127ca90d1831e2105b432785ff15d9e9d711d",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/983bba7c-c092-455f-b6c9-7857003d48fc",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:3fd5d38c43d8f676a1c9dcbb45604bda184e6d69ab9a711e9b21246d471d6b50",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/99c9cc74-fdc8-46c6-8f8d-3ce2d3bfeea3",
+      "level": "level1",
+      "attachment": "mp3",
+      "ref": "sha256:d84f1e6653c5546cff901e945293dcf463e975262b630c521fe8763f52f502c4",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/9b54f9d9-35ee-4a14-b62f-d130ea00317f",
+      "level": "level3",
+      "attachment": "zip",
+      "ref": "sha256:99aab4c2b5163d28df972ad8b5d12dcba76a4868c09d764d4b8b97889a66717d",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/9d191bce-651d-4746-be2d-7ef8ecadb9c2",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:f8b865b3b2aa832f0a68dfa5e92087bd4622ed175d61f54925bf700ec57be42e",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/9e1fc53b-46ff-49a1-9d05-9e6faac34cc5",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:a17578c0e5485542d2e6fe823f5da7b782bd67799b56d6ead384f0bc3419a0dd",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/9f41b083-683e-4dcf-9185-ccfeaa88fa45",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0bea003ddcf5c60d922280b32018cecc1aa1834566a7fb7fc653640fe4be1055",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/a0068077-79f4-461a-adfe-75c1a4148545",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:2c97c000e0696bd71e5b62a1f951cc8f18bd9ce3db14f3fe880c6f5d36d07f9a",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/a0c07678-e491-4bbc-8f0b-07405144218f",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:d31056f3e5c0bf8b09416904a3e5c034e7cbcde9e19a0c0d3aab33700bf4ab6b",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/a1e91b78-d3d8-4675-bb8d-62741b4b68a6",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:5fc22ea13907e628a45521ada9b6e0f24acd761f4032ebd49d266f38582a18dd",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/a26649c6-1cb2-470a-871e-6910c64c3e53",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:ab28b19e38e57f50502fcee403d537391cbfd0e225d1c7f6fd444a9ea39f745a",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/a3fbeb63-0e8c-4a11-bff6-0e3b484c3e9c",
+      "level": "level1",
+      "attachment": "pptx",
+      "ref": "sha256:e8e91d5ef08a52df0a76b7616005ee6b8ef7288a1415284f04bc7f698d417233",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/a56f1527-3abf-41d6-91f8-7296d6336c3f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:70d492bf5223fe722bc28f9244273902ec6be1a246a5eaa35c5986cd1e2dc703",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/a7feb290-76bb-4cb7-8800-7edaf7954f2f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0a074ef262c24a3d23cd654421c23a3d0517ddc33b5454ae95384b87f6a5f396",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/ad2b4d70-9314-4fe6-bfbe-894a45f6055f",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:56cc7e7b7b9504b711c8414fdfe5b3ad2486430beba1ff9381eed9bce63ae37f",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/ad37a656-079a-49f9-a493-7b739c9167d1",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:10f9ea993af9688b0d2c8edfc34c9ee2a9aa7b318970893f96651ce1b2e87abd",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/b2c257e0-3ad7-4f05-b8e3-d9da973be36e",
+      "level": "level2",
+      "attachment": "jpg",
+      "ref": "sha256:5acbc47f57367446b49998893bd7a50d3537d8c631be1145d62dd34684e28f53",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/b415aba4-4b68-4fc6-9b89-2c812e55a3e1",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:ed31113948e87302caacb3b07bc55bb39abc936a0dbb5ce210cbccb5c98aa2a3",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/b4cc024b-3f5e-480e-b96a-6656493255b5",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:bccf9e5b8bad8adceb88247b2e3f56503031526210ae5e8f966b090fc5878e68",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/b7f857e4-d8aa-4387-af2a-0e844df5b9d8",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:a58d184a288ce331910293414ae133f35b0ced91cd95316513cf7a46f55f5cae",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/b816bfce-3d80-4913-a07d-69b752ce6377",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:0cd08fcf88d4ffbc905bb267fb48f513ed977c33a6274ec21fe3a1f7f12640fc",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/b9763138-c053-4832-9f55-86200cb1f99c",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:2318435467dc161c4df028d419aaa8e562350f6b2b1306b1c83505d9c3ee6136",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/bda648d7-d618-4883-88f4-3466eabd860e",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:d54c2519f0319ddc4e4247cf50bb0969e355db36f936c6097cec4e94aa84dddc",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/bec74516-02fc-48dc-b202-55e78d0e17cf",
+      "level": "level3",
+      "attachment": "jsonld",
+      "ref": "sha256:223de2cb0c498dcc2e525022cc3b745880848e16fe82ee5f74b04f27b17e71aa",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/bfcd99e1-0690-4b53-a85c-0174a8629083",
+      "level": "level2",
+      "attachment": "zip",
+      "ref": "sha256:294f9e34e648c1a3961d34189c9805ee804dfde6d57e038c4a8a9d7c4ca37471",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/c365c1c7-a3db-4d5e-a9a1-66f56eae7865",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:1296b528ecf3bdbca72701176117d49d7ab356491e4b3f0b82720924e55e0544",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/c3a79cfe-8206-451f-aca8-3fec8ebe51d3",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:fc5c1707643953a3059750388b8be87d01e6a35b5627020dc68363526fc6653b",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/c526d8d6-5987-4da9-b24c-83466fa172f3",
+      "level": "level3",
+      "attachment": "xlsx",
+      "ref": "sha256:f9d93627f818124ad8ca3c7c2c726529c44da35e7618acda2909e90dae61a055",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/c61d22de-5f6c-4958-a7f6-5e9707bd3466",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:54a876252a6abe28450ab73a8329a684af7453d2daef7490552b265164caf304",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/c714ab3a-da30-4603-bacd-d008800188b9",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:6ed22d515457815f090ce964c9a2f75eb3df5ac8878a865e49f3e5bea8c31e7d",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/c8b7e059-c60d-472e-ad64-3b04ae1166dc",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:3f427543a0be7bfb6adb735637594d69f0ffc312f49ccab3be8194382a727ecb",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/cabe07ed-9eca-40ea-8ead-410ef5e83f91",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:9d6b1507cd434db3bd6a02e42e869ca0d62cd9155a6e9e263394179aa79d4ad1",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/cca530fc-4052-43b2-b130-b30968d8aa44",
+      "level": "level1",
+      "attachment": "png",
+      "ref": "sha256:553dc685141e4b9cd5615ef45130229e0fb1f1c973f3af3542430ec5963cd573",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/cca70ce6-1952-45d2-acd4-80c903b0bc49",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:ee6a5c17bbf37875d0a0fdb04cb00b90c03b42dc2bc1a8070afed1af186e794e",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/cf106601-ab4f-4af9-b045-5295fe67b37d",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:e1a4794c0a812bbb2b5ec2e2588bc432b8e8216bddb2e92cffcccac8626c50a1",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/cffe0e32-c9a6-4c52-9877-78ceb4aaa9fb",
+      "level": "level1",
+      "attachment": "docx",
+      "ref": "sha256:f7720bd22a9163b2bad004697f703d284bcc1e842566a99dbf969f57f86cdfae",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/d0633230-7067-47a9-9dbf-ee11e0a2cdd6",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:1ac0cf89d09a89026a01f2d80dcfd2411844b64b872061fd63f88d70e7dbf03a",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/d1af70ea-a9a4-421a-b9cc-94b5e02f1788",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b8a609acbc032a3b1baa6a27542fca1276b60998c5f66073d72a608979634022",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/d5141ca5-e7a0-469f-bf3e-e773507c86e2",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:858e48feb2d97317bc2c5bfc6c69be83838c66c7d0aa79d3b411637e494141d3",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/d700d50d-c707-4dca-90dc-4528cddd0c80",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:772dc1e744cdc8886a98894e4228cc0b71c54b136a9e75265ddc1f1ebbad3fea",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/d8152ad6-e4d5-4c12-8bb7-8d57dc10c6de",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:4e10b843f33da8ea320632b0a030f5aee88e265fcfe0e629f8f1ecb0a2d4b60e",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/da52d699-e8d2-4dc5-9191-a2199e0b6a9b",
+      "level": "level3",
+      "attachment": "xlsx",
+      "ref": "sha256:f412ab2d22fbc2f3a0c1b27df456743e7243b0b263bd87bf8da16cf41582dd97",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/db4fd70a-2d37-40ea-873f-9433dc5e301f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0ce630d5bc26131004fb82d8021fe734bca202be24bc682aed01c3b8ea188388",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/dc22a632-937f-4e6a-b72f-ba0ff3f5ff97",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:3d70899ac1d5a9b374c6105de158d04cfff8a1b1e9ae7a7810d6c366ce9a26b9",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/dc28cf18-6431-458b-83ef-64b3ce566c10",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:18038a9be2a133cfded91738b25adecb8f46188466a862c6f94ca9e50e0a9b09",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/dd3c7503-f62a-4bd0-9f67-1b63b94194cc",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b5e30cb41f860f3312a0d9129a08256e04caa78be7b5e83a842db1252fc7a2fd",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/de9887f5-ead8-4727-876f-5a4078f8598c",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:fe4e94fc1c8e307706449b26fc9ab220dbca09440aecd66f0c67e784c6118c76",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/ded28325-3447-4c56-860f-e497d6fb3577",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8ccdbab98c981be4e0e9141e0c8341e13929ffa670f3f932ebc9682c6aaca9a5",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/df6561b2-7ee5-4540-baab-5095f742716a",
+      "level": "level2",
+      "attachment": "png",
+      "ref": "sha256:8c20387fdf17eb0845db03b5538ea3b21f09716beb8247d69319e088e3b08b22",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/e0c10771-d627-4fd7-9694-05348e54ee36",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:759d3d285b087df2757f73c800c7f34d7f24bdb8131edebfa54eea6fec04d9a0",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/e142056d-56ab-4352-b091-b56054bd1359",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:d4ed79c507b356b75527d990155e6d214d2f9ce2b1d3dde323147bcd593d6a36",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/e1fc63a2-da7a-432f-be78-7c4a95598703",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:1e84751bf302e22f535e80ab0921affc46c48a1cc534352bd355cbc32ff8c841",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/e29834fd-413a-455c-a33e-c3915b07401c",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:f3e351d4f23c37295a96669b2ccddd66638b52029d76d1da449997762c61d8e5",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/e2d69698-bc99-4e85-9880-67eaccd66e6c",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:520e5c7e8d6bd9c9ac6bc7488fe8e66a30283f0ad7ae39763641b7147b39d522",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/e4e91f1c-1dcd-439e-9fdd-cb976f5293fd",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:31e09fb9f313a9e47dc0692e798fd32d1f9e0040de0863c3240332b188df019c",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/e8cb5b03-41e0-4086-99e5-f6806cd97211",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:8a5aba631d5ab50158d376c12097bddd80abf90c2d3a8ff1afba7978af9e0554",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/e961a717-6b25-4175-8a68-874d28190ee4",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:60a5fcbf0bd9082df0c17c2ed43357feb0001cd44bf241b4ca8c839bc42740d6",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/e9a2c537-8232-4c3f-85b0-b52de6bcba99",
+      "level": "level2",
+      "attachment": "pdf",
+      "ref": "sha256:23c2f730c266a4b2947ce49b42e2b763c774e6424416a554736124309ca730cf",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/ebbc1f13-d24d-40df-9068-adcf735b4240",
+      "level": "level3",
+      "attachment": "none",
+      "ref": "sha256:79ffaad450c4d39209de3417a052bb4a52b89738f1c74928e4b9ba9c0968d4d0",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/ec09fa32-d03f-4bf8-84b0-1f16922c3ae4",
+      "level": "level1",
+      "attachment": "none",
+      "ref": "sha256:c3ef8e7e0a28f6b4dd002ce3c5a4addb5b160c9616277cdaa05899f9d0505b61",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/ecbc4f94-95a3-4cc7-b255-6741a458a625",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0e41ea819a2e15666796148d743dedf00054ebf0d5b6d2a47e11333bd8415114",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/ed58682d-bc52-4baa-9eb0-4eb81e1edacc",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:d348ddd50df2823b0ef741c647e5b686796554ec3b6fdb4f039358752d72534b",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/edd4d4f2-1a58-45c4-b038-67337af4e029",
+      "level": "level2",
+      "attachment": "xlsx",
+      "ref": "sha256:d00a0c6c67c3f7e865ba28d7026c5519549c876630c86dcbc22a524aac1d053f",
+      "partition": "development"
+    },
+    {
+      "name": "gaia/f0f46385-fc03-4599-b5d3-f56496c3e69f",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:d5e43e6219a78789f26931ba9838c516ff149be6c5a24ad1b220d015c431da10",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/f2feb6a4-363c-4c09-a804-0db564eafd68",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:57ddf62c1fdcb9a94e3b6d165407802a4c9ecfc4152250ba6f04b2dbee337113",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/f3917a3d-1d17-4ee2-90c5-683b072218fe",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:b4f3245152cc562734c7d58f794489a048580d223c200b12fb33be96ac7e4944",
+      "partition": "validation"
+    },
+    {
+      "name": "gaia/f46b4380-207e-4434-820b-f32ce04ae2a4",
+      "level": "level2",
+      "attachment": "none",
+      "ref": "sha256:0135ab290ec1feb9d50765cb22b5fa5349e3f6ee40760897ebfd0b9620a1b80d",
+      "partition": "test"
+    },
+    {
+      "name": "gaia/f918266a-b3e0-4914-865d-4faa564f1aef",
+      "level": "level1",
+      "attachment": "py",
+      "ref": "sha256:4ca8e0c687be4cc31d0bc5ab5d766473947ee9e489f247e529866645c28abe49",
+      "partition": "test"
+    }
+  ]
+}

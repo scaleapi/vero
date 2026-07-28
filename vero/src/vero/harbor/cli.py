@@ -539,6 +539,140 @@ def build_command(config_path, output, params):
     click.echo(f"Compiled Harbor task: {compiled}")
 
 
+#: The two request shapes an OpenAI-compatible upstream may accept. Agents in
+#: this repo use both (gaia is on Responses, the rest are on Chat Completions),
+#: and an upstream is free to implement only one, so a 404 from the first is
+#: not evidence about the model until the second has also been tried.
+_PROBE_ROUTES: tuple[tuple[str, str], ...] = (
+    ("/responses", "input"),
+    ("/chat/completions", "messages"),
+)
+
+
+def _model_is_missing(body: str) -> bool:
+    """True when a 404 body blames the model rather than the route.
+
+    A route-level 404 (the upstream does not implement this path) and a
+    model-level 404 (the deployment does not exist) share a status code and
+    mean opposite things, so the body is the only thing that separates them.
+    Matched on the providers' own error codes, and on the Azure and OpenAI
+    sentences, never on a bare "does not exist".
+    """
+    lowered = body.lower()
+    if "deploymentnotfound" in lowered or "model_not_found" in lowered:
+        return True
+    return "model" in lowered and "does not exist" in lowered
+
+
+def _probe_route(
+    base_url: str, api_key: str, model: str, route: str, input_key: str
+) -> tuple[int | None, str]:
+    """Ask one route for one token from `model`. Returns (status, body)."""
+    payload: dict[str, object] = {"model": model}
+    if input_key == "input":
+        payload["input"] = "ok"
+        payload["max_output_tokens"] = 16
+    else:
+        payload["messages"] = [{"role": "user", "content": "ok"}]
+        payload["max_tokens"] = 16
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}{route}",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            # Azure OpenAI authenticates on api-key; OpenAI ignores it.
+            "api-key": api_key,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, ""
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace")[:400]
+    except Exception as error:  # network/DNS/timeout: inconclusive, not fatal
+        return None, str(error)
+
+
+def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, str]:
+    """Ask the upstream for one token from `model`. Returns (status, body).
+
+    Tries each route until one is conclusive. A 404 is only returned when the
+    body names the model; a route-level 404 falls through to the next route,
+    and if every route 404s on the route rather than the model the result is
+    reported as inconclusive so the run proceeds.
+    """
+    last: tuple[int | None, str] = (None, "no route was reachable")
+    for route, input_key in _PROBE_ROUTES:
+        status, body = _probe_route(base_url, api_key, model, route, input_key)
+        if status == 404 and not _model_is_missing(body):
+            # This upstream does not serve this route. Says nothing about the
+            # model; keep the result only as a fallback and try the next one.
+            last = (None, f"{route} is not served by this upstream")
+            continue
+        return status, body
+    return last
+
+
+def _preflight_models(config) -> None:
+    """Refuse to launch when a configured model is not deployed upstream.
+
+    A missing deployment is invisible until the run is over: the gateway
+    forwards the request, the upstream 404s, the agent makes no progress, and
+    every case is scored 0.0 as an honest-looking task failure. That costs a
+    full optimizer trial to discover. This costs one token per model.
+
+    Only a definitive 404 blocks. Anything else (a timeout, a rate limit, a
+    503) is inconclusive and must not stop a run that would have succeeded.
+    """
+    gateway = getattr(config, "inference_gateway", None)
+    if gateway is None:
+        return
+    api_key = os.environ.get(gateway.upstream_api_key_env)
+    if not api_key:
+        return
+    base_url = gateway.default_upstream_base_url
+    if gateway.upstream_base_url_env:
+        base_url = os.environ.get(gateway.upstream_base_url_env) or base_url
+
+    scopes: dict[str, str] = {}
+    for scope_name in ("producer", "evaluation", "finalization"):
+        scope = getattr(gateway, scope_name, None)
+        if scope is None:
+            continue
+        for name in scope.allowed_models:
+            scopes.setdefault(name, scope_name)
+
+    missing: list[str] = []
+    for name, scope_name in scopes.items():
+        # A provider prefix is meaningful to a routing proxy and meaningless to
+        # a single-provider endpoint, so try the configured name first and only
+        # fall back to the bare one. Reporting a model missing on the strength
+        # of one spelling would block a run that would have worked.
+        candidates = [name]
+        if "/" in name:
+            candidates.append(name.split("/", 1)[1])
+        for candidate in candidates:
+            status, body = _probe_model(base_url, api_key, candidate)
+            if status != 404:
+                break
+        if status == 404:
+            missing.append(f"{name} ({scope_name} scope): {body.strip()}")
+        elif status is not None and status >= 400:
+            click.echo(
+                f"Preflight: {name} returned HTTP {status}; continuing "
+                f"(only a 404 is treated as fatal)"
+            )
+    if missing:
+        raise click.ClickException(
+            "these models are not deployed on "
+            f"{base_url} and every request to them would fail:\n  - "
+            + "\n  - ".join(missing)
+            + "\nNote a model can appear in GET /models (the catalogue) and "
+            "still have no deployment."
+        )
+
+
 @harbor.command(
     "run",
     context_settings={"ignore_unknown_options": True},
@@ -585,6 +719,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
     if model is not None:
         resolved.setdefault("optimizer_model", model)
     config = load_harbor_build_config(config_path, params=resolved)
+    _preflight_models(config)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(
             config,
@@ -616,7 +751,20 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
         command.extend(_kimi_gateway_args(agent, task))
-        command.extend(_outer_app_name_args(environment, config.name, extra))
+        # Build-declared outer-trial flags first, so a command-line arg can still
+        # override them (harbor's `--ek` takes the last value for a key).
+        command.extend(config.optimizer_harbor_args)
+        # The derived app name defers to an explicit one from *either* source: a
+        # build may declare `--ek app_name=` in optimizer_harbor_args just as a
+        # caller may pass it on the command line, and appending ours after the
+        # build's would silently win on harbor's last-value-per-key rule.
+        command.extend(
+            _outer_app_name_args(
+                environment,
+                config.name,
+                (*config.optimizer_harbor_args, *extra),
+            )
+        )
         command.extend(extra)
         click.echo(shlex.join(command))
         completed = subprocess.run(

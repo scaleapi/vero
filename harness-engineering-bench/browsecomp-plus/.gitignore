@@ -1,0 +1,6 @@
+# Generated from the obfuscated upstream dataset. These files contain decrypted
+# benchmark questions and answers and must not be committed.
+tasks/
+baseline/target/.venv/
+**/__pycache__/
+**/*.pyc

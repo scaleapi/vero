@@ -25,6 +25,7 @@ from vero.evaluation.backends.command import CommandBackend, CommandBackendConfi
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
 from vero.models import StrictModel
+from vero.runtime.artifacts import ArtifactStore
 from vero.sandbox import LocalSandbox
 from vero.sidecar.serve import SidecarComponents
 from vero.sidecar.session import initialize_harbor_session_manifest
@@ -323,13 +324,28 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
                 log_traces=parsed.wandb.log_traces,
             )
             engine.listeners.append(wandb_sink)
-        except Exception:
+        except Exception as error:
             logger.warning(
                 "W&B reporting disabled: the sidecar sink could not be "
                 "initialized; the evaluation sidecar continues without it",
                 exc_info=True,
             )
             wandb_sink = None
+            # The warning above goes to the sidecar container's stderr, which no
+            # run artifact captures, so a silently disabled sink looks exactly
+            # like a healthy run that logged nothing. Record why in the session
+            # artifacts, which are archived into the exported run record.
+            try:
+                ArtifactStore(session_dir / "artifacts").write_json(
+                    "wandb/init-error.json",
+                    {
+                        "project": parsed.wandb.project,
+                        "error_type": type(error).__name__,
+                        "error": str(error),
+                    },
+                )
+            except OSError:
+                logger.warning("could not record the W&B init failure", exc_info=True)
 
     usage_path = (
         Path(parsed.inference_usage_path)

@@ -6,6 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 import vero
@@ -474,6 +475,214 @@ def test_litellm_harnesses_get_the_gateway_url_under_the_name_they_read(tmp_path
     assert _litellm_base_url_args("mini-swe-agent", tmp_path / "none") == []
 
 
+
+class _Gateway:
+    """Minimal stand-in for InferenceGatewaySpec's preflight-relevant surface."""
+
+    upstream_api_key_env = "OPENAI_API_KEY"
+    upstream_base_url_env = "OPENAI_BASE_URL"
+    default_upstream_base_url = "https://api.openai.com/v1"
+    finalization = None
+
+    def __init__(self, producer, evaluation):
+        self.producer = type("S", (), {"allowed_models": producer})()
+        self.evaluation = type("S", (), {"allowed_models": evaluation})()
+
+
+class _Build:
+    def __init__(self, gateway):
+        self.inference_gateway = gateway
+
+
+def test_preflight_blocks_only_on_a_definitively_missing_deployment(monkeypatch):
+    """A missing deployment is otherwise invisible until a whole trial has burned.
+
+    The upstream 404s, the agent makes no progress, and every case is scored 0.0
+    as an honest-looking task failure.
+    """
+    import click
+
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+    probed: list[str] = []
+
+    def _probe(base_url, api_key, model):
+        probed.append(model)
+        if model == "dead-model":
+            return 404, '{"error": {"code": "DeploymentNotFound"}}'
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_model", _probe)
+
+    with pytest.raises(click.ClickException) as raised:
+        harbor_cli._preflight_models(
+            _Build(_Gateway(["gpt-5.3-codex"], ["dead-model"]))
+        )
+    assert "dead-model (evaluation scope)" in str(raised.value)
+    assert "DeploymentNotFound" in str(raised.value)
+    # A provider prefix routes on a proxy and is meaningless to a single
+    # provider endpoint, so the configured spelling is tried first.
+    probed.clear()
+    harbor_cli._preflight_models(_Build(_Gateway(["openai/gpt-4o"], ["gpt-4o"])))
+    assert probed == ["openai/gpt-4o", "gpt-4o"]
+
+
+def test_preflight_falls_back_to_the_bare_name_before_calling_a_model_missing(
+    monkeypatch,
+):
+    """One spelling 404ing is not evidence the model is absent.
+
+    Azure serves `gpt-5.3-codex` and 404s `openai/gpt-5.3-codex`; a routing
+    proxy does the reverse. Blocking on the first spelling would refuse a run
+    that would have worked.
+    """
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+    probed: list[str] = []
+
+    def _probe(base_url, api_key, model):
+        probed.append(model)
+        if "/" in model:
+            return 404, '{"error": {"code": "DeploymentNotFound"}}'
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_model", _probe)
+    harbor_cli._preflight_models(_Build(_Gateway(["openai/gpt-5.3-codex"], [])))
+    assert probed == ["openai/gpt-5.3-codex", "gpt-5.3-codex"]
+
+
+def test_probe_model_separates_a_missing_route_from_a_missing_model(monkeypatch):
+    """An upstream that serves only Chat Completions must not read as missing.
+
+    Both failures are HTTP 404 and they mean opposite things, so the body is
+    the only discriminator. gaia's agent uses the Responses API and the rest
+    use Chat Completions, so either route may legitimately be absent.
+    """
+    from vero.harbor import cli as harbor_cli
+
+    seen: list[str] = []
+
+    def _route(base_url, api_key, model, route, input_key):
+        seen.append(route)
+        if route == "/responses":
+            return 404, '{"detail": "Not Found"}'  # the route, not the model
+        return 200, ""
+
+    monkeypatch.setattr(harbor_cli, "_probe_route", _route)
+    assert harbor_cli._probe_model("https://x/v1", "k", "m") == (200, "")
+    assert seen == ["/responses", "/chat/completions"]
+
+    # A model-level 404 on the first route is conclusive: do not keep probing.
+    seen.clear()
+    monkeypatch.setattr(
+        harbor_cli,
+        "_probe_route",
+        lambda b, k, m, route, i: (
+            seen.append(route),
+            (404, '{"error": {"code": "DeploymentNotFound"}}'),
+        )[1],
+    )
+    status, _ = harbor_cli._probe_model("https://x/v1", "k", "m")
+    assert status == 404
+    assert seen == ["/responses"]
+
+    # Neither route served: inconclusive, so the run is allowed to proceed.
+    seen.clear()
+    monkeypatch.setattr(
+        harbor_cli,
+        "_probe_route",
+        lambda b, k, m, route, i: (seen.append(route), (404, "<html>404</html>"))[1],
+    )
+    status, body = harbor_cli._probe_model("https://x/v1", "k", "m")
+    assert status is None
+    assert seen == ["/responses", "/chat/completions"]
+    assert "not served by this upstream" in body
+
+
+def test_preflight_does_not_block_on_inconclusive_upstream_failures(monkeypatch):
+    from vero.harbor import cli as harbor_cli
+
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://example.invalid/openai/v1")
+
+    for status, body in ((429, "rate limited"), (503, "unavailable"), (None, "timeout")):
+        monkeypatch.setattr(
+            harbor_cli, "_probe_model", lambda b, k, m, s=status, y=body: (s, y)
+        )
+        # Must not raise: a transient upstream blip cannot be allowed to stop a
+        # run that would have succeeded.
+        harbor_cli._preflight_models(_Build(_Gateway(["a"], ["b"])))
+
+    # No credentials and no gateway are both no-ops rather than errors.
+    monkeypatch.delenv("OPENAI_API_KEY")
+    harbor_cli._preflight_models(_Build(_Gateway(["a"], ["b"])))
+    harbor_cli._preflight_models(_Build(None))
+
+
+def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch):
+    """`optimizer_harbor_args` tunes the OUTER trial, `extra_harbor_args` the nested eval.
+
+    Regression guard for the tau3 teardown failure: the build declared
+    `--ek modal_vm_runtime=true` and it has to reach the `harbor run` that hosts
+    the optimizer, not the `harbor run` that scores a candidate.
+    """
+    from vero.harbor import build as harbor_build
+    from vero.harbor import cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("name: org/task\n", encoding="utf-8")
+
+    class _Config:
+        harbor_requirement = "harbor[modal]==0.20.0"
+        agent_env: dict[str, str] = {}
+        optimizer_harbor_args = ["--ek", "modal_vm_runtime=true"]
+        extra_harbor_args = ["--ek", "app_name=nested-only"]
+        # Real configs always carry a name; the outer trial derives its Modal app
+        # name from it so the sandbox is findable in a workspace of thousands.
+        name = "vero/stub-benchmark"
+
+    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda *a, **k: _Config())
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda config, output: output)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(
+        harbor_cli, "_compiled_run_environment", lambda task, overrides: {}
+    )
+
+    recorded: list[list[str]] = []
+
+    def _record(command, env=None):
+        recorded.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(harbor_cli.subprocess, "run", _record)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "codex",
+            "--model",
+            "gpt-5.3-codex",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(recorded) == 1
+    command = recorded[0]
+    assert "modal_vm_runtime=true" in command
+    # The nested-eval flags stay out of the outer command.
+    assert "app_name=nested-only" not in command
+    # Build-declared flags come first so a command-line `--ek` can override them.
+    assert command.index("modal_vm_runtime=true") < command.index("--yes")
 def test_kimi_gateway_args_override_the_openai_default(tmp_path):
     """kimi-cli reads OPENAI_BASE_URL inside the agent process, or ships to OpenAI.
 
