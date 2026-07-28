@@ -162,6 +162,27 @@ If you see a clear failure signal, **stop the run and diagnose from disk** rathe
 than letting it burn budget. Detached/daemon-owned sandboxes can keep running
 after the parent dies, so check for and clean up orphans when you kill a run.
 
+### Copy the session out BEFORE you kill anything
+
+Every commit the optimizer made — including the one it submitted — lives *only*
+inside the sidecar container until the verifier's `export-session` step writes
+`session.tar.gz`. **Kill a run before that step and the candidates are gone**,
+because stopping the stack removes the containers. A run killed mid-verifier
+leaves an empty `verifier/` directory and nothing to recover; the entire search
+is lost even though it completed successfully.
+
+So the first move when killing a run is always:
+
+```bash
+docker cp <sidecar-container>:/state/admin/session ./salvaged-session
+```
+
+That gives you `candidates/repository.git` — a real git repo, so
+`git --git-dir=.../repository.git log --all` lists every candidate and
+`git archive <sha>` extracts one — plus `database.json`, `budgets.json` and the
+evaluation job records. With it, the submitted candidate can be re-scored on the
+held-out set afterwards. Only once you have it should you stop the containers.
+
 ## What "done / green" looks like
 
 - **`finalize.json`** (admin volume) / **`harbor-finalization.json`** (session):
