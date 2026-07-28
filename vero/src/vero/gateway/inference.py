@@ -331,22 +331,37 @@ def _usage(value: Any) -> tuple[int, int, int, int]:
     if not isinstance(value, dict):
         return (0, 0, 0, 0)
     usage = value.get("usage")
-    if not isinstance(usage, dict):
-        response = value.get("response")
-        usage = response.get("usage") if isinstance(response, dict) else None
+    for holder in ("response", "message"):
+        # `response` wraps the responses API; `message` is where an Anthropic
+        # streaming message_start event puts the usage carrying input tokens.
+        if isinstance(usage, dict):
+            break
+        nested = value.get(holder)
+        usage = nested.get("usage") if isinstance(nested, dict) else None
     if not isinstance(usage, dict):
         return (0, 0, 0, 0)
     input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
     output_tokens = int(
         usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
     )
-    total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens) or 0)
     # Responses API nests cache reads under input_tokens_details; chat
     # completions under prompt_tokens_details.
     details = usage.get("input_tokens_details") or usage.get("prompt_tokens_details")
     cached_tokens = (
         int(details.get("cached_tokens", 0) or 0) if isinstance(details, dict) else 0
     )
+    # Anthropic Messages counts `input_tokens` as only the slice that was
+    # neither read from nor written to the cache, and reports the rest in
+    # sibling fields. Left unfolded, a fully cached optimizer turn meters as 2
+    # tokens: producer input read ~4 orders of magnitude low and the scope
+    # budget never bound. Fold them in so input_tokens means the same thing on
+    # every endpoint, and keep cached_tokens the documented subset of it.
+    cache_read = int(usage.get("cache_read_input_tokens", 0) or 0)
+    cache_written = int(usage.get("cache_creation_input_tokens", 0) or 0)
+    input_tokens += cache_read + cache_written
+    cached_tokens = cached_tokens or cache_read
+    # Anthropic sends no total; derive it from the corrected input.
+    total_tokens = int(usage.get("total_tokens") or 0) or input_tokens + output_tokens
     return (input_tokens, output_tokens, total_tokens, cached_tokens)
 
 
@@ -369,8 +384,23 @@ class _StreamingUsage:
             except (json.JSONDecodeError, UnicodeDecodeError):
                 continue
             tokens = _usage(value)
-            if tokens != (0, 0, 0, 0):
-                self.tokens = tokens
+            if tokens == (0, 0, 0, 0):
+                continue
+            # OpenAI reports one final usage, so replacing would do; Anthropic
+            # splits it across events -- input in message_start, a cumulative
+            # output in message_delta -- and replacing let the second event
+            # clobber the input from the first. Keep the high water mark per
+            # component, which is the final value for both providers.
+            input_tokens = max(self.tokens[0], tokens[0])
+            output_tokens = max(self.tokens[1], tokens[1])
+            self.tokens = (
+                input_tokens,
+                output_tokens,
+                # A per-event total goes stale once a later event raises the
+                # output, so re-derive rather than carry the maximum seen.
+                max(self.tokens[2], tokens[2], input_tokens + output_tokens),
+                max(self.tokens[3], tokens[3]),
+            )
 
 
 class _BoundedCapture:
