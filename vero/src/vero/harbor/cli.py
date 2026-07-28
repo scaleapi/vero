@@ -231,6 +231,40 @@ def _load_env_file(path: Path) -> dict[str, str]:
 # the gateway token cap are the intended limits.
 OPENCODE_STEP_LIMIT = 1000
 
+# Harnesses that drive the model through litellm rather than a provider SDK.
+# litellm reads the base URL as <PROVIDER>_API_BASE; the SDKs read
+# <PROVIDER>_BASE_URL. vero sets the SDK names, so a litellm-based harness sees no
+# override and calls the provider's public endpoint instead of the gateway.
+_LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
+
+
+def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
+    """Give litellm-based harnesses the gateway URL under the name they read.
+
+    mini-swe-agent installs `litellm[proxy]` and resolves `anthropic/<model>`
+    through it. Without ANTHROPIC_API_BASE it reaches api.anthropic.com holding
+    only a scoped gateway token, and fails with
+    ``AuthenticationError: invalid x-api-key`` -- fails closed, so nothing leaks,
+    but the harness cannot run at all. Set both provider aliases from the
+    compiled producer scope so whichever provider the model names is covered.
+    """
+
+    if agent not in _LITELLM_AGENTS:
+        return []
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return []
+    try:
+        base_url = json.loads(path.read_text(encoding="utf-8"))["producer_base_url"]
+    except (OSError, json.JSONDecodeError, KeyError):
+        return []
+    # The Anthropic SDK re-appends /v1, litellm does not, so anthropic keeps the
+    # full path here -- matching how the gateway is addressed for openai.
+    arguments: list[str] = []
+    for name in ("OPENAI_API_BASE", "ANTHROPIC_API_BASE"):
+        arguments.extend(["--ae", f"{name}={base_url}"])
+    return arguments
+
 
 def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[str]:
     """Route opencode's non-openai providers through the gateway.
@@ -526,6 +560,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
         command.extend(_opencode_gateway_args(agent, model, task))
+        command.extend(_litellm_base_url_args(agent, task))
         command.extend(_outer_app_name_args(environment, config.name, extra))
         command.extend(extra)
         click.echo(shlex.join(command))

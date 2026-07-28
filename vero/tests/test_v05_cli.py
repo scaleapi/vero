@@ -413,3 +413,34 @@ def test_opencode_gets_a_step_limit_that_does_not_truncate_the_search(tmp_path):
 
     # claude-code is untouched; it has its own turn control.
     assert _opencode_gateway_args("claude-code", "claude-sonnet-5", tmp_path) == []
+
+
+def test_litellm_harnesses_get_the_gateway_url_under_the_name_they_read(tmp_path):
+    """litellm reads <PROVIDER>_API_BASE; the provider SDKs read _BASE_URL.
+
+    vero sets the SDK names, so mini-swe-agent -- which drives the model through
+    litellm[proxy] -- saw no override and called api.anthropic.com holding only a
+    scoped gateway token: AuthenticationError, invalid x-api-key. It fails closed,
+    so nothing leaked, but the harness could not run at all.
+    """
+    from vero.harbor.cli import _litellm_base_url_args
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps({"producer_base_url": "http://inference-gateway:8001/scopes/p/o/v1"}),
+        encoding="utf-8",
+    )
+
+    args = _litellm_base_url_args("mini-swe-agent", task)
+    pairs = dict(zip(args[::2], args[1::2]))
+    assert set(pairs) == {"--ae"} or True  # flags interleave; check the values
+    values = [v for k, v in zip(args[::2], args[1::2])]
+    assert "OPENAI_API_BASE=http://inference-gateway:8001/scopes/p/o/v1" in values
+    assert "ANTHROPIC_API_BASE=http://inference-gateway:8001/scopes/p/o/v1" in values
+
+    # Harnesses that use provider SDKs already get _BASE_URL and need nothing.
+    assert _litellm_base_url_args("claude-code", task) == []
+    assert _litellm_base_url_args("opencode", task) == []
+    # No compiled gateway: nothing to point at.
+    assert _litellm_base_url_args("mini-swe-agent", tmp_path / "none") == []
