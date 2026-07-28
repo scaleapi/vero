@@ -22,6 +22,7 @@ from vero.evaluation import (
     CaseRange,
     CaseResult,
     CaseStatus,
+    DiagnosticSeverity,
     DisclosureLevel,
     EvaluationAccessPolicy,
     EvaluationAuthorization,
@@ -31,8 +32,10 @@ from vero.evaluation import (
     EvaluationDatabase,
     EvaluationDefinition,
     EvaluationDeniedError,
+    EvaluationDiagnostic,
     EvaluationEngine,
     EvaluationExecutionError,
+    EvaluationInfrastructureError,
     EvaluationLimits,
     EvaluationPlan,
     EvaluationPrincipal,
@@ -845,6 +848,64 @@ async def test_engine_refund_failure_preserves_the_cancellation(
     # The cancellation wins; the refund failure is chained, not substituted.
     with pytest.raises(asyncio.CancelledError) as raised:
         await evaluation
+    assert isinstance(raised.value.__cause__, OSError)
+
+
+@pytest.mark.asyncio
+async def test_engine_refund_failure_preserves_the_infrastructure_error(
+    tmp_path: Path, monkeypatch
+):
+    """The infrastructure-failure refund must not substitute its own OSError.
+
+    This path builds its exception after the refund rather than inside an
+    `except`, so a failing refund used to preempt the `raise` entirely. The
+    sidecar maps EvaluationInfrastructureError to "infrastructure failure" for
+    the agent; a bare OSError reaches the unmapped branch and is reported as
+    "evaluation failed: OSError" instead.
+    """
+    workspace = StubWorkspace(tmp_path / "repo")
+    backend = StubBackend(
+        report=EvaluationReport(
+            status=EvaluationStatus.INVALID,
+            diagnostics=[
+                EvaluationDiagnostic(
+                    code="infrastructure_failure",
+                    message="the sandbox host went away",
+                    severity=DiagnosticSeverity.ERROR,
+                )
+            ],
+        ),
+        cost=EvaluationCost(cases=1),
+    )
+    evaluation_set = request().evaluation_set
+    ledger = BudgetLedger(
+        [
+            EvaluationBudget(
+                backend_id="default",
+                evaluation_set_key=evaluation_set.budget_key("default"),
+                total_runs=2,
+            )
+        ],
+        path=tmp_path / "budgets.json",
+    )
+    ledger.save()
+
+    async def failing_refund(*args, **kwargs):
+        raise OSError("durable refund write failed")
+
+    monkeypatch.setattr(ledger, "refund", failing_refund)
+
+    engine = EvaluationEngine(
+        evaluator=evaluator(tmp_path, workspace),
+        backends=BackendRegistry({"default": backend}),
+        database=EvaluationDatabase(id="session"),
+        database_path=tmp_path / "database.json",
+        budget_ledger=ledger,
+        authorization_resolver=allow_all_evaluations,
+    )
+
+    with pytest.raises(EvaluationInfrastructureError) as raised:
+        await engine.evaluate_record(backend_id="default", request=request())
     assert isinstance(raised.value.__cause__, OSError)
 
 
