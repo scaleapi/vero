@@ -307,11 +307,11 @@ build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for 
 ◆ Held-out baseline of the seed harness on the **test** partition, mean over
 K=3 independent rounds; ± is the stdev across the three round means. Pinned
 into each target's `baseline_reward` with `score_baseline: false`, which avoids
-re-scoring the seed every finalization. **Note the pin is currently inert at
-runtime:** the verifier reads `target.baseline_reward` only inside its
-`score_baseline` branch, so with that false a run's `finalize.json` carries an
-empty `baseline_rewards` and the improvement delta has to be computed offline
-against this table. swe-atlas's
+re-scoring the seed every finalization. The pin is reported in every run's
+`finalize.json` under `baseline_rewards`, so the improvement delta is recorded
+alongside the reward rather than joined by hand against this table. (Runs before
+2026-07-28 carry an empty `baseline_rewards`: the verifier read the pin only
+inside its `score_baseline` branch, so `false` meant nothing was reported.) swe-atlas's
 `reward` is a binary pass/fail over a rubric and sits near the floor (0.097);
 the continuous `agg_score` (0.632, sd 0.011) is the far more informative
 signal — a candidate `reward_key` switch, pending the verifier emitting
