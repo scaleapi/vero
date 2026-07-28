@@ -504,6 +504,54 @@ async def test_verifier_uses_pinned_baseline_reward_without_scoring(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_verifier_reports_pinned_baseline_without_score_baseline(tmp_path):
+    """`score_baseline: false` must still report the pin the delta is measured from.
+
+    Every promoted benchmark sets `score_baseline: false` precisely so the seed is
+    not re-scored on each finalization. The pin was read only inside the
+    score_baseline branch, so those runs shipped an empty `baseline_rewards` and
+    the improvement had to be reassembled by hand against a table elsewhere --
+    confirmed on a live officeqa finalization.
+    """
+    baseline = _candidate("baseline")
+    cand = _candidate("cand", seconds=1)
+    engine = FakeEngine({("cand", "selection"): 0.8, ("cand", "test"): 0.7})
+    engine.database.add_evaluation(
+        _record("r", cand, EvaluationSet(name="selection"), 0.8)
+    )
+    verifier = CanonicalVerifier(
+        engine=engine,
+        selection=VerificationSelection(
+            mode="auto_best",
+            backend_id="backend",
+            evaluation_set=EvaluationSet(name="selection"),
+            objective=OBJECTIVE,
+            baseline_candidate=baseline,
+            rescore_top_k=1,
+            rescore_attempts=1,
+        ),
+        targets=[
+            VerificationTarget(
+                reward_key="reward",
+                backend_id="backend",
+                evaluation_set=EvaluationSet(name="test"),
+                objective=OBJECTIVE,
+                max_attempts=1,
+                baseline_reward=0.55,
+            )
+        ],
+        admin_volume=tmp_path,
+        score_baseline=False,
+    )
+
+    result = await verifier.finalize()
+
+    assert result.rewards == {"reward": 0.7}
+    assert result.baseline_rewards == {"reward": 0.55}  # the pin is reported
+    assert ("baseline", "test") not in engine.calls  # and the seed is not scored
+
+
+@pytest.mark.asyncio
 async def test_verifier_uses_pinned_baseline_selection_score(tmp_path):
     # With a pinned selection score, the floor compares without re-scoring the seed.
     baseline = _candidate("baseline")

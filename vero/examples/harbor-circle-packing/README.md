@@ -47,12 +47,31 @@ scores ~0.96 and the best known result is ~2.635.
 Requires Docker and a coding agent supported by Harbor (e.g. `codex`), plus a
 model endpoint. From this directory:
 
+First vendor the VeRO package into the build context — the Dockerfile does
+`COPY vero /opt/vero`, and without it the build fails on a checksum error that
+does not obviously name the missing directory. Exclude `.venv`, which is large
+and unnecessary:
+
+```bash
+mkdir -p environment/vero
+(cd <repo>/vero && tar cf - --exclude=.venv --exclude=__pycache__ \
+    pyproject.toml uv.lock src README.md) | tar xf - -C environment/vero
+```
+
+Then run it. `-p` is required: harbor does not infer the task from the working
+directory, and omitting it fails with `Either datasets or tasks must be provided`.
+
 ```bash
 export OPENAI_API_KEY=...          # or your gateway key
 export OPENAI_BASE_URL=...         # e.g. a LiteLLM proxy exposing /v1
 
-harbor run -e docker -a codex -m openai/gpt-5.4 --yes
+harbor run -p . -e docker -a codex -m openai/gpt-5.4 --yes
 ```
+
+With an agent that installs itself via `uv tool` — `mini-swe-agent`, for one —
+add `--ae UV_TOOL_BIN_DIR=/home/agent/.local/bin`. The task runs the agent as the
+unprivileged `agent` user, which cannot symlink into `/usr/local/bin`, and the
+install fails with `Permission denied` before the run starts.
 
 Harbor builds the two images, starts the sidecar, runs the agent against
 `instruction.md`, then runs `tests/test.sh` to emit the final reward.

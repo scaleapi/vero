@@ -514,6 +514,15 @@ class CanonicalVerifier:
         baseline_rewards: dict[str, float] = {}
         baseline_reward_metrics: dict[str, dict[str, float]] = {}
         baseline = self.selection.baseline_candidate
+        # Report a pinned baseline whether or not we re-measure the seed.
+        # `score_baseline` decides if the seed is *scored*, which is expensive; it
+        # should not decide whether the run states the number every delta is
+        # computed against. Read only inside the branch below, a pin left every
+        # `score_baseline: false` run shipping an empty `baseline_rewards`, so the
+        # comparison had to be reassembled by hand from a table elsewhere.
+        for target in self.targets:
+            if target.baseline_reward is not None:
+                baseline_rewards[target.reward_key] = target.baseline_reward
         if self.score_baseline and baseline is not None:
             if baseline.version == candidate.version:
                 baseline_rewards = dict(rewards)
@@ -521,8 +530,7 @@ class CanonicalVerifier:
             else:
                 for target in self.targets:
                     if target.baseline_reward is not None:
-                        baseline_rewards[target.reward_key] = target.baseline_reward
-                        continue
+                        continue  # already recorded above
                     reward, _, metrics, error = await self._score_target(
                         baseline, target
                     )

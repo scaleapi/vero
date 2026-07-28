@@ -86,11 +86,17 @@ def _default_oai_agent(model: str | None = None) -> Agent:
 
     model = model or os.getenv("VERO_OPTIMIZER_MODEL") or "openai/gpt-5.4"
 
+    # LITELLM_* first, then the OPENAI_* pair the rest of the system already uses
+    # for an OpenAI-compatible proxy. Without the fallback, an environment holding
+    # only OPENAI_BASE_URL left base_url unset here, and litellm's own resolution
+    # posted to a route the proxy does not serve -- a 403 that reads as an auth
+    # failure. The trailing slash is stripped because callers keep one in
+    # OPENAI_BASE_URL and the appended route would otherwise double the separator.
     litellm_kwargs: dict[str, str] = {}
-    api_key = os.getenv("LITELLM_API_KEY")
+    api_key = os.getenv("LITELLM_API_KEY") or os.getenv("OPENAI_API_KEY")
     if api_key:
         litellm_kwargs["api_key"] = api_key
-    base_url = os.getenv("LITELLM_BASE_URL")
+    base_url = os.getenv("LITELLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
     if base_url:
         litellm_kwargs["base_url"] = base_url.rstrip("/")
 
