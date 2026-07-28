@@ -88,8 +88,10 @@ secrets:
   - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
 
 wandb:
-  project: vero-tau3
-  group: tau3
+  project: harness-engineering-bench  # one project for the whole suite
+  group: tau3  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-tau3}  # per-launch label, e.g. --param wandb_run=tau3__claude-sonnet-5
+  tags: [tau3]
   log_traces: true
 
 inference_gateway:

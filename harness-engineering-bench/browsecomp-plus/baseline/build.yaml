@@ -88,8 +88,10 @@ secrets:
   - WANDB_BASE_URL
 
 wandb:
-  project: vero-browsecomp-plus
-  group: browsecomp-plus
+  project: harness-engineering-bench  # one project for the whole suite
+  group: browsecomp-plus  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-browsecomp-plus}  # per-launch label, e.g. --param wandb_run=browsecomp-plus__claude-sonnet-5
+  tags: [browsecomp-plus]
   log_traces: true
 
 inference_gateway:

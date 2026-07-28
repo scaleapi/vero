@@ -93,8 +93,10 @@ secrets:
   - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
 
 wandb:
-  project: vero-swe-atlas-qna
-  group: swe-atlas-qna
+  project: harness-engineering-bench  # one project for the whole suite
+  group: swe-atlas-qna  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-swe-atlas-qna}  # per-launch label, e.g. --param wandb_run=swe-atlas-qna__claude-sonnet-5
+  tags: [swe-atlas-qna]
   log_traces: true
 
 inference_gateway:
