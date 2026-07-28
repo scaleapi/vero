@@ -31,7 +31,7 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.4495  # held-out K=3 mean (see CONFIGURATION.md)
+    baseline_reward: 0.4619  # re-pinned 0.424 / 0.470 / 0.492 (sd 0.0283); was 0.4495. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and

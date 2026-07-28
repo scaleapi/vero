@@ -255,6 +255,15 @@ def main() -> int:
     log(f"{len(tasks)} {args.partition} case(s), {args.rounds} round(s), "
         f"{args.attempts} attempt(s)/case, concurrency {args.concurrency}")
 
+    # Some tasks reference the base URL under litellm's alias rather than
+    # OPENAI_BASE_URL -- swe-atlas-qna's rubric judge declares
+    # `EVAL_BASE_URL = "${OPENAI_API_BASE}"` in [verifier.env], and harbor aborts
+    # the whole job with "Missing Environment Variables" before running a single
+    # trial if it is unset. Mirror it so a benchmark's own judge can start.
+    if os.environ.get("OPENAI_BASE_URL") and not os.environ.get("OPENAI_API_BASE"):
+        os.environ["OPENAI_API_BASE"] = os.environ["OPENAI_BASE_URL"]
+        log("mirrored OPENAI_BASE_URL -> OPENAI_API_BASE for task verifier env")
+
     if "OPENAI_API_KEY" not in os.environ and not args.dry_run:
         sys.exit("OPENAI_API_KEY is not set. Source the run's secrets.env first: "
                  "the target agent talks to the upstream directly here, exactly "

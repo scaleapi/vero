@@ -160,7 +160,7 @@ benchmark can be checked against the others at a glance.
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus |
 |---|---|---|---|---|---|
 | target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash |
-| held-out baseline (K=3) ◆ | 0.574 ±0.010 | 0.360 ±0.042 | 0.097 ±0.011 (agg 0.632) | 0.611 ±0.021 | 0.449 ±0.007 |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 |
@@ -266,6 +266,10 @@ signal — a candidate `reward_key` switch, pending the verifier emitting
 deepseek benchmarks logged zero exceptions over 945 trials, swe-atlas lost
 5/150 to gpt-oss 128k context overflow, and gaia lost 4/198 (infra) after the
 agent's reason/search-only-turn crash was fixed.
+
+**Re-pin these whenever a seed agent changes.** The first set went stale because the seed agents moved 4-10 commits afterwards -- one commit touched all five -- and nothing recorded the dependency. Re-measured 2026-07-28 with `scripts/rescore_candidate.py --seed`, which reuses the original path exactly. Only tau3 moved materially (+0.121 against an sd of 0.0099, so a genuine seed improvement); the other four shifted inside their own noise.
+
+**gaia and tau3 are too noisy for single-run comparisons.** gaia's own three rounds spanned 0.554-0.682 (sd 0.052), and tau3's optimizer scored one *unchanged* harness at 0.800 and 0.547 on development -- its user-simulator and NL-assertion grader are both LLMs, so their variance rides on every eval. Treat a gaia or tau3 delta under ~0.1 as unresolved. Their splits are not the problem: domain mix matches to the percentage point across all three partitions (airline 13%, banking 26%, retail 30%, telecom 31%), as does telecom persona difficulty.
 
 ◇ gaia is the exception to the deepseek-v4-flash default: it is multimodal and
 that model is text-only. Verified against the same litellm endpoint the gateway
