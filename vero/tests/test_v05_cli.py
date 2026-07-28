@@ -433,11 +433,39 @@ def test_litellm_harnesses_get_the_gateway_url_under_the_name_they_read(tmp_path
     )
 
     args = _litellm_base_url_args("mini-swe-agent", task)
-    pairs = dict(zip(args[::2], args[1::2]))
-    assert set(pairs) == {"--ae"} or True  # flags interleave; check the values
-    values = [v for k, v in zip(args[::2], args[1::2])]
+    assert args[::2] == ["--ae", "--ae"]
+    values = args[1::2]
+    # openai: litellm appends /chat/completions, so the /v1 base passes through.
     assert "OPENAI_API_BASE=http://inference-gateway:8001/scopes/p/o/v1" in values
-    assert "ANTHROPIC_API_BASE=http://inference-gateway:8001/scopes/p/o/v1" in values
+    # anthropic: litellm appends /v1/messages unless the base already ends in it.
+    # Passing the /v1 base produced /v1/v1/messages and a 403 from upstream.
+    assert (
+        "ANTHROPIC_API_BASE=http://inference-gateway:8001/scopes/p/o/v1/messages"
+        in values
+    )
+    assert not any("/v1/v1" in value for value in values)
+
+    # Same wire path whichever form the compiled gateway hands us.
+    for producer, expected in (
+        ("http://gw:8001/scopes/p/o", "http://gw:8001/scopes/p/o/v1/messages"),
+        ("http://gw:8001/scopes/p/o/v1/", "http://gw:8001/scopes/p/o/v1/messages"),
+        (
+            "http://gw:8001/scopes/p/o/v1/messages",
+            "http://gw:8001/scopes/p/o/v1/messages",
+        ),
+    ):
+        (task / "environment" / "gateway" / "launch.json").write_text(
+            json.dumps({"producer_base_url": producer}), encoding="utf-8"
+        )
+        assert (
+            f"ANTHROPIC_API_BASE={expected}"
+            in _litellm_base_url_args("mini-swe-agent", task)[1::2]
+        )
+
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps({"producer_base_url": "http://inference-gateway:8001/scopes/p/o/v1"}),
+        encoding="utf-8",
+    )
 
     # Harnesses that use provider SDKs already get _BASE_URL and need nothing.
     assert _litellm_base_url_args("claude-code", task) == []
