@@ -1371,3 +1371,32 @@ def test_drain_timeout_is_independent_of_the_unreachable_eval_ceiling(tmp_path):
         (explicit / "environment/sidecar/serve.json").read_text(encoding="utf-8")
     )
     assert serve["evaluation_drain_timeout_seconds"] == 1800.0
+
+
+def test_unresolvable_path_task_source_names_the_missing_data(tmp_path):
+    """A missing tasks/ directory must not be reported as a missing version pin.
+
+    Vendored task data is gitignored, so a fresh checkout has no tasks/ at all.
+    The loader leaves an unresolvable relative path untouched and this validator
+    then sees a bare name, so the old message -- "registry task_source must
+    include an explicit version" -- sent the reader looking for a version to add
+    when the real problem was unfetched data. That cost real debugging time.
+    """
+    # _config provisions a target repo under the directory it is given, so each
+    # case needs its own.
+    def case(name: str, **updates):
+        root = tmp_path / name
+        root.mkdir()
+        return _config(root, **updates)
+
+    with pytest.raises(ValidationError, match="looks like a path but does not exist"):
+        case("relative", task_source="../tasks")
+    with pytest.raises(ValidationError, match="vendor_tasks.sh"):
+        case("absolute", task_source="/nowhere/officeqa/tasks")
+
+    # A registry reference still gets the pin message, and a pinned one is fine
+    # even though it does not resolve on this filesystem -- note it contains "/",
+    # so the path-shape test must not run ahead of the version check.
+    with pytest.raises(ValidationError, match="explicit version"):
+        case("unpinned", task_source="gaia/gaia")
+    case("pinned", task_source="gaia/gaia@sha256:abc123")
