@@ -102,6 +102,11 @@ wandb:
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
+  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
+  # gateway token usage to individual trials (trusted, vs. content-matching).
+  # Without it the fallback recovers only each conversation's root turn: measured
+  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
+  request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
     max_concurrency: 8
