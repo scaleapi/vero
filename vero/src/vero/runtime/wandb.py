@@ -46,6 +46,29 @@ def normalize_wandb_base_url(environment: dict[str, str] | None = None) -> str |
     return corrected
 
 
+def disambiguated_run_name(name: str | None, run_id: str) -> str | None:
+    """Append a short digest of ``run_id`` so one cell's attempts stay distinct.
+
+    The benchmark configs set ``group`` to the benchmark and ``name`` to a
+    per-launch cell label (``--param wandb_run=officeqa__claude-sonnet-5``), so a
+    relaunch of the same cell mints a fresh run id under a byte-identical display
+    name. In the officeqa and browsecomp-plus passes on 2026-07-29 that produced
+    several same-named rows per cell -- one abandoned, one live -- with no way to
+    tell from the name which was which, exactly when a kill/relaunch decision
+    needed reading. Worse, killing a run does not stop it: the sandbox is
+    orphaned and its sidecar keeps heartbeating, so the abandoned row stays
+    ``state=running`` and keeps logging alongside its replacement.
+
+    Keyed to the resolved id rather than to wall-clock time, so the name is
+    stable across a sidecar restart that resumes the same id and differs across
+    genuinely separate invocations. Returns None unchanged when no name was set,
+    where W&B's own generated name is already unique.
+    """
+    if not name:
+        return name
+    return f"{name}--{hashlib.sha256(run_id.encode()).hexdigest()[:6]}"
+
+
 def _open_wandb_run(
     *,
     project: str,
@@ -78,11 +101,17 @@ def _open_wandb_run(
         "id": stable_id,
         "resume": "allow",
         "dir": str(wandb_dir),
-        "config": {**(config or {}), "vero/session_id": session_id},
+        # `vero/run_label` keeps the undecorated cell label groupable and
+        # filterable now that the display name carries a per-attempt suffix.
+        "config": {
+            **(config or {}),
+            "vero/session_id": session_id,
+            **({"vero/run_label": name} if name else {}),
+        },
     }
     for key, value in {
         "entity": entity,
-        "name": name,
+        "name": disambiguated_run_name(name, stable_id),
         "group": group,
         "tags": tags or None,
         "mode": mode,
@@ -144,11 +173,15 @@ class WandbEventSink:
             "id": stable_id,
             "resume": "allow",
             "dir": str(wandb_dir),
-            "config": {**(config or {}), "vero/session_id": session_id},
+            "config": {
+                **(config or {}),
+                "vero/session_id": session_id,
+                **({"vero/run_label": name} if name else {}),
+            },
         }
         for key, value in {
             "entity": entity,
-            "name": name,
+            "name": disambiguated_run_name(name, stable_id),
             "group": group,
             "tags": tags or None,
             "mode": mode,

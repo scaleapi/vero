@@ -215,6 +215,48 @@ def test_sidecar_wandb_run_id_is_unique_per_invocation_but_stable_on_restart(
     assert a2.kwargs["id"] == a.kwargs["id"]
 
 
+def test_sidecar_wandb_display_name_distinguishes_attempts_of_one_cell(
+    tmp_path: Path,
+):
+    # The benchmark configs set `group` to the benchmark and `name` to a
+    # per-launch cell label, so relaunching a cell reused the display name while
+    # minting a new id: several identically-named rows per cell, one abandoned and
+    # one live, indistinguishable in the UI. Since killing a run orphans its
+    # sandbox rather than stopping it, the abandoned row also stays `running` and
+    # keeps logging, so the name is the only thing that can tell them apart.
+    label = "officeqa__claude-sonnet-5"
+    a = FakeWandb()
+    SidecarWandbSink(
+        project="v", session_id="trial", session_dir=tmp_path / "a", name=label, client=a
+    )
+    b = FakeWandb()
+    SidecarWandbSink(
+        project="v", session_id="trial", session_dir=tmp_path / "b", name=label, client=b
+    )
+    assert a.kwargs["name"] != b.kwargs["name"]
+    assert a.kwargs["name"].startswith(f"{label}--")
+
+    # A restart of the same session volume resumes one run, so its name must not
+    # drift -- otherwise one run appears under two names across a restart.
+    a2 = FakeWandb()
+    SidecarWandbSink(
+        project="v", session_id="trial", session_dir=tmp_path / "a", name=label, client=a2
+    )
+    assert a2.kwargs["name"] == a.kwargs["name"]
+
+    # The undecorated label stays available for grouping and filtering.
+    assert a.kwargs["config"]["vero/run_label"] == label
+
+    # No name configured -> nothing to disambiguate; W&B's own generated name is
+    # already unique, so `name` must stay absent rather than become a bare suffix.
+    c = FakeWandb()
+    SidecarWandbSink(
+        project="v", session_id="trial", session_dir=tmp_path / "c", client=c
+    )
+    assert "name" not in c.kwargs
+    assert "vero/run_label" not in c.kwargs["config"]
+
+
 def test_sidecar_wandb_run_dir_is_outside_the_archived_session_dir(tmp_path: Path):
     # Regression: W&B's working directory accumulates symlinks (`latest-run`,
     # debug logs, an absolute cache link). If it lived under session_dir it would
