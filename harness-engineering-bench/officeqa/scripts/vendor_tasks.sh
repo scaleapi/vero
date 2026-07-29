@@ -25,7 +25,18 @@ git -C "$work/hd" checkout
 
 src="$work/hd/datasets/officeqa"
 count=$(find "$src" -maxdepth 1 -type d -name 'officeqa-uid*' | wc -l | tr -d ' ')
-[ "$count" -gt 0 ] || { echo "ERROR: no tasks fetched" >&2; exit 1; }
+# Assert the exact count, not merely "some". A partial or interrupted fetch
+# produces a directory that validates fine and then silently scores a subset of
+# the benchmark, which is worse than failing here. 246 is a property of the
+# dataset, recorded in CONFIGURATION.md.
+expected=246
+[ "$count" -eq "$expected" ] || {
+  echo "ERROR: fetched $count officeqa tasks, expected $expected." >&2
+  echo "  A partial fetch would score a subset of the benchmark without saying so." >&2
+  echo "  If upstream genuinely changed, update \$expected here and the count in" >&2
+  echo "  CONFIGURATION.md and scripts/task_data.py together." >&2
+  exit 1
+}
 
 echo "Copying $count task dirs -> $dest ..."
 rm -rf "$dest"; mkdir -p "$dest"
