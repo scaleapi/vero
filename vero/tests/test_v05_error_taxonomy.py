@@ -195,10 +195,12 @@ def test_missing_deployment_pattern_does_not_swallow_container_load_failures():
     )
 
 
-# The exact body the upstream proxy returns for a provider-side rate limit,
-# captured from runs/officeqa/gpt-5.6-sol-codex-r1 on 2026-07-29. The trailing
-# operator hint is the whole problem: it mentions "quota" while the message
-# itself says this is NOT a budget condition.
+# The body the upstream proxy returns for a provider-side rate limit, captured
+# from an officeqa run on 2026-07-29. The trailing operator hint is the whole
+# problem: it mentions "quota" while the message itself says this is NOT a budget
+# condition. Operator support channels in that hint are redacted to `#<redacted>`
+# -- this file is public. Do not restore them: the property under test is prose
+# containing the word "quota", which the placeholder preserves exactly.
 FIREWORKS_RATE_LIMIT = (
     "litellm.RateLimitError: RateLimitError: Fireworks_aiException - "
     '{"error":{"object":"error","type":"invalid_request_error",'
