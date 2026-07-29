@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from vero.evaluation.models import CaseStatus, EvaluationRecord
+from vero.evaluation.models import CaseStatus, EvaluationRecord, EvaluationStatus
+from vero.evaluation.scoring.error_taxonomy import TERMINATING_DIAGNOSTIC_CODES
 from vero.evaluation.store.budget import BudgetLedger
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import RuntimeEvent
@@ -246,6 +247,18 @@ class SidecarWandbSink:
             self.next_step = 0
             self._shipped_request_logs: dict[str, int] = {}
         self._last_inference_usage: dict[str, Any] = {}
+        # Cumulative evaluation outcomes, keyed "<partition>/<principal>".
+        # `diagnostics` below is a last-value field, so it can only ever answer
+        # "has at least one evaluation been terminated", never "how many" -- and
+        # how many, per partition, is what a severity judgement needs. On
+        # 2026-07-29 all eight in-flight browsecomp-plus runs showed
+        # diagnostics="inference_budget_exhausted", which read as uniform
+        # catastrophe; the per-cell counts recovered afterwards from the session
+        # database were 0-4 with most of them followed by a successful retry, a
+        # completely different picture. There was no way to tell those apart
+        # while the runs were live. These counters exist so there is.
+        self._evaluations_ok: dict[str, int] = {}
+        self._evaluations_terminated: dict[str, int] = {}
         # One W&B run per invocation. A fresh session volume mints a new id; a
         # sidecar restart within the same run reuses the one persisted in state,
         # so it resumes rather than colliding with other invocations.
@@ -324,6 +337,28 @@ class SidecarWandbSink:
             payload["diagnostics"] = ",".join(
                 diagnostic.code for diagnostic in report.diagnostics
             )
+        # Cumulative outcome counters alongside that last-value field. Emitted for
+        # every evaluation, including zeros, so a flat line is distinguishable
+        # from a missing series.
+        codes = {diagnostic.code for diagnostic in report.diagnostics}
+        terminated = codes & TERMINATING_DIAGNOSTIC_CODES
+        if terminated:
+            self._evaluations_terminated[scope] = (
+                self._evaluations_terminated.get(scope, 0) + 1
+            )
+        elif report.status is EvaluationStatus.SUCCESS:
+            self._evaluations_ok[scope] = self._evaluations_ok.get(scope, 0) + 1
+        payload[f"{scope}/evaluations/success_total"] = self._evaluations_ok.get(scope, 0)
+        payload[f"{scope}/evaluations/terminated_total"] = (
+            self._evaluations_terminated.get(scope, 0)
+        )
+        # The successful count on the SELECTION partition is the evidence the
+        # optimizer had to choose its candidate on. Thin selection evidence -- not
+        # corrupted scores -- was the real damage the 2026-07-29 misclassification
+        # did, and officeqa cells ranged from 1 to 5. Recovery is deliberately not
+        # computed here: whether a terminated evaluation was followed by a
+        # successful one is retrospective, and these two series make it derivable
+        # downstream without guessing at log time.
         if self.budget_ledger is not None:
             for budget in self.budget_ledger.budgets:
                 scope = f"{budget.backend_id}/{budget.principal.value}"
