@@ -54,9 +54,22 @@ def json_response(value: str) -> str:
     return json.dumps({"response": value})
 
 
+@pytest.fixture
+def gateway_env(monkeypatch):
+    """The metered, allow-listed inference the agent is required to use.
+
+    These are the only credentials the agent reads: OPENAI_* is deliberately not
+    a fallback, because this benchmark sets task_services_use_upstream and so
+    points OPENAI_* at the raw upstream. Constructing the agent without these
+    fails closed, so every test that builds one has to supply them, exactly as
+    the compiled task does.
+    """
+    monkeypatch.setenv("VERO_AGENT_INFERENCE_API_KEY", "test-gateway-key")
+    monkeypatch.setenv("VERO_AGENT_INFERENCE_BASE_URL", "http://gateway.invalid/v1")
+
+
 @pytest.mark.asyncio
-async def test_agent_submits_response_and_populates_context(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+async def test_agent_submits_response_and_populates_context(tmp_path, gateway_env):
     agent = BrowseCompPlusAgent(
         logs_dir=tmp_path / "logs",
         model_name="openai/gpt-5.4-mini-2026-03-17",
@@ -88,8 +101,7 @@ async def test_agent_submits_response_and_populates_context(tmp_path, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_search_uses_fixed_index_cli(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+async def test_search_uses_fixed_index_cli(tmp_path, gateway_env):
     agent = BrowseCompPlusAgent(
         logs_dir=tmp_path / "logs",
         model_name="openai/gpt-5.4-mini-2026-03-17",
@@ -99,7 +111,36 @@ async def test_search_uses_fixed_index_cli(tmp_path, monkeypatch):
     assert await agent._index_command(environment, "search", "quoted query") == []
 
 
-def test_agent_requires_model(tmp_path, monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+def test_agent_requires_model(tmp_path, gateway_env):
     with pytest.raises(ValueError, match="requires a Harbor model"):
         BrowseCompPlusAgent(logs_dir=tmp_path)
+
+
+@pytest.mark.parametrize(
+    "present",
+    [
+        {},
+        {"VERO_AGENT_INFERENCE_API_KEY": "k"},
+        {"VERO_AGENT_INFERENCE_BASE_URL": "http://gateway.invalid/v1"},
+        {"VERO_AGENT_INFERENCE_API_KEY": "", "VERO_AGENT_INFERENCE_BASE_URL": ""},
+    ],
+)
+def test_agent_refuses_to_run_without_the_gateway(tmp_path, monkeypatch, present):
+    # The regression this guards: target inference silently fell back to OPENAI_*,
+    # which under task_services_use_upstream is the raw upstream credential. That
+    # bought an unmetered 7.5-hour run whose only symptom was an empty evaluation
+    # scope in the request log, which is why nobody noticed. A half-configured
+    # gateway must fail the same way as none at all.
+    for name in ("VERO_AGENT_INFERENCE_API_KEY", "VERO_AGENT_INFERENCE_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in present.items():
+        monkeypatch.setenv(name, value)
+    # Set so a fallback would succeed if one existed, making the test meaningful.
+    monkeypatch.setenv("OPENAI_API_KEY", "upstream-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://upstream.invalid/v1")
+
+    with pytest.raises(RuntimeError, match="requires"):
+        BrowseCompPlusAgent(
+            logs_dir=tmp_path / "logs",
+            model_name="openai/gpt-5.4-mini-2026-03-17",
+        )
