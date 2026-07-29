@@ -10,6 +10,8 @@ from vero.evaluation import (
     BackendProvenance,
     CaseResult,
     CaseStatus,
+    DiagnosticSeverity,
+    EvaluationDiagnostic,
     EvaluationPrincipal,
     EvaluationRecord,
     EvaluationReport,
@@ -431,3 +433,89 @@ def test_scheme_less_wandb_base_url_is_repaired_before_init(tmp_path: Path, monk
         project="v", session_id="s", session_dir=tmp_path / "session", client=FakeWandb()
     )
     assert os.environ["WANDB_BASE_URL"] == "https://wandb.example.com"
+
+
+def _terminated_record(
+    evaluation_id: str, *, partition: str = "validation"
+) -> EvaluationRecord:
+    """An evaluation killed by a terminating diagnostic, as the sidecar sees it."""
+    created = datetime(2026, 1, 1, tzinfo=UTC)
+    return EvaluationRecord(
+        id=evaluation_id,
+        request=EvaluationRequest(
+            candidate=Candidate(id="cand", version="v1", created_at=created),
+            evaluation_set=EvaluationSet(name="benchmark", partition=partition),
+        ),
+        report=EvaluationReport(
+            status=EvaluationStatus.INVALID,
+            metrics={"error_rate": 0.027},
+            cases=[],
+            diagnostics=[
+                EvaluationDiagnostic(
+                    code="inference_budget_exhausted",
+                    message=(
+                        "terminating condition 'inference_budget_exhausted' reached; "
+                        "the run cannot continue and must not be retried"
+                    ),
+                    severity=DiagnosticSeverity.ERROR,
+                    phase="harbor",
+                )
+            ],
+        ),
+        backend_id="primary",
+        backend=BackendProvenance(name="harbor", version="1", config_digest="0" * 64),
+        principal=EvaluationPrincipal.SYSTEM,
+        # No objective: a terminated evaluation produced no score to select on,
+        # and the record requires spec and result to be present or absent together.
+        created_at=created,
+        completed_at=created + timedelta(seconds=3),
+    )
+
+
+def test_sidecar_wandb_counts_terminated_and_successful_evaluations(tmp_path: Path):
+    """Cumulative counters, because `diagnostics` is a last-value field.
+
+    It can only say whether at least one evaluation was terminated, never how
+    many. On 2026-07-29 every in-flight browsecomp-plus run showed
+    diagnostics="inference_budget_exhausted", which looked like uniform
+    catastrophe; the counts recovered afterwards were 0-4 per cell with most
+    followed by a successful retry. These series make that distinguishable while
+    a run is still live.
+    """
+    client = FakeWandb()
+    sink = SidecarWandbSink(
+        project="vero",
+        session_id="s",
+        session_dir=tmp_path / "session",
+        client=client,
+    )
+
+    sink(_evaluation_record())
+    first, _ = client.run.logged[0]
+    # Emitted even when zero, so a flat line is not confused with a missing series.
+    assert first["validation/system/evaluations/success_total"] == 1
+    assert first["validation/system/evaluations/terminated_total"] == 0
+
+    sink(_terminated_record("eval-2"))
+    second, _ = client.run.logged[1]
+    assert second["validation/system/evaluations/success_total"] == 1
+    assert second["validation/system/evaluations/terminated_total"] == 1
+    assert second["diagnostics"] == "inference_budget_exhausted"
+
+    # A success after the kill: the two series together make recovery derivable
+    # downstream without the sink having to guess at log time.
+    sink(_terminated_record("eval-3").model_copy(update={"id": "eval-3"}))
+    sink(_evaluation_record().model_copy(update={"id": "eval-4"}))
+    latest, _ = client.run.logged[-1]
+    assert latest["validation/system/evaluations/terminated_total"] == 2
+    assert latest["validation/system/evaluations/success_total"] == 2
+
+    # Counters are scoped by partition/principal, so a development evaluation
+    # does not pollute the selection-partition series.
+    sink(_terminated_record("eval-5", partition="development"))
+    dev, _ = client.run.logged[-1]
+    assert dev["development/system/evaluations/terminated_total"] == 1
+    # Each payload carries only its own scope's counters -- a W&B series persists
+    # across steps, so there is no need to restate the others, and a development
+    # evaluation must not touch the selection partition's count.
+    assert "validation/system/evaluations/terminated_total" not in dev

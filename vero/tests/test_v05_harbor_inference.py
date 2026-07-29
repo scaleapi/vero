@@ -773,3 +773,92 @@ def test_budget_exhaustion_status_is_not_retryable():
     assert budget_exhausted_status not in EvaluationLimits().retry.retry_status_codes
     # The transient ones stay retryable.
     assert 429 in EvaluationLimits().retry.retry_status_codes
+
+
+def test_gateway_request_log_records_the_upstream_cost_headers(tmp_path):
+    """Per-request cost, because no other method attributes spend to a run.
+
+    Per-key billed deltas stop decomposing as soon as a credential carries
+    concurrent work, and reconstructing from a public price table ran 3.1x high
+    across a real pass. The proxy states the answer on every response; this keeps
+    it. Covers the streamed path too, where the cost header arrives with the
+    response head long before the body finishes.
+    """
+    stream_payload = (
+        'event: response.completed\ndata: {"type":"response.completed",'
+        '"response":{"usage":{"input_tokens":5,"output_tokens":3,'
+        '"total_tokens":8}}}\n\n'
+    )
+    cost_headers = {
+        "x-litellm-response-cost": "0.00031",
+        "x-litellm-response-cost-original": "0.00040",
+        "x-litellm-response-cost-discount-amount": "0.00009",
+        # Deliberately unparseable: a malformed header must be skipped, never
+        # raise into the proxy path.
+        "x-litellm-response-cost-margin-amount": "not-a-number",
+    }
+
+    def upstream(request: httpx.Request):
+        if b'"stream": true' in request.content or b'"stream":true' in request.content:
+            return httpx.Response(
+                200,
+                content=stream_payload,
+                headers={"content-type": "text/event-stream", **cost_headers},
+            )
+        return httpx.Response(
+            200,
+            json={"id": "r", "usage": {"input_tokens": 11, "output_tokens": 7}},
+            headers=cost_headers,
+        )
+
+    app = create_inference_gateway_app(
+        config=_logged_config(tmp_path, max_requests=4),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi"},
+        )
+        client.post(
+            "/scopes/producer/eval-1/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi", "stream": True},
+        )
+
+    records = _log_records(tmp_path)
+    assert len(records) == 2
+    for record in records:
+        assert record["upstream_cost_usd"] == 0.00031
+        assert record["upstream_cost_usd_original"] == 0.00040
+        assert record["upstream_cost_discount_usd"] == 0.00009
+        # The unparseable margin header is absent rather than zero, so a missing
+        # value is never mistaken for a genuine zero cost.
+        assert "upstream_cost_margin_usd" not in record
+
+    # Summing the field is the whole point: this is what makes per-cell cost exact.
+    assert round(sum(r["upstream_cost_usd"] for r in records), 5) == 0.00062
+
+
+def test_gateway_request_log_omits_cost_when_the_upstream_sends_none(tmp_path):
+    """A provider that reports no cost must not produce a spurious 0.0."""
+
+    def upstream(request: httpx.Request):
+        return httpx.Response(200, json={"id": "r", "usage": {"input_tokens": 3}})
+
+    app = create_inference_gateway_app(
+        config=_logged_config(tmp_path),
+        upstream_api_key="upstream-secret",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hi"},
+        )
+
+    record = _log_records(tmp_path)[0]
+    assert not any(key.startswith("upstream_cost") for key in record)
