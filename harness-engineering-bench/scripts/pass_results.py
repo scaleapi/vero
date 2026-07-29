@@ -53,9 +53,18 @@ SHIPPED = re.compile(r'"shipped":\s*(\w+)')
 SESSION_DB = "session/database.json"
 
 
-def session_evaluations(directory: str) -> list[dict] | None:
-    """Every evaluation record from the cell's exported session, or None."""
-    archives = glob.glob(f"{directory}/jobs/*/task__*/verifier/session.tar.gz")
+def session_evaluations(job: str) -> list[dict] | None:
+    """Every evaluation record from one job's exported session, or None.
+
+    Scoped to a single job directory, not the whole cell. `infrastructure_max_attempts`
+    can leave several jobs behind, each with its own archive, and the reward is read
+    from one specific job -- so reading evidence from any other would describe a
+    different run than the number it is reported beside. An earlier abandoned attempt
+    that saw 2 of 37 cases would report near-zero kills for a cell whose real
+    attempt was cut to pieces. `glob` returns filesystem order, so which one you got
+    was not even stable between invocations.
+    """
+    archives = sorted(glob.glob(f"{job}/task__*/verifier/session.tar.gz"))
     if not archives:
         return None
     try:
@@ -104,6 +113,9 @@ def cell_result(directory: str) -> dict:
         out["reason"] = "no result.json (run never produced a trial)"
         return out
 
+    # Everything below is read from this one job, so the reward, the verifier's
+    # error block, and the search evidence all describe the same run.
+    job = os.path.dirname(results[-1])
     record = json.load(open(results[-1]))
     stats = record.get("stats") or {}
     if record.get("finished_at") is None:
@@ -122,7 +134,10 @@ def cell_result(directory: str) -> dict:
         if metrics.get("mean") is not None:
             out["reward"] = metrics["mean"]
 
-    for stdout in glob.glob(f"{directory}/jobs/*/task__*/verifier/*stdout*"):
+    # Same job as the reward, for the same reason: this loop's last write wins, so
+    # ranging over every job could invalidate a cell for an error another attempt
+    # raised, or overwrite a real error with a clean earlier one.
+    for stdout in sorted(glob.glob(f"{job}/task__*/verifier/*stdout*")):
         text = open(stdout, errors="replace").read()
         shipped = SHIPPED.search(text)
         if shipped:
@@ -134,7 +149,7 @@ def cell_result(directory: str) -> dict:
                 out["reason"] = re.sub(r"\s+", " ", body)[:150]
 
     # Search evidence and damage, from the session database.
-    records = session_evaluations(directory)
+    records = session_evaluations(job)
     if records is None:
         out["evidence_unknown"] = True
         return out
