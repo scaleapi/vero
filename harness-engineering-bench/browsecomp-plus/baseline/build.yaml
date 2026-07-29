@@ -58,7 +58,22 @@ environment_name: ${inner_env:-modal}
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-max_retries: 1
+# Raised from 1 on 2026-07-29. This field exists precisely so "a transient
+# upstream rate-limit storm during a mandatory evaluation does not fail
+# otherwise-good candidates" (see HarborBuildConfig), and it was set to the
+# least aggressive value. Measured that night: the shared Fireworks per-minute
+# bucket rejected 78,748 requests across one officeqa pass, sustaining
+# ~900-1,000/min for 24 minutes, and SEVEN rejections spread over ten minutes
+# were enough to destroy a 37-case evaluation. The retry stack during search is
+# only the target agent's own SDK (max_retries=8, ~1 min of jittered backoff,
+# and candidate-controlled so it cannot be relied on) plus this one; the
+# infrastructure_max_attempts retry below applies to trusted finalization only.
+# 4 retries at multiplier 2 from a 4s floor, capped at 120s, gives roughly four
+# more minutes of ride-out per case. That covers the bursts, though not a
+# 24-minute saturation -- for which the answer is fewer concurrent runs or a
+# larger provider quota, not more retrying.
+max_retries: 4
+retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
 infrastructure_retry_delay_seconds: 5
 aggregate_attempts: best
@@ -97,6 +112,11 @@ wandb:
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
+  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
+  # gateway token usage to individual trials (trusted, vs. content-matching).
+  # Without it the fallback recovers only each conversation's root turn: measured
+  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
+  request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
     max_concurrency: 8
