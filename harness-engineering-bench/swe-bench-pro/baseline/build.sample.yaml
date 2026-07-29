@@ -1,0 +1,155 @@
+# Subsampled SWE-bench-Pro variant, for optimizer runs.
+#
+# This is a SECOND configuration alongside build.yaml, not a replacement. The
+# canonical build.yaml keeps the full 146/292/293 split and its held-out
+# baseline of 0.2940 +-0.0082; nothing here touches it.
+#
+# Why a variant exists: the full split is unaffordable for an optimizer loop.
+# Each case builds a real repository and runs its (often slow) test suite, so
+# the full-split held-out baseline alone cost ~7.8h of wall clock for three
+# rounds, and an optimizer evaluates candidates many times over. 33/66/66
+# matches gaia and browsecomp-plus, the suite's tightest split.
+#
+# The sampled partitions are NESTED inside the canonical ones: the full split is
+# computed first and each partition is then narrowed within itself, so
+# partitions/sample/test.json is a strict subset of partitions/test.json. No
+# instance can migrate from test into development, and the baseline below did
+# not need re-measuring.
+name: vero/optimize-swe-bench-pro-sample
+description: >-
+  Improve a code-editing SWE-bench-Pro agent while preserving the Harbor agent
+  interface. The target must edit a checked-out repository so the task's hidden
+  test suite passes; the task-source verifier runs the suite for the reward.
+agent_repo: target
+# SWE-bench-Pro ships as the `swebenchpro` dataset in the DEFAULT Harbor registry
+# (731 instances), not as an `<org>/<name>@sha256:<digest>` package like
+# swe-atlas-qna or tau3. Its tasks resolve to git-backed task ids under
+# laude-institute/harbor-datasets at commit c8e8f3fac7097accaacf261d74c3d6f441de45b1,
+# so the version pin is the registry version rather than a content digest.
+task_source: swebenchpro@1.0
+# Shared with the canonical split on purpose: the manifest pins all 731 refs and
+# the build loader reads only task names from it, so a second copy would just be
+# a second thing to keep in sync.
+task_manifest: ../partitions/manifest.json
+agent_import_path: swebench_pro_agent.agent:SweBenchProAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/sample/development.json
+  validation: ../partitions/sample/validation.json
+  test: ../partitions/sample/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    # false, unlike the sibling benchmarks: VeRO materializes case resources via
+    # PackageDatasetClient, which only accepts `<org>/<name>` package refs. A
+    # registry dataset such as swebenchpro@1.0 cannot be exposed that way.
+    expose_case_resources: false
+    total_runs: 100
+    total_cases: 132  # 4x the partition, the suite-wide budget convention
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 264  # 4x the partition, the suite-wide budget convention
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # Held-out K=3 mean over the 66 sampled cases. Recomputed from the very same
+    # trials that produced the canonical full-partition 0.2940 +-0.0082, which is
+    # sound only because the sample is a strict subset; the recomputation
+    # reproduces 0.2940 +-0.0082 exactly on the full set first.
+    #
+    # CAVEAT: those trials targeted qwen-3.6-27b, whereas this variant targets
+    # deepseek-v4-flash. Treat 0.2923 as provisional until a K=3 pass on deepseek
+    # over these 66 cases replaces it (~1.8h at max_concurrency 24).
+    #
+    # The +-0.0332 is not a typo: it is 4x the full split's +-0.0082 because n
+    # falls 293 -> 66. Worth remembering when reading a candidate's margin.
+    baseline_reward: 0.2923
+    failure_value: 0.0
+    max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the pinned baseline, which was
+    # itself pooled over 3 rounds. Without this the candidate carries ~sqrt(3) more
+    # standard error than the floor it is judged against.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: swe-bench-pro-sample
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false  # pinned as baseline_reward above, like every sibling
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: fireworks_ai/deepseek-v4-flash
+environment_name: ${inner_env:-modal}
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Timeouts are bumped well above the GAIA baseline: SWE-bench-Pro tasks build a
+# real repository and run its (often slow) test suite, so both the per-case and
+# the verifier budgets need substantially more headroom than a short-answer task.
+# Both mirror the task package's own `[agent] timeout_sec = 3000`, so the
+# multiplier is 1.0, matching every sibling benchmark. (The canonical build.yaml
+# still reads 1800 here, implying 0.6, but its published 0.2940 was in fact
+# measured at 1.0: all 879 sampled trial configs record
+# agent_timeout_multiplier=1.0. That file's value is wrong and worth a separate
+# one-line fix; this variant is simply spelled correctly from the start.)
+timeout_seconds: 28800
+case_timeout_seconds: 3000
+task_agent_timeout_seconds: 3000
+max_concurrency: 24  # matching the rest of the suite
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 28800
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
+
+# candidate harness runs as an unprivileged uid, unable to read held-out state.
+harness_user: harness
+
+wandb:
+  project: vero-swe-bench-pro
+  group: swe-bench-pro-sample  # distinct from the full-split group
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  producer:
+    # NOTE: gpt-5.3-codex has no /responses deployment on the LiteLLM proxy
+    # (/chat/completions is 200, /responses is 404 DeploymentNotFound), and the
+    # codex agent is Responses-native, so launch with
+    # `--model gpt-5.6-sol` (or gpt-4.1) until that deployment exists.
+    allowed_models: ["${optimizer_model:-gpt-5.6-sol}"]
+    max_concurrency: 8
+  evaluation:
+    # Prefixed form only: the agents strip just `openai/` before calling the
+    # gateway, which then matches this allow-list as an exact string.
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 15000
+    max_tokens: 100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
