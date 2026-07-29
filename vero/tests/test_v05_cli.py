@@ -727,3 +727,86 @@ def test_kimi_gateway_args_override_the_openai_default(tmp_path):
         json.dumps({"producer_base_url": "http://gw/v1"}), encoding="utf-8"
     )
     assert _kimi_gateway_args("kimi-cli", task) == []
+
+
+def test_upstream_credentials_are_blanked_for_the_optimizer_agent(tmp_path):
+    """The optimizer must not be able to read the raw upstream credential.
+
+    The gateway takes the upstream key from the environment handed to the harbor
+    subprocess, and harbor's agent inherits it: two optimizers ran `env` and their
+    transcripts captured the live key and base URL in plaintext. With both, an
+    optimizer can reach the provider directly -- unmetered, past the per-scope
+    model allow-list and past its budget.
+    """
+    from vero.harbor.cli import _upstream_credential_blanks
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps(
+            {
+                "upstream_api_key_source": "MY_PROVIDER_KEY",
+                "upstream_api_key_target": "VERO_INFERENCE_UPSTREAM_API_KEY",
+                "upstream_base_url_source": "MY_PROVIDER_BASE_URL",
+                "upstream_base_url_target": "VERO_INFERENCE_UPSTREAM_BASE_URL",
+                "producer_api_key": "producer-token",
+                "producer_base_url": "http://inference-gateway:8001/scopes/p/o/v1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _upstream_credential_blanks(task)
+    blanked = {args[i + 1].partition("=")[0] for i in range(0, len(args), 2)}
+    assert all(flag == "--ae" for flag in args[::2])
+    # Both the name the gateway reads and the caller's own spelling of it: the
+    # same secret is present under each.
+    assert blanked == {
+        "VERO_INFERENCE_UPSTREAM_API_KEY",
+        "VERO_INFERENCE_UPSTREAM_BASE_URL",
+        "MY_PROVIDER_KEY",
+        "MY_PROVIDER_BASE_URL",
+    }
+    # Every one is emitted as an explicit empty value, which is what overrides the
+    # inherited one rather than merely omitting it.
+    assert all(arg.endswith("=") for arg in args[1::2])
+
+
+def test_blanking_never_touches_the_producer_credential(tmp_path):
+    """Blanking OPENAI_*/ANTHROPIC_* would take the optimizer's own inference away.
+
+    They carry the producer-scope token, which is exactly what the optimizer is
+    supposed to use, so a build that happens to name one of them as its upstream
+    source must not have it blanked.
+    """
+    from vero.harbor.cli import _upstream_credential_blanks
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps(
+            {
+                "upstream_api_key_source": "OPENAI_API_KEY",
+                "upstream_api_key_target": "VERO_INFERENCE_UPSTREAM_API_KEY",
+                "upstream_base_url_source": "OPENAI_BASE_URL",
+                "upstream_base_url_target": "VERO_INFERENCE_UPSTREAM_BASE_URL",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blanked = {a.partition("=")[0] for a in _upstream_credential_blanks(task)[1::2]}
+    assert "OPENAI_API_KEY" not in blanked
+    assert "OPENAI_BASE_URL" not in blanked
+    assert blanked == {
+        "VERO_INFERENCE_UPSTREAM_API_KEY",
+        "VERO_INFERENCE_UPSTREAM_BASE_URL",
+    }
+
+
+def test_no_gateway_means_no_blanks(tmp_path):
+    from vero.harbor.cli import _upstream_credential_blanks
+
+    task = tmp_path / "task"
+    task.mkdir()
+    assert _upstream_credential_blanks(task) == []

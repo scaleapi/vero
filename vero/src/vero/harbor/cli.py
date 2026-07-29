@@ -400,6 +400,58 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
+def _upstream_credential_blanks(task: Path) -> list[str]:
+    """`--ae NAME=` for every upstream credential, so the optimizer cannot read it.
+
+    The gateway service takes the real upstream key from the environment this
+    module builds for the harbor subprocess, and harbor's *agent* inherits that
+    same environment. Two optimizers ran `env` and their transcripts captured the
+    live upstream key and base URL in plaintext. With both, an optimizer can call
+    the provider directly -- unmetered, past the per-scope model allow-list and
+    past its budget -- so the fixed-target guarantee is unenforceable while they
+    are readable. That is a property of the plumbing, not of any particular
+    credential, so it survives rotating the keys.
+
+    Harbor merges exec environments as persistent < per-exec < scoped, and wraps
+    the agent's setup and run phases in ``scoped_exec_env(agent.extra_env)``,
+    which is what ``--ae`` populates. An explicit empty value therefore overrides
+    the inherited one for the agent while leaving the gateway service, which
+    reads the same names through compose interpolation, untouched.
+
+    Deliberately narrow. Only the upstream inference credentials are blanked:
+    the optimizer reaches inference through OPENAI_*/ANTHROPIC_*, which carry the
+    producer-scope token, so it has no legitimate use for these. WANDB_API_KEY and
+    MODAL_TOKEN_* leak the same way and are NOT blanked here, because harbor needs
+    them itself and it is not yet established that nothing in the agent phase
+    does; blanking them belongs with a conformance run to prove it.
+
+    Returns nothing when the task has no gateway, in which case there is no
+    separate upstream credential to hide.
+    """
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return []
+    try:
+        launch = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []  # _compiled_run_environment reports this properly
+    names = [
+        launch.get("upstream_api_key_target"),
+        launch.get("upstream_base_url_target"),
+        # The source names hold the same secret under the caller's own spelling.
+        launch.get("upstream_api_key_source"),
+        launch.get("upstream_base_url_source"),
+    ]
+    arguments: list[str] = []
+    for name in sorted({n for n in names if isinstance(n, str) and n}):
+        # Never blank a name the producer credential is delivered under, or the
+        # optimizer loses its own inference.
+        if name in LAYOUT.routed_credential_envs:
+            continue
+        arguments.extend(["--ae", f"{name}="])
+    return arguments
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -748,6 +800,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         # for a deterministic command line.
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
+        command.extend(_upstream_credential_blanks(task))
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
         command.extend(_kimi_gateway_args(agent, task))
