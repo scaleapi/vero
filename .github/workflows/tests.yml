@@ -13,7 +13,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-${{ github.ref }}
+  # Cancelling a superseded pull-request run costs nothing; cancelling a
+  # main-branch run throws away the only signal that a merged commit broke
+  # something. Gating cancel-in-progress on the event name is not enough on its
+  # own: with one group key per ref, a run that is still pending is cancelled
+  # when a newer one queues behind it, so a middle commit in a fast series of
+  # merges is dropped either way. Keying the group by sha on push gives every
+  # main commit a group of its own while pull requests keep collapsing.
+  group: tests-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 env:
