@@ -635,6 +635,37 @@ _RESPONSE_HEADERS = {
     "request-id",
     "x-request-id",
 }
+
+#: Cost headers the upstream proxy returns per request. Recorded in the request
+#: log because there is otherwise no way to attribute spend to a run: per-key
+#: billed deltas do not decompose once a key carries concurrent work (measured
+#: 2026-07-29: two runs on one credential cost ~$132 each while two comparable
+#: runs on another cost $28.50 combined), and reconstructing from a public price
+#: table ran 3.1x high across a pass ($1,389 against $445 billed) because cache
+#: reads are evidently billed far below the table rate. The proxy already knows
+#: the answer and states it on every response; we simply were not keeping it.
+#: `discount` and `margin` are kept alongside so a future discrepancy between
+#: this and the invoice is diagnosable rather than mysterious.
+_COST_HEADERS = {
+    "x-litellm-response-cost": "upstream_cost_usd",
+    "x-litellm-response-cost-original": "upstream_cost_usd_original",
+    "x-litellm-response-cost-discount-amount": "upstream_cost_discount_usd",
+    "x-litellm-response-cost-margin-amount": "upstream_cost_margin_usd",
+}
+
+
+def _cost_fields(headers: Any) -> dict[str, float]:
+    """Parse the proxy's cost headers, skipping anything absent or unparseable."""
+    fields: dict[str, float] = {}
+    for header, field in _COST_HEADERS.items():
+        raw = headers.get(header) if headers is not None else None
+        if raw is None:
+            continue
+        try:
+            fields[field] = float(raw)
+        except (TypeError, ValueError):
+            continue
+    return fields
 def _provider_error(status_code: int, message: str, code: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -756,6 +787,12 @@ def create_inference_gateway_app(
             attributor.stamp_request(value) if attributor is not None else {}
         )
 
+        # Filled in once the upstream responds, and read by log_request at
+        # whichever call site fires. A holder rather than a parameter so every
+        # exit path -- streamed, non-streamed, and error -- records the cost
+        # without each one having to remember to pass it.
+        cost_fields: dict[str, float] = {}
+
         async def log_request(
             *,
             status: int,
@@ -768,6 +805,7 @@ def create_inference_gateway_app(
             if request_log is None:
                 return
             await request_log.record(
+                **cost_fields,
                 scope=scope_name,
                 attribution=attribution,
                 endpoint=endpoint,
@@ -857,6 +895,7 @@ def create_inference_gateway_app(
             for name, value in upstream.headers.items()
             if name.lower() in _RESPONSE_HEADERS
         }
+        cost_fields.update(_cost_fields(upstream.headers))
         is_stream = "text/event-stream" in upstream.headers.get("content-type", "")
         if is_stream:
             observed = _StreamingUsage()

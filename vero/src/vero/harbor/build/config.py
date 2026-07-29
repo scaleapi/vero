@@ -548,11 +548,31 @@ class HarborBuildConfig(
 
     @model_validator(mode="after")
     def validate_task_source_is_pinned(self) -> HarborBuildConfig:
-        if self.task_source is not None and (
-            not Path(self.task_source).exists() and "@" not in self.task_source
+        if self.task_source is None or Path(self.task_source).exists():
+            return self
+        # An explicit version means a registry reference, and it is pinned, so it
+        # is valid whether or not it resolves on this filesystem. Checked first
+        # because registry names contain "/" too ("gaia/gaia@sha256:..."), so a
+        # path-shape test run ahead of this would reject every pinned dataset.
+        if "@" in self.task_source:
+            return self
+        # An unpinned value that looks like a path is almost always vendored data
+        # that has not been fetched, not a registry reference missing its version.
+        # Saying the latter sends the reader hunting for a version pin to add,
+        # which is why a fresh checkout with no tasks/ directory cost real
+        # debugging time: the loader leaves an unresolvable relative path
+        # untouched, and this validator then reads it as a registry name.
+        if self.task_source.startswith((".", "/")) or self.task_source.endswith(
+            ("tasks", "tasks/")
         ):
-            raise ValueError("registry task_source must include an explicit version")
-        return self
+            raise ValueError(
+                f"task_source {self.task_source!r} looks like a path but does not "
+                "exist (resolved relative to the build file). Vendored task data "
+                "is gitignored, so a fresh checkout has to fetch it first -- see "
+                "each benchmark's scripts/ directory, e.g. officeqa's "
+                "vendor_tasks.sh or browsecomp-plus's build_tasks.py"
+            )
+        raise ValueError("registry task_source must include an explicit version")
 
     @model_validator(mode="after")
     def validate_backend_coherence(self) -> HarborBuildConfig:

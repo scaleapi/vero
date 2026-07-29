@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from vero.evaluation.models import CaseStatus, EvaluationRecord
+from vero.evaluation.models import CaseStatus, EvaluationRecord, EvaluationStatus
+from vero.evaluation.scoring.error_taxonomy import TERMINATING_DIAGNOSTIC_CODES
 from vero.evaluation.store.budget import BudgetLedger
 from vero.runtime.artifacts import ArtifactStore
 from vero.runtime.events import RuntimeEvent
@@ -43,6 +44,29 @@ def normalize_wandb_base_url(environment: dict[str, str] | None = None) -> str |
         corrected,
     )
     return corrected
+
+
+def disambiguated_run_name(name: str | None, run_id: str) -> str | None:
+    """Append a short digest of ``run_id`` so one cell's attempts stay distinct.
+
+    The benchmark configs set ``group`` to the benchmark and ``name`` to a
+    per-launch cell label (``--param wandb_run=officeqa__claude-sonnet-5``), so a
+    relaunch of the same cell mints a fresh run id under a byte-identical display
+    name. In the officeqa and browsecomp-plus passes on 2026-07-29 that produced
+    several same-named rows per cell -- one abandoned, one live -- with no way to
+    tell from the name which was which, exactly when a kill/relaunch decision
+    needed reading. Worse, killing a run does not stop it: the sandbox is
+    orphaned and its sidecar keeps heartbeating, so the abandoned row stays
+    ``state=running`` and keeps logging alongside its replacement.
+
+    Keyed to the resolved id rather than to wall-clock time, so the name is
+    stable across a sidecar restart that resumes the same id and differs across
+    genuinely separate invocations. Returns None unchanged when no name was set,
+    where W&B's own generated name is already unique.
+    """
+    if not name:
+        return name
+    return f"{name}--{hashlib.sha256(run_id.encode()).hexdigest()[:6]}"
 
 
 def _open_wandb_run(
@@ -77,11 +101,17 @@ def _open_wandb_run(
         "id": stable_id,
         "resume": "allow",
         "dir": str(wandb_dir),
-        "config": {**(config or {}), "vero/session_id": session_id},
+        # `vero/run_label` keeps the undecorated cell label groupable and
+        # filterable now that the display name carries a per-attempt suffix.
+        "config": {
+            **(config or {}),
+            "vero/session_id": session_id,
+            **({"vero/run_label": name} if name else {}),
+        },
     }
     for key, value in {
         "entity": entity,
-        "name": name,
+        "name": disambiguated_run_name(name, stable_id),
         "group": group,
         "tags": tags or None,
         "mode": mode,
@@ -143,11 +173,15 @@ class WandbEventSink:
             "id": stable_id,
             "resume": "allow",
             "dir": str(wandb_dir),
-            "config": {**(config or {}), "vero/session_id": session_id},
+            "config": {
+                **(config or {}),
+                "vero/session_id": session_id,
+                **({"vero/run_label": name} if name else {}),
+            },
         }
         for key, value in {
             "entity": entity,
-            "name": name,
+            "name": disambiguated_run_name(name, stable_id),
             "group": group,
             "tags": tags or None,
             "mode": mode,
@@ -246,6 +280,18 @@ class SidecarWandbSink:
             self.next_step = 0
             self._shipped_request_logs: dict[str, int] = {}
         self._last_inference_usage: dict[str, Any] = {}
+        # Cumulative evaluation outcomes, keyed "<partition>/<principal>".
+        # `diagnostics` below is a last-value field, so it can only ever answer
+        # "has at least one evaluation been terminated", never "how many" -- and
+        # how many, per partition, is what a severity judgement needs. On
+        # 2026-07-29 all eight in-flight browsecomp-plus runs showed
+        # diagnostics="inference_budget_exhausted", which read as uniform
+        # catastrophe; the per-cell counts recovered afterwards from the session
+        # database were 0-4 with most of them followed by a successful retry, a
+        # completely different picture. There was no way to tell those apart
+        # while the runs were live. These counters exist so there is.
+        self._evaluations_ok: dict[str, int] = {}
+        self._evaluations_terminated: dict[str, int] = {}
         # One W&B run per invocation. A fresh session volume mints a new id; a
         # sidecar restart within the same run reuses the one persisted in state,
         # so it resumes rather than colliding with other invocations.
@@ -324,6 +370,28 @@ class SidecarWandbSink:
             payload["diagnostics"] = ",".join(
                 diagnostic.code for diagnostic in report.diagnostics
             )
+        # Cumulative outcome counters alongside that last-value field. Emitted for
+        # every evaluation, including zeros, so a flat line is distinguishable
+        # from a missing series.
+        codes = {diagnostic.code for diagnostic in report.diagnostics}
+        terminated = codes & TERMINATING_DIAGNOSTIC_CODES
+        if terminated:
+            self._evaluations_terminated[scope] = (
+                self._evaluations_terminated.get(scope, 0) + 1
+            )
+        elif report.status is EvaluationStatus.SUCCESS:
+            self._evaluations_ok[scope] = self._evaluations_ok.get(scope, 0) + 1
+        payload[f"{scope}/evaluations/success_total"] = self._evaluations_ok.get(scope, 0)
+        payload[f"{scope}/evaluations/terminated_total"] = (
+            self._evaluations_terminated.get(scope, 0)
+        )
+        # The successful count on the SELECTION partition is the evidence the
+        # optimizer had to choose its candidate on. Thin selection evidence -- not
+        # corrupted scores -- was the real damage the 2026-07-29 misclassification
+        # did, and officeqa cells ranged from 1 to 5. Recovery is deliberately not
+        # computed here: whether a terminated evaluation was followed by a
+        # successful one is retrospective, and these two series make it derivable
+        # downstream without guessing at log time.
         if self.budget_ledger is not None:
             for budget in self.budget_ledger.budgets:
                 scope = f"{budget.backend_id}/{budget.principal.value}"

@@ -268,6 +268,19 @@ def analyze_session(
         per_trial: dict[str, dict] = {}
         seen: dict[str, set] = defaultdict(set)
         residual = {"requests": 0, **{key: 0 for key in TOKEN_KEYS}}
+        # Rows are keyed by task, and every attempt of a task lands in one row:
+        # with n_attempts > 1 the repeated passes send identical prompts, so
+        # content matching cannot tell them apart (assign_thread resolves to
+        # by_task[0]). Keying by trial_name would invent per-attempt precision the
+        # evidence does not support. The gateway side therefore sums across
+        # attempts, and the agent-reported side has to sum over the same attempts
+        # or the comparison is off by the attempt count -- it read 3.1x low on a
+        # 99-case x 3-attempt officeqa finalization before this.
+        reported_by_task: dict[str, dict[str, float]] = {}
+        for trial in trials:
+            totals = reported_by_task.setdefault(trial["task_name"], {})
+            for key, value in trial["agent_reported"].items():
+                totals[key] = totals.get(key, 0) + value
         for thread in threads.values():
             trial = assign_thread(thread, trials, task_texts)
             if trial is None:
@@ -282,7 +295,7 @@ def analyze_session(
                     "requests": 0,
                     "latency_ms": 0.0,
                     "wall_s": 0.0,
-                    "agent_reported": trial["agent_reported"],
+                    "agent_reported": dict(reported_by_task.get(task_name, {})),
                     **{key: 0 for key in TOKEN_KEYS},
                 },
             )

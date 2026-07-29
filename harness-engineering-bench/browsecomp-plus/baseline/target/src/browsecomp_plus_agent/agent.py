@@ -116,14 +116,22 @@ class BrowseCompPlusAgent(BaseAgent):
         # and reading them is what keeps target inference on the gateway -- without
         # this, the agent silently ran on the raw upstream credential: unmetered,
         # and with the pinned target model unenforced.
+        # Fail closed. Falling back to OPENAI_* here would silently restore the
+        # original bug -- an unmetered 7.5-hour run whose only symptom is an empty
+        # evaluation scope in the request log, which is how it went unnoticed the
+        # first time. Missing credentials are a wiring fault, so say so at once.
         gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
         gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
-        if gateway_key and gateway_url:
-            self._client = AsyncOpenAI(
-                api_key=gateway_key, base_url=gateway_url, max_retries=8
+        if not gateway_key or not gateway_url:
+            raise RuntimeError(
+                "BrowseComp-Plus target inference requires "
+                "VERO_AGENT_INFERENCE_API_KEY and VERO_AGENT_INFERENCE_BASE_URL; "
+                "refusing to fall back to OPENAI_*, which points at the "
+                "unmetered upstream under task_services_use_upstream"
             )
-        else:
-            self._client = AsyncOpenAI(max_retries=8)  # OPENAI_* from the env
+        self._client = AsyncOpenAI(
+            api_key=gateway_key, base_url=gateway_url, max_retries=8
+        )
 
     @override
     async def setup(self, environment: BaseEnvironment) -> None:

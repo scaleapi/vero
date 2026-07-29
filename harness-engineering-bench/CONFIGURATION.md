@@ -91,7 +91,10 @@ benchmark can be checked against the others at a glance.
   `aggregate_attempts: mean`**. This is not optional polish: each pinned
   `baseline_reward` (◆) was itself pooled over 3 rounds, so scoring a submitted
   candidate once would give it ~√3 more standard error than the floor it is
-  compared against. Search and validation keep the global 1. `max_retries: 1`, 3
+  compared against. Search and validation keep the global 1. `max_retries: 4`
+  with `retry_max_wait_seconds: 120` (raised from 1: a single retry could not
+  survive a provider rate-limit storm, and seven rejections over ten minutes
+  destroyed a 37-case evaluation), 3
   infrastructure attempts at 5s, `aggregate_attempts: best`,
   `max_concurrency: 24` (see § — every timeout below is derived from this
   number), `error_rate_threshold: 0.1`, `feedback_transcripts: true` with

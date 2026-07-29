@@ -21,6 +21,29 @@ test is reachable only by the trusted final verifier.
 The paper-era benchmark stack remains available on the `paper/v1` branch and
 the `paper-v1` tag. New benchmarks should use this Harbor-native layout.
 
+## First run in a fresh checkout: fetch the task data
+
+Two benchmarks keep their task definitions out of git — officeqa's 246 and
+browsecomp-plus's 830 directories are hundreds of megabytes and thousands of
+files, and committing them once bloated the repository and timed out the
+pre-commit secret scan. A fresh checkout therefore cannot run either benchmark
+until the data is fetched, and the failure is not obvious from the error.
+
+Ask what is missing, and what to run for it:
+
+```bash
+python3 scripts/task_data.py            # status per benchmark
+python3 scripts/task_data.py --check    # exits 1 if anything is missing
+```
+
+It reports state and names the command; it deliberately fetches nothing, because
+the fetchers are slow, network-bound and replace their output directory. The
+other three benchmarks pin a registry digest and need nothing local.
+
+A count that disagrees with the expected total means a partial fetch, which is
+worth taking seriously: a half-vendored directory passes config validation and
+then scores a subset of the benchmark without saying so.
+
 ## Benchmarks
 
 Promoted benchmarks live at the top level. Task sets still under review live in
