@@ -33,6 +33,8 @@ BENCHMARKS = [
     "tau3",
     "browsecomp-plus",
     "swe-bench-pro",
+    "dabstep",
+    "medagentbench",
 ]
 
 # Names that would let a task reach the upstream provider directly, bypassing
