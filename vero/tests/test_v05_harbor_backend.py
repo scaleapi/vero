@@ -769,6 +769,74 @@ async def test_harbor_backend_marks_inference_budget_exhaustion_invalid(tmp_path
     )
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("remaining_tokens", "expected_category", "expected_status"),
+    [
+        # The ledger has headroom, so a message claiming budget exhaustion is
+        # false -- in practice a provider rate limit wearing the wrong words.
+        (500_000, "transient_infra", EvaluationStatus.SUCCESS),
+        # The ledger agrees the pool is empty: still terminating.
+        (0, "inference_budget_exhausted", EvaluationStatus.INVALID),
+    ],
+)
+async def test_gateway_ledger_overrides_a_text_only_budget_claim(
+    tmp_path, monkeypatch, remaining_tokens, expected_category, expected_status
+):
+    """Budget exhaustion must be confirmed by the gateway, not just asserted.
+
+    The message is all that survives an in-container failure, so before this the
+    terminating category was reachable from prose alone: on 2026-07-29 a provider
+    rate limit containing the word "quota" ended an officeqa cell while both
+    scopes sat under 10% of their caps and the gateway had emitted no 402.
+    """
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
+            "example/beta": [
+                {
+                    "verifier_result": None,
+                    "exception_info": {
+                        "exception_type": "openai.RateLimitError",
+                        "message": "Error code: 429 - budget_exhausted",
+                    },
+                }
+            ],
+        },
+    )
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            inference_gateway_url="http://inference-gateway:8001",
+            inference_gateway_token="gw-token",
+            inference_gateway_finalization_token="gw-final",
+        )
+    )
+
+    async def _fake_usage(self, *, finalization):
+        assert finalization is True
+        return remaining_tokens <= 0
+
+    monkeypatch.setattr(
+        HarborBackend, "_scope_budget_is_exhausted", _fake_usage, raising=True
+    )
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox, finalization=True),
+        request=_request(CaseRange(stop=2)),
+    )
+    assert report.cases[1].output["error_category"] == expected_category
+    assert report.status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_budget_check_is_skipped_without_a_gateway(tmp_path):
+    """No gateway configured means no answer, and no answer must change nothing."""
+    backend = HarborBackend(_config(tmp_path))
+    assert await backend._scope_budget_is_exhausted(finalization=False) is None
+
 @pytest.mark.asyncio
 async def test_harbor_backend_treats_missing_coverage_as_infrastructure(tmp_path):
     # Only alpha produces a trial; beta is dropped entirely by the sub-run.
@@ -1221,3 +1289,72 @@ async def test_case_result_carries_a_phase_execution_trace(tmp_path: Path):
     failed = by_id["case-b"].execution_trace
     assert [span["phase"] for span in failed] == ["environment_setup", "exception"]
     assert failed[-1]["detail"]["exception_type"] == "TimeoutError"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "status_code", "expected"),
+    [
+        # Both caps present and one is empty -> exhausted.
+        ({"remaining_requests": 40, "remaining_tokens": 0}, 200, True),
+        ({"remaining_requests": 0, "remaining_tokens": 900}, 200, True),
+        # Headroom on both -> not exhausted, which is what lets a false text
+        # claim be overridden.
+        ({"remaining_requests": 40, "remaining_tokens": 900}, 200, False),
+        # An uncapped scope reports None for both. That is "cannot be exhausted",
+        # not "unknown" -- returning None here would leave a bogus terminating
+        # claim standing on exactly the scopes that have no limit to hit.
+        ({"remaining_requests": None, "remaining_tokens": None}, 200, False),
+        # Anything unhealthy is unknown: never guess from a failed lookup.
+        ({}, 403, None),
+        ({}, 500, None),
+    ],
+)
+async def test_scope_budget_lookup_reads_the_ledger(
+    tmp_path, monkeypatch, payload, status_code, expected
+):
+    import httpx
+
+    captured: dict[str, object] = {}
+
+    class _Response:
+        def __init__(self):
+            self.status_code = status_code
+
+        def json(self):
+            return payload
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    backend = HarborBackend(
+        _config(
+            tmp_path,
+            inference_gateway_url="http://inference-gateway:8001/",
+            inference_gateway_token="gw-token",
+            inference_gateway_finalization_token="gw-final",
+        )
+    )
+
+    assert await backend._scope_budget_is_exhausted(finalization=False) is expected
+    # The evaluation scope is asked with the evaluation token, and the trailing
+    # slash on the configured URL must not produce a doubled path separator.
+    assert captured["url"] == "http://inference-gateway:8001/usage/evaluation"
+    assert captured["headers"]["Authorization"] == "Bearer gw-token"
+
+    await backend._scope_budget_is_exhausted(finalization=True)
+    assert captured["url"] == "http://inference-gateway:8001/usage/finalization"
+    assert captured["headers"]["Authorization"] == "Bearer gw-final"

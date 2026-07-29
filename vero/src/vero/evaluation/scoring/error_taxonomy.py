@@ -145,21 +145,50 @@ NO_REWARD_SIGNAL = "no_rewards_recorded"
 # Ordered most-specific first. Each regex is matched, case-insensitively,
 # against a combined "<exception type name> <message>" string. Budget-like
 # credit/quota exhaustion from an upstream provider is treated as an inference
-# budget condition; authentication/permission never retries; the remainder are
-# transient infrastructure. Anything unmatched is deliberately NOT infra — a
-# candidate whose own harness crashes is a task failure, an informative low
-# score, not an infrastructure error.
+# budget condition; authentication never retries; the remainder are transient
+# infrastructure. Anything unmatched is deliberately NOT infra — a candidate
+# whose own harness crashes is a task failure, an informative low score, not an
+# infrastructure error.
+#
+# These patterns decide whether a run TERMINATES, so every alternative has to be
+# a token no other layer emits incidentally. Two were not, and both cost real
+# runs on 2026-07-29:
+#
+#   "quota"   — the upstream proxy appends an operator hint to every provider
+#               rate limit: "[Provider-level rate limit on fireworks_ai — this
+#               is NOT your per-key proxy limit. Check #<redacted> for
+#               shared org quota alerts...]". A transient 429 whose own text
+#               says it is not a budget problem was classified as permanent
+#               budget exhaustion, terminating an officeqa cell at 9% of its
+#               token cap and truncating its search. Verified: the identical
+#               429 with that sentence removed classifies correctly.
+#   "billing" — on a benchmark made of office documents, a candidate echoing
+#               invoice text into an error message terminates its own run.
+#   "permission" — collides with the filesystem: "Failed to install executable
+#               /usr/local/bin/x: Permission denied" (a failure we have hit; it
+#               is why the builds set UV_TOOL_BIN_DIR) and any candidate
+#               OSError [Errno 13] both read as an auth failure.
+#
+# The fix is to match provider error *codes* and SDK exception *type names*,
+# which are single tokens, instead of words that also occur in prose. Compare:
+#   insufficient_quota   OpenAI's billing-exhaustion code   -> budget, correct
+#   "shared org quota alerts"  prose in a rate-limit hint    -> must NOT match
+#   PermissionDeniedError      the openai SDK type for 403   -> auth, correct
+#   "Permission denied"        a filesystem error            -> must NOT match
+# Both discriminate on the space: a code or type name has none. Narrowing rather
+# than deleting, because the ledger-side out-of-band assignment this module's
+# docstring describes was never built -- the pattern is the only way a genuine
+# exhaustion is recognised, and dropping it would blame the candidate for
+# running out of gateway budget.
 _SIGNAL_PATTERNS: list[tuple[re.Pattern[str], ErrorCategory]] = [
     (
-        re.compile(
-            r"budget.?exhausted|quota|insufficient.?credits|billing",
-            re.IGNORECASE,
-        ),
+        re.compile(r"budget_exhausted|insufficient_quota", re.IGNORECASE),
         ErrorCategory.INFERENCE_BUDGET_EXHAUSTED,
     ),
     (
         re.compile(
-            r"authentication|unauthorized|invalid.?api.?key|permission|forbidden",
+            r"authentication|unauthorized|invalid.?api.?key|forbidden|"
+            r"permissiondenied",
             re.IGNORECASE,
         ),
         ErrorCategory.AUTH_FAILURE,

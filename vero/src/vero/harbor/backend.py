@@ -1126,6 +1126,58 @@ class HarborBackend:
             f"max_case_{metric}": float(max(values)),
         }
 
+    async def _scope_budget_is_exhausted(self, *, finalization: bool) -> bool | None:
+        """Ask the gateway whether this scope's pool is genuinely empty.
+
+        The authoritative answer to "did we run out of budget" is the gateway's
+        own ledger, not an exception message. Returns None when it cannot be
+        established -- no gateway configured, or the request failed -- and
+        callers must then leave the text-derived classification alone rather than
+        guess in either direction.
+
+        This exists because the message is all that survives an in-container
+        failure (see the note in _case_result), so the terminating budget
+        category was reachable from prose: on 2026-07-29 a provider rate limit
+        whose text happened to contain "quota" terminated an officeqa cell while
+        both scopes sat under 10% of their 3,000M caps, and the gateway had
+        emitted no 402 at all. Narrowing the pattern stops that specific string;
+        consulting the ledger is what makes the claim checkable in general, and
+        it also removes the candidate's ability to force a terminating condition
+        by printing the gateway's own error code.
+        """
+        base = self.config.inference_gateway_url
+        token = (
+            self.config.inference_gateway_finalization_token
+            if finalization
+            else self.config.inference_gateway_token
+        )
+        if base is None or token is None:
+            return None
+        scope = "finalization" if finalization else "evaluation"
+        try:
+            import httpx  # noqa: PLC0415 -- ships with the harbor extra
+        except ImportError:  # pragma: no cover - harbor extra always provides it
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(
+                    f"{base.rstrip('/')}/usage/{scope}",
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code != 200:
+                return None
+            usage = response.json()
+        except Exception:  # noqa: BLE001 -- never fail an evaluation over telemetry
+            return None
+        # A scope with no configured cap reports None and can never be exhausted.
+        remaining = [
+            usage.get("remaining_requests"),
+            usage.get("remaining_tokens"),
+        ]
+        if all(value is None for value in remaining):
+            return False
+        return any(value is not None and value <= 0 for value in remaining)
+
     def _case_result(
         self,
         case: HarborCase,
@@ -1133,6 +1185,7 @@ class HarborBackend:
         *,
         artifact_root: Path,
         trusted: bool = False,
+        budget_exhausted: bool | None = None,
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
         trace = self._execution_trace(attempts)
@@ -1271,6 +1324,17 @@ class HarborBackend:
             category = ErrorCategory.TRANSIENT_INFRA
         else:
             category = classify_case(signals)
+            if (
+                category == ErrorCategory.INFERENCE_BUDGET_EXHAUSTED
+                and budget_exhausted is False
+            ):
+                # The message claimed budget exhaustion and the gateway's ledger
+                # says the pool still has headroom, so the claim is false. In
+                # practice this is a provider rate limit wearing the wrong words:
+                # retryable, non-terminating infrastructure. Only an explicit
+                # False overrides -- None means we could not ask, and guessing
+                # would risk letting a real exhaustion run on.
+                category = ErrorCategory.TRANSIENT_INFRA
             if not trusted and category == ErrorCategory.TRANSIENT_INFRA:
                 # A trial ran and died with a transient-looking exception. For
                 # competitive (agent) selection we cannot trust a candidate-
@@ -1281,6 +1345,20 @@ class HarborBackend:
                 # the failure value instead. Genuine infrastructure is caught
                 # out of band (coverage gaps above; gateway-ledger budget/auth,
                 # which remain terminating) and via trusted-only retry.
+                #
+                # The terminating categories stay exempt on purpose: a real
+                # budget exhaustion or auth failure means every later request
+                # fails the same way, so continuing would only burn the agent's
+                # remaining case budget on doomed work. What made that dangerous
+                # until 2026-07-29 was not this exemption but the breadth of the
+                # patterns behind it -- "quota" and "permission" matched ordinary
+                # prose, so a candidate could terminate its own run by printing
+                # the wrong word. That is fixed in error_taxonomy by matching
+                # provider codes and SDK type names instead. Residual risk worth
+                # closing later: a candidate that deliberately emits
+                # "budget_exhausted" can still force an INVALID evaluation, which
+                # is only truly fixed by taking budget state from the gateway
+                # ledger out of band, as that module's docstring intends.
                 category = ErrorCategory.TASK_FAILURE
         category_policy = policy(category)
         output["dead_exception_types"] = exception_counts
@@ -1525,12 +1603,19 @@ class HarborBackend:
 
         case_results: list[CaseResult] = []
         scores: list[float] = []
+        # Fetched once per evaluation rather than per case: the ledger is a
+        # whole-scope pool, so the answer cannot differ between cases, and one
+        # request keeps this off the hot path.
+        budget_exhausted = await self._scope_budget_is_exhausted(
+            finalization=context.finalization
+        )
         for case in cases:
             case_result, score = self._case_result(
                 case,
                 groups.get(case.expected_result_task_name, []),
                 artifact_root=context.artifact_dir,
                 trusted=context.finalization,
+                budget_exhausted=budget_exhausted,
             )
             case_results.append(case_result)
             scores.append(score)

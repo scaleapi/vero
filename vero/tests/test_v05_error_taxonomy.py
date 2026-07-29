@@ -193,3 +193,72 @@ def test_missing_deployment_pattern_does_not_swallow_container_load_failures():
         classify_case(["AddTestsDirError", "Failed to add tests directory to environment."])
         is ErrorCategory.TRANSIENT_INFRA
     )
+
+
+# The exact body the upstream proxy returns for a provider-side rate limit,
+# captured from runs/officeqa/gpt-5.6-sol-codex-r1 on 2026-07-29. The trailing
+# operator hint is the whole problem: it mentions "quota" while the message
+# itself says this is NOT a budget condition.
+FIREWORKS_RATE_LIMIT = (
+    "litellm.RateLimitError: RateLimitError: Fireworks_aiException - "
+    '{"error":{"object":"error","type":"invalid_request_error",'
+    '"code":"invalid_request_error","message":"rate limit exceeded, please try '
+    'again later"}}. Received Model Group=fireworks_ai/deepseek-v4-flash\n'
+    "Available Model Group Fallbacks=None [Provider-level rate limit on "
+    "fireworks_ai — this is NOT your per-key proxy limit. Check "
+    "#<redacted> for shared org quota alerts, or ask in #<redacted> "
+    "with your key alias and the error timestamp.]"
+)
+
+
+def test_provider_rate_limit_is_transient_not_budget_exhaustion():
+    """The regression that cost an officeqa cell and truncated its search.
+
+    1,935 of these arrived in one run. Classified as budget exhaustion they are
+    terminating and unretryable, so a 37-case evaluation whose error rate was
+    2.7% was destroyed and the optimizer was told "the run cannot continue and
+    must not be retried" -- while both gateway scopes sat under 10% of their
+    3,000M token caps and the gateway never emitted its own 402.
+    """
+    assert classify_signal(FIREWORKS_RATE_LIMIT) is ErrorCategory.TRANSIENT_INFRA
+    assert policy(classify_signal(FIREWORKS_RATE_LIMIT)).retryable
+    assert not policy(classify_signal(FIREWORKS_RATE_LIMIT)).terminating
+
+
+def test_budget_matches_provider_codes_and_not_prose_about_quota():
+    """Only single-token codes may mean budget exhaustion.
+
+    `insufficient_quota` (OpenAI's billing code) and `budget_exhausted` (this
+    gateway's own 402 code) are real signals. The word "quota" inside a sentence
+    is not, and neither is "billing" -- which on a benchmark made of office
+    documents a candidate can emit simply by echoing an invoice.
+    """
+    for code in ("insufficient_quota", "budget_exhausted", "scope budget_exhausted"):
+        assert classify_signal(code) is ErrorCategory.INFERENCE_BUDGET_EXHAUSTED, code
+
+    for prose in (
+        "Check #<redacted> for shared org quota alerts",
+        "AssertionError: expected billing total 42 but got 41",
+        "ValueError: quota column missing from the invoice sheet",
+    ):
+        assert (
+            classify_signal(prose) is not ErrorCategory.INFERENCE_BUDGET_EXHAUSTED
+        ), prose
+
+
+def test_auth_matches_sdk_types_and_not_filesystem_permission_errors():
+    """`PermissionDeniedError` is auth; `Permission denied` is a file.
+
+    The installer case is not hypothetical: uv tool install writes to
+    /usr/local/bin by default, which the unprivileged optimizer user cannot
+    touch, and that is why the builds set UV_TOOL_BIN_DIR. Read as an auth
+    failure it terminates the whole run.
+    """
+    for signal in ("PermissionDeniedError", "openai.PermissionDeniedError", "Unauthorized"):
+        assert classify_signal(signal) is ErrorCategory.AUTH_FAILURE, signal
+
+    for signal in (
+        "Failed to install executable /usr/local/bin/mini-swe-agent: Permission denied",
+        "OSError: [Errno 13] Permission denied: '/app/out.json'",
+    ):
+        assert classify_signal(signal) is not ErrorCategory.AUTH_FAILURE, signal
