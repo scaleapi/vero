@@ -738,7 +738,7 @@ def test_upstream_credentials_are_blanked_for_the_optimizer_agent(tmp_path):
     optimizer can reach the provider directly -- unmetered, past the per-scope
     model allow-list and past its budget.
     """
-    from vero.harbor.cli import _upstream_credential_blanks
+    from vero.harbor.cli import _agent_environment_blanks
 
     task = tmp_path / "task"
     (task / "environment" / "gateway").mkdir(parents=True)
@@ -756,7 +756,7 @@ def test_upstream_credentials_are_blanked_for_the_optimizer_agent(tmp_path):
         encoding="utf-8",
     )
 
-    args = _upstream_credential_blanks(task)
+    args = _agent_environment_blanks(task)
     blanked = {args[i + 1].partition("=")[0] for i in range(0, len(args), 2)}
     assert all(flag == "--ae" for flag in args[::2])
     # Both the name the gateway reads and the caller's own spelling of it: the
@@ -779,7 +779,7 @@ def test_blanking_never_touches_the_producer_credential(tmp_path):
     supposed to use, so a build that happens to name one of them as its upstream
     source must not have it blanked.
     """
-    from vero.harbor.cli import _upstream_credential_blanks
+    from vero.harbor.cli import _agent_environment_blanks
 
     task = tmp_path / "task"
     (task / "environment" / "gateway").mkdir(parents=True)
@@ -795,7 +795,7 @@ def test_blanking_never_touches_the_producer_credential(tmp_path):
         encoding="utf-8",
     )
 
-    blanked = {a.partition("=")[0] for a in _upstream_credential_blanks(task)[1::2]}
+    blanked = {a.partition("=")[0] for a in _agent_environment_blanks(task)[1::2]}
     assert "OPENAI_API_KEY" not in blanked
     assert "OPENAI_BASE_URL" not in blanked
     assert blanked == {
@@ -805,8 +805,77 @@ def test_blanking_never_touches_the_producer_credential(tmp_path):
 
 
 def test_no_gateway_means_no_blanks(tmp_path):
-    from vero.harbor.cli import _upstream_credential_blanks
+    from vero.harbor.cli import _agent_environment_blanks
 
     task = tmp_path / "task"
     task.mkdir()
-    assert _upstream_credential_blanks(task) == []
+    assert _agent_environment_blanks(task) == []
+
+
+def test_every_declared_secret_is_blanked_for_the_agent(tmp_path):
+    """The container blanked all declared secrets; the agent exec blanked none.
+
+    W&B and Modal credentials leaked into optimizer transcripts by exactly the
+    route the upstream key did. Their legitimate consumer is the trusted sidecar --
+    W&B reporting runs there, and inner evaluations shell out to harbor from inside
+    it -- so the optimizer has no use for them. The compiler publishes the list it
+    already computes for the compose template, so the two cannot drift.
+    """
+    from vero.harbor.cli import _agent_environment_blanks
+
+    task = tmp_path / "task"
+    (task / "environment").mkdir(parents=True)
+    (task / "environment" / "agent-env-blanks.json").write_text(
+        json.dumps(
+            {
+                "names": [
+                    "MODAL_TOKEN_ID",
+                    "MODAL_TOKEN_SECRET",
+                    "WANDB_API_KEY",
+                    "WANDB_BASE_URL",
+                    "VERO_INFERENCE_UPSTREAM_API_KEY",
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _agent_environment_blanks(task)
+    blanked = {a.partition("=")[0] for a in args[1::2]}
+    assert blanked == {
+        "MODAL_TOKEN_ID",
+        "MODAL_TOKEN_SECRET",
+        "WANDB_API_KEY",
+        "WANDB_BASE_URL",
+        "VERO_INFERENCE_UPSTREAM_API_KEY",
+    }
+    assert all(flag == "--ae" for flag in args[::2])
+    assert all(arg.endswith("=") for arg in args[1::2])
+
+
+def test_a_damaged_blank_list_still_hides_the_upstream_credential(tmp_path):
+    """Fail soft toward the credential that motivated this, never toward none.
+
+    A task compiled before the published list existed, or one whose file is
+    unreadable, must still get the upstream key blanked from the gateway's own
+    launch config rather than running with nothing blanked at all.
+    """
+    from vero.harbor.cli import _agent_environment_blanks
+
+    task = tmp_path / "task"
+    (task / "environment" / "gateway").mkdir(parents=True)
+    (task / "environment" / "agent-env-blanks.json").write_text(
+        "{not json", encoding="utf-8"
+    )
+    (task / "environment" / "gateway" / "launch.json").write_text(
+        json.dumps(
+            {
+                "upstream_api_key_source": "MY_PROVIDER_KEY",
+                "upstream_api_key_target": "VERO_INFERENCE_UPSTREAM_API_KEY",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blanked = {a.partition("=")[0] for a in _agent_environment_blanks(task)[1::2]}
+    assert blanked == {"MY_PROVIDER_KEY", "VERO_INFERENCE_UPSTREAM_API_KEY"}

@@ -546,6 +546,19 @@ def compile_harbor_task(
             gateway_environment.append(UPSTREAM_BASE_URL_ENV)
             credential_sources.append(config.inference_gateway.upstream_base_url_env)
     task_environment = list(dict.fromkeys([*config.secrets, *gateway_environment]))
+    # One list, two consumers. The compose template blanks these on the candidate's
+    # main service; the launcher blanks the same names for the optimizer's agent
+    # exec, which compose never sees. Keeping it computed once is the point: the
+    # "adding a credential to `secrets` blanks it automatically" promise held only
+    # for the container, and the agent exec is exactly where it did not, which is
+    # how the upstream key ended up readable in two optimizer transcripts. The
+    # credential *sources* join it because they hold the same secret under the
+    # caller's own spelling.
+    scrubbed_main_environment = [
+        name
+        for name in dict.fromkeys([*task_environment, *credential_sources])
+        if name not in GATEWAY_ROUTED_CREDENTIALS
+    ]
     if os.environ.get("VERO_SKIP_SECRET_CHECK") is None:
         required_sources = list(dict.fromkeys([*config.secrets, *credential_sources]))
         missing = [name for name in required_sources if not os.environ.get(name)]
@@ -559,6 +572,12 @@ def compile_harbor_task(
     sidecar_dir = environment_dir / "sidecar"
     gateway_dir = environment_dir / "gateway"
     environment_dir.mkdir(parents=True)
+    # Published so the launcher blanks exactly what the container blanks, without
+    # re-deriving it from a config it no longer has at run time.
+    (environment_dir / "agent-env-blanks.json").write_text(
+        json.dumps({"names": scrubbed_main_environment}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     if use_local_vero:
         _copy_vero_source(source_root, environment_dir / "vero")
 
@@ -738,9 +757,7 @@ def compile_harbor_task(
         # (to the producer token and the gateway URL). The exclusion exists to
         # avoid emitting the same key twice, not to permit anything: adding a new
         # credential to `secrets` gets it blanked automatically.
-        "scrubbed_main_environment": [
-            name for name in task_environment if name not in GATEWAY_ROUTED_CREDENTIALS
-        ],
+        "scrubbed_main_environment": scrubbed_main_environment,
         "producer_inference_token": producer_inference_token,
         "evaluation_inference_token": evaluation_inference_token,
         "inference_gateway_url": INFERENCE_GATEWAY_URL,

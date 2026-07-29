@@ -400,8 +400,8 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
-def _upstream_credential_blanks(task: Path) -> list[str]:
-    """`--ae NAME=` for every upstream credential, so the optimizer cannot read it.
+def _agent_environment_blanks(task: Path) -> list[str]:
+    """`--ae NAME=` for every declared credential, so the optimizer cannot read it.
 
     The gateway service takes the real upstream key from the environment this
     module builds for the harbor subprocess, and harbor's *agent* inherits that
@@ -418,30 +418,42 @@ def _upstream_credential_blanks(task: Path) -> list[str]:
     the inherited one for the agent while leaving the gateway service, which
     reads the same names through compose interpolation, untouched.
 
-    Deliberately narrow. Only the upstream inference credentials are blanked:
-    the optimizer reaches inference through OPENAI_*/ANTHROPIC_*, which carry the
-    producer-scope token, so it has no legitimate use for these. WANDB_API_KEY and
-    MODAL_TOKEN_* leak the same way and are NOT blanked here, because harbor needs
-    them itself and it is not yet established that nothing in the agent phase
-    does; blanking them belongs with a conformance run to prove it.
+    Every declared secret is blanked, not just the upstream inference credential.
+    The compose template already blanks all of them on the candidate's main
+    service and routes them to the trusted sidecar, which is their only legitimate
+    consumer -- WANDB_API_KEY reaches the sidecar's own container, and inner
+    evaluations shell out to harbor from inside the sidecar, so MODAL_TOKEN_* is
+    needed there rather than in the agent. The agent exec was the one surface that
+    promise did not cover. The list is computed at compile time and published to
+    ``environment/agent-env-blanks.json`` so both surfaces blank the same names
+    and cannot drift.
 
-    Returns nothing when the task has no gateway, in which case there is no
-    separate upstream credential to hide.
+    A missing blank-list file yields the upstream names alone, so a task compiled
+    before this existed still gets the credential that motivated it hidden.
     """
+    names: list[str] = []
+    blanks = task / "environment/agent-env-blanks.json"
+    if blanks.exists():
+        try:
+            names.extend(json.loads(blanks.read_text(encoding="utf-8"))["names"])
+        except (json.JSONDecodeError, OSError, KeyError, TypeError):
+            pass  # fall back to the gateway names below rather than run unblanked
     path = task / "environment/gateway/launch.json"
-    if not path.exists():
-        return []
-    try:
-        launch = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return []  # _compiled_run_environment reports this properly
-    names = [
-        launch.get("upstream_api_key_target"),
-        launch.get("upstream_base_url_target"),
-        # The source names hold the same secret under the caller's own spelling.
-        launch.get("upstream_api_key_source"),
-        launch.get("upstream_base_url_source"),
-    ]
+    if path.exists():
+        try:
+            launch = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            launch = {}  # _compiled_run_environment reports this properly
+        names.extend(
+            [
+                launch.get("upstream_api_key_target"),
+                launch.get("upstream_base_url_target"),
+                # The source names hold the same secret under the caller's own
+                # spelling.
+                launch.get("upstream_api_key_source"),
+                launch.get("upstream_base_url_source"),
+            ]
+        )
     arguments: list[str] = []
     for name in sorted({n for n in names if isinstance(n, str) and n}):
         # Never blank a name the producer credential is delivered under, or the
@@ -800,7 +812,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         # for a deterministic command line.
         for key in sorted(config.agent_env):
             command.extend(["--ae", f"{key}={config.agent_env[key]}"])
-        command.extend(_upstream_credential_blanks(task))
+        command.extend(_agent_environment_blanks(task))
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
         command.extend(_kimi_gateway_args(agent, task))
