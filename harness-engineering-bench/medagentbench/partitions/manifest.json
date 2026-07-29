@@ -1,0 +1,953 @@
+{
+  "schema_version": 1,
+  "task_source": "stanford/medagentbench@sha256:c52d82b3462fb26417707682095e43f224a31f8f785eb7da615c1ab6adc20bf0",
+  "dataset_name": "stanford/medagentbench",
+  "dataset_version": "sha256:c52d82b3462fb26417707682095e43f224a31f8f785eb7da615c1ab6adc20bf0",
+  "seed": "vero-medagentbench-v1",
+  "per_category": 15,
+  "partition_counts": {
+    "development": 30,
+    "validation": 60,
+    "test": 60
+  },
+  "category_counts": {
+    "development": {
+      "task1": 3,
+      "task10": 3,
+      "task2": 3,
+      "task3": 3,
+      "task4": 3,
+      "task5": 3,
+      "task6": 3,
+      "task7": 3,
+      "task8": 3,
+      "task9": 3
+    },
+    "validation": {
+      "task1": 6,
+      "task10": 6,
+      "task2": 6,
+      "task3": 6,
+      "task4": 6,
+      "task5": 6,
+      "task6": 6,
+      "task7": 6,
+      "task8": 6,
+      "task9": 6
+    },
+    "test": {
+      "task1": 6,
+      "task10": 6,
+      "task2": 6,
+      "task3": 6,
+      "task4": 6,
+      "task5": 6,
+      "task6": 6,
+      "task7": 6,
+      "task8": 6,
+      "task9": 6
+    }
+  },
+  "tasks": [
+    {
+      "name": "stanford/task10_16",
+      "ref": "sha256:cd250c9528d4ef6079796008b10e02a3dd1f40a306a2af00375684d507eb665e",
+      "partition": "development",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_3",
+      "ref": "sha256:2587cc7429d3d7f34c61819605d0fb914d2b6cc5a983bc9741bf81fade3daea1",
+      "partition": "development",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_8",
+      "ref": "sha256:4eeb61bba131970b2dd782fbb630f4b506cf0a0f78123b815e6465ffbbf3f533",
+      "partition": "development",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task1_10",
+      "ref": "sha256:143c2f10627a68de755310696fabfa995e509bedcebeaca4980d4b3c36cdc27d",
+      "partition": "development",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_14",
+      "ref": "sha256:c3b270cccea65ffeebf3520a4f822fcf47d9fbb5ba35a87b4ecd72f4e0eb3147",
+      "partition": "development",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_29",
+      "ref": "sha256:a2c8a8b7d91c8aa5e785b77c9acd81199baef4539198ceb1676d3168cb5c3e05",
+      "partition": "development",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task2_12",
+      "ref": "sha256:8c73490d7e8950233ab4a528e83553b3e02bc21106db902fa5e1ff9db8d4016c",
+      "partition": "development",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_23",
+      "ref": "sha256:459b9d07f692d4f2cc0408c4fb9507daf69e74e32869feb34debf5d92cf48a77",
+      "partition": "development",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_28",
+      "ref": "sha256:bc43551b64354edea533c930bba8448a5beb34ee082dd150dd425b9c55d87f73",
+      "partition": "development",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task3_13",
+      "ref": "sha256:17f929280f4d6c480bce59af28428187bdf6c209d7d0fcc7501a42b710680a48",
+      "partition": "development",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_24",
+      "ref": "sha256:2050ae9c7283d2185cbae93129082d063c05ad3e7dd7f39fe5acde009dd22140",
+      "partition": "development",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_30",
+      "ref": "sha256:d917df4c60f1ccc2cbddd9db55cd023237016de3ddffa8e50b08060b445df387",
+      "partition": "development",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task4_10",
+      "ref": "sha256:8e3d24bbe5b775b09599b03e26c039be79367ef74a71ceef8d9a0e035b1ae774",
+      "partition": "development",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_16",
+      "ref": "sha256:3889fd8914a43fadd74b98483359bf5ac59ec1f1541abe0b4b7f836b4033e737",
+      "partition": "development",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_18",
+      "ref": "sha256:fd55aa0c184eaa67f696062c5f2e2a72606eccc1a189c187fe221eb094d44715",
+      "partition": "development",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task5_21",
+      "ref": "sha256:65bb1fadeab22216812f7abf63f28f0f7ab9b3785cf9aaa5792956a308bad2a1",
+      "partition": "development",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_25",
+      "ref": "sha256:dee1c96f320dadcd59a9efd6a29a24da337360b6ccf45f1ba2f25309f040d344",
+      "partition": "development",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_29",
+      "ref": "sha256:30e305a59d6c5a852da6271b752019b8cccfb3b58948c2032395b3d153aed91a",
+      "partition": "development",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task6_19",
+      "ref": "sha256:c3cb5718f6d7675c70b52d1b63925d24d5d5309a63729dba0227a9b68d2c5674",
+      "partition": "development",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_27",
+      "ref": "sha256:b7a58981f76424f8148871dd3a2291199a9a54addb6d962bd67f764113a11ee6",
+      "partition": "development",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_7",
+      "ref": "sha256:7a4c4829059dcbb68ceb0f6f6dafb0790a817622e101f1c1293ddcc7d88ac676",
+      "partition": "development",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task7_11",
+      "ref": "sha256:74edb2318778e4c56b27f76f1b20d02f6cfd0f7f7e22090154999375e08778a6",
+      "partition": "development",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_18",
+      "ref": "sha256:6b1239acdd5c9d55a09dfbd96260b885b9c6201bc1596c57ed965e0836bdbb8f",
+      "partition": "development",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_6",
+      "ref": "sha256:680dae4f666096ce18d02375bdb78b9b790171918691d0dd78e5a038ef79a5e2",
+      "partition": "development",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task8_14",
+      "ref": "sha256:dfbf16e3bdd07de91e36caf94533478d43948c299d202e5cb2729e1265d9f814",
+      "partition": "development",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_15",
+      "ref": "sha256:6a49e20df12e18563b5baf553b3c628aa27d2d3fc6ffda0a6ac3100f6171500f",
+      "partition": "development",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_23",
+      "ref": "sha256:af76ac32baaec42ee6cc2853a932a7d79bc3b7084a44a8a3fefd7fd76bfc4a79",
+      "partition": "development",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task9_2",
+      "ref": "sha256:5f41af64b61a696ed09255eb62cbb344a5d2d002974bb22ccdff4b3e8e4f2593",
+      "partition": "development",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_25",
+      "ref": "sha256:f648f6e55958f82ace1dbdba7bb8478fedb73bb96bd1c9d4964041097075b970",
+      "partition": "development",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_5",
+      "ref": "sha256:c97a11b9629cbe7c39caf98ea4f800723de543a4a7334ef23403ff0b5155ae17",
+      "partition": "development",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task10_11",
+      "ref": "sha256:f95998040f8376e2e1923e073339dbeff2f3f58cbf2872ac62fd80e5e1d470b5",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_19",
+      "ref": "sha256:244b3a1630b31009eb557a9d5fce7d6129fe6e648d85af9b2124b120ea680f61",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_27",
+      "ref": "sha256:d4db21b6440b2e9ff71b553e035bc565d2a330d28bb27b6ec91660063289a210",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_29",
+      "ref": "sha256:2982602d389e21f6437e39185e4f30ee0360719b26d9dc833fbaa7e822223a6b",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_6",
+      "ref": "sha256:30727262bb53d6b5d966c1fc342ce7f46fcd6a15f575436d361fbc4a05d56e75",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_7",
+      "ref": "sha256:51a33f0c76d5019728fc21218c150b05bb732e8a53b1164f1508e4993414fcdf",
+      "partition": "validation",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task1_1",
+      "ref": "sha256:752acddf2e0d8236fa16471751ec7c2901984b1f0e4c04d81010776491d4e97a",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_11",
+      "ref": "sha256:211e9deb542b043dda42104213d4f675d74ca3cfdaa771c39275be235128cd27",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_12",
+      "ref": "sha256:01dad4d01752fa76d8bc5f34a3cd4fa518763403fbe35f3165ffb488995425b1",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_17",
+      "ref": "sha256:586d8660e9882a53326c7cd3986e96205ac8e68d7230b174434e622687c7b527",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_18",
+      "ref": "sha256:31cd6ae6475789c0dacdd49dc47f0b85fe6dfca0b5d2e6481aa35be4dc7825c6",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_24",
+      "ref": "sha256:c35e64b34e49218068531c3d1d93da82fb99379482f39aa48d529dbaf25d2360",
+      "partition": "validation",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task2_11",
+      "ref": "sha256:ceeae2a1dec78b59e4356ca043fab17f394231ee91c17353fe986ec1cdc3a9f7",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_19",
+      "ref": "sha256:2f1276db43d6f620beec424ef5d995d66a17e3f9fa410541bcc317e3d0647d2a",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_3",
+      "ref": "sha256:d6bbe6eb73ab23009ba9f95a9e28039cb898b63ae68ea7170dd92e305cfe3a8f",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_30",
+      "ref": "sha256:a1145849e0b45e20d3ad66b91abba64f14b519a9099e678670c1730438b6beda",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_5",
+      "ref": "sha256:e0da0bd4418c84ebb1e3f4170fc2470d062aee2f1fc9dc54322a20255088634f",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_7",
+      "ref": "sha256:a237e182c8f3a38cec216b660e5bbcd4d5e6b38d4fd7eeee1e584af4cf1df8c1",
+      "partition": "validation",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task3_1",
+      "ref": "sha256:e8eac0d5a77abfbad58aacc06ce0fea77c1811f2e73a129318583c801eb7ea68",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_12",
+      "ref": "sha256:ed3ea2684cda70ad55519d39c67da21ce35ded534125bc53c5c74cb077b0b70f",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_20",
+      "ref": "sha256:1f0189eec98431bd49bf2a94b7b5a990e29847b0cac05e649c7f8f9b68fc5518",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_27",
+      "ref": "sha256:5e409583c03f717291997aa15401af300f0dc21bf67a3a0407fd56511c8a861c",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_28",
+      "ref": "sha256:9a68edd2251a45c1520ba951640bda0fb60e3e4e14d47d95ebcb0f100163c5d5",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_8",
+      "ref": "sha256:3072db1967d2ae7f873e4afae35cdb6ebd9b4a50b6e38e28e495146ab991c5d3",
+      "partition": "validation",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task4_13",
+      "ref": "sha256:2ccf7ee28bfbdf3c75a704c1752736588e0e7c16c4a2ba585358978caee6f36d",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_14",
+      "ref": "sha256:af3625b5b5b3489703ef22c44411af0b22066505c7aeeda048b5097e177ddd5b",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_19",
+      "ref": "sha256:f8ca65d0d5abbb9cbba3d119c3bc9345be7bcc6a189ac146fa071718c748092b",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_2",
+      "ref": "sha256:d8936e1d5a7b02343c1b6d843f064a1064073708440919463694dbe726ff042f",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_24",
+      "ref": "sha256:3194c4946ae9e8614d424d35f8891c317f3c5b354f5356176cd2f4c70fe1a018",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_6",
+      "ref": "sha256:5d8ba264b3ccb40ce85e984433eeb5d10075913697531203863708ba778e5325",
+      "partition": "validation",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task5_10",
+      "ref": "sha256:75859cce6dc4c68056408ca5b46c8d2098d7824b90c3f7cb75b94c43b015ca81",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_16",
+      "ref": "sha256:1bf1c9a2625b56be32adef7e8c27712d32ef06196d62dd982485d1b017aac64a",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_17",
+      "ref": "sha256:e96c93a1971888cc8ef8bbfc90fa324851bfaffe60365e6a417f1b55aaf94365",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_2",
+      "ref": "sha256:ed0f8c91236e23cbfff58c0ad4a65e32228991b1976cd95cafdfd8b38bb750af",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_23",
+      "ref": "sha256:c62c11e876ec89800ec61f42c035cf8cb0d760e144dfa59a2a245babb6ffacba",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_5",
+      "ref": "sha256:60e21e05a9b5e41248d65e244283c8299770d21412924e86d6f057ac96d84b49",
+      "partition": "validation",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task6_14",
+      "ref": "sha256:3b8cd72fc261461dfe1b25c142c1d0c130452b199b45de0c9ffa8073a241921e",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_15",
+      "ref": "sha256:5aaae6d3fba41147599ef41ae7462a5443044153422821995c80b41730dfc48c",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_2",
+      "ref": "sha256:fe8da14a2b00d51e0b3fe3e6eae048e873147cf32734d06260e273f357193823",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_23",
+      "ref": "sha256:47027a05d73e4af2b65bdfa28ad0be3b2c10a70267ef90fee585532fdfbad2c9",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_8",
+      "ref": "sha256:3cdce15b59aed883a2cf8bc43b0185f36cfb06c26e96a33ca38c184becdbb6aa",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_9",
+      "ref": "sha256:7947cbaa5225e91abfd853c23cee27c601bc204ece3e759ef7b2478548e547b6",
+      "partition": "validation",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task7_13",
+      "ref": "sha256:600c787f9f0e038bb2035bba7b887982ab251e9a06504bc87ee85b8a7a8f510a",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_2",
+      "ref": "sha256:be209b5faec047cbb030aab4c2aa61d2f46a42a1f66fed60abe8f7ebacc64e65",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_25",
+      "ref": "sha256:09204132d5aca43080b2f8106d9d73348a265e984060dddd460207461d1d9ce5",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_26",
+      "ref": "sha256:94d86bd1964121409b2ccc4691233d9d8263dcdcacc0192a3234ec2aae13f164",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_28",
+      "ref": "sha256:c2af3a9f3f7d8bb70ce80ad799c7aef64c8677625218acf7fddcfd8415c8c329",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_29",
+      "ref": "sha256:375bba09f2f2d386380111187b4c58f650fc00e589a82564285b2440c94b7d67",
+      "partition": "validation",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task8_10",
+      "ref": "sha256:8c38640936dfc4821648d995b69013fbe3d92da20b96821f899eb3ea6c1e0b86",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_19",
+      "ref": "sha256:8ca77658c91d322279a208d663cc25875ab139abb925643023a0797791361240",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_20",
+      "ref": "sha256:107d2e77c16a623f0077bfd458da918d538a8bbe865fa7439e6c2aadfeb62cbf",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_25",
+      "ref": "sha256:f2abaf0b1887c860155c22aa2892af6c01ecb2f1d1c753df7883fcb17c1a2808",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_4",
+      "ref": "sha256:6a97a15d572c0d8882bd8f4fa0bb3f7b0cf3f4d3df71f5fc9104bdd37cd46cd1",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_9",
+      "ref": "sha256:b9ca7ce365da73736ddfc73f6a746e9b282c0d1335c6e2afbf7061c1a0cd1a83",
+      "partition": "validation",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task9_10",
+      "ref": "sha256:d7a1cf725bbb04c7fc43788a6dc4362d8e71310c45350205de5234f919a511a6",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_19",
+      "ref": "sha256:4b03a8f7e97d14a3ea38454dfd943eccfdbd1654f95ead2d69701c44b0d04b59",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_20",
+      "ref": "sha256:1b8abe2e8829d6b7af17b499f6e96bc717f0f193b153d0ec8cb96de35f2a6fe3",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_28",
+      "ref": "sha256:a76982e0986437e55541b59c8959eda2ee0c081ddf0c54cb113e4c44195d0336",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_29",
+      "ref": "sha256:99042bb20971c77c4d4fe108a3abcbde75bfeaf57ad97dcfffb7b89ce47e6c8d",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_4",
+      "ref": "sha256:3478069db5ea60283ede698f1b44c2092234cf1851ca147f0387f0a316dc49de",
+      "partition": "validation",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task10_17",
+      "ref": "sha256:7a762b830784ec563ffa7131858efc98d458de40fe05b9a7bb509697cc807654",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_22",
+      "ref": "sha256:c3799de17c8100aaabac1ddca665410563e51d12fc9fa495a76e54cacaae5182",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_24",
+      "ref": "sha256:1cf9627cadaf9fad22287abc37f87776d862b7f37aee2dbabfc3d32ff1f1e6da",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_30",
+      "ref": "sha256:d083903a9b65dfa8abd66a3c4a1e136d317f99b4cd7634124afb4dc86022260e",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_4",
+      "ref": "sha256:183cd02eeaada2b78d703c0b7afec87015c82af63d94f16e6a943469ad8beb52",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task10_5",
+      "ref": "sha256:69cf31594015b940800c9f9df8ebf5d27faff8060a08ab68d9ceff31c68387f6",
+      "partition": "test",
+      "category": "task10"
+    },
+    {
+      "name": "stanford/task1_13",
+      "ref": "sha256:c23ba8db9541e23255f22fe9c5c29609c9e7d4e62ceb96c817a2a3298030df06",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_15",
+      "ref": "sha256:c4cc893a1e3a1f47e1985f4b037ea7ada3886d4a76929096db31845b5bb0a753",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_19",
+      "ref": "sha256:b8b5c5cb521042e0c7dc83fbb9c771c135f1061dffab035c9052c53958f9377d",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_2",
+      "ref": "sha256:53b75e9966d295db89a12bfcacbcaf5569eb8bca2a27a4478669fc8503f90d6a",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_21",
+      "ref": "sha256:10c29b469ed90195549efe5c8a1b16d93ca2a74c7bbbfc00f500567129fb63c5",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task1_3",
+      "ref": "sha256:e4ad1f9a3c041938aae6a13cf97a03835de38c3cd22b6dfa84ddbcce52d4b3ba",
+      "partition": "test",
+      "category": "task1"
+    },
+    {
+      "name": "stanford/task2_16",
+      "ref": "sha256:9d57a24a3c127f4e615207b7d36ec5cafe4199cb68b2cdf12c6df39e22b0b221",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_18",
+      "ref": "sha256:e1216724de6596a12f38d565c612ffa62e1fd38f6e0bdf7c8cefc95ffb31df91",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_22",
+      "ref": "sha256:1aa5d574b98365fcb1f199747b637e53a0929c504d96a2a3b39cbad42f3b413c",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_26",
+      "ref": "sha256:128b9dab7ecb0147b8050f9e659894b618983126ce271a60e7df2f958154aa6b",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_27",
+      "ref": "sha256:7e8975077a2db2e8b8ba3d2df2b2f70cb266a5bd3c1b6e9842001b08713fd8c1",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task2_6",
+      "ref": "sha256:3b49e58a669c2227cf1bd9f53ddef327508fce47bee94f7e8ed6c6c49491c6df",
+      "partition": "test",
+      "category": "task2"
+    },
+    {
+      "name": "stanford/task3_18",
+      "ref": "sha256:1ade219eb830f1ffc38069f12b9e0efb480d7743045c29ace13c25c2f18fa79c",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_19",
+      "ref": "sha256:51f7b1646a8f1144f6b4f06d8d8a210e13b42262772d5594c28ff95f5df3b83e",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_22",
+      "ref": "sha256:4cecd88e530bfe08c9a0e64a599ffdbc1b3048147c43d5fbac964100715bca6e",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_26",
+      "ref": "sha256:e4a21fce536dd50e47545971354820bf6d946dda70a5f7784fcd433355c4cc0a",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_4",
+      "ref": "sha256:09b44910faf9f22fdca2e8141b2a203f65eabc04f83cda2a437367883d27dd0e",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task3_7",
+      "ref": "sha256:49a12fa909be4aafdf1fa6e5367df314cd649c9cf53b09cdeeac9d30c1fa3411",
+      "partition": "test",
+      "category": "task3"
+    },
+    {
+      "name": "stanford/task4_11",
+      "ref": "sha256:1306385d555b6e5864ec7373db74ec7912944378555de7bb2238721922befbe7",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_17",
+      "ref": "sha256:3e7e7e2b8358eacc0652c4bcca60a6b8d70a4c76ef317504cb827e2e318b9426",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_25",
+      "ref": "sha256:67e0ae880cf445d85ef92de77fdf11a704f706068b9e9724d22ea70590c77ed3",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_28",
+      "ref": "sha256:c04ff2192f3e7688ec69637f5f35abb02d4abce681056131e2a6cc73b8ecf370",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_8",
+      "ref": "sha256:8e650c3cb1b89c5398b86d13d768ea3f5f8d6b2f52f942b664fe336e1f262e8a",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task4_9",
+      "ref": "sha256:343e6dcdd07a4675b8c5e26ee2d7ff92d94f5baedb79701f1dcb3570203f5d66",
+      "partition": "test",
+      "category": "task4"
+    },
+    {
+      "name": "stanford/task5_12",
+      "ref": "sha256:aecdc966b8911e3e7874af82deb6911931a00dff2088471ba1d45e61332ea2e4",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_19",
+      "ref": "sha256:d3fcd2a94adc1128b83ba2580db66236938587ae58608bc279aaed41e7b1ec38",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_20",
+      "ref": "sha256:4c45bfcd46f4f6bda9ecae656a42921af1d767bd14b3957e84fd680b643bdfc3",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_6",
+      "ref": "sha256:9ebdc470529671bd7e51b5c04caba5ae736cac11632733a441a3b52c50bb5e50",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_7",
+      "ref": "sha256:26762a61e26bc491012d09d117ba9077aa979ba7ccc0fda171136245cceb8af0",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task5_8",
+      "ref": "sha256:9e7ee6029f2f54a2377a686c3244689baa788a5038e203ec0319a8673a35e334",
+      "partition": "test",
+      "category": "task5"
+    },
+    {
+      "name": "stanford/task6_13",
+      "ref": "sha256:c5e3f512e012f8d5caa04b7a7e1a36fae0840225822f9672a08309fa44af50a0",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_16",
+      "ref": "sha256:a618579b6b6431c56603ef96be5d8e593d4a5d721945bd3f256d77ee6adab0e4",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_20",
+      "ref": "sha256:b087a57e57e10138113ed02324950cbcff31dc0c450fc9f610db180ce59fc074",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_22",
+      "ref": "sha256:5c8bd8a762fd49b41ce9a41713aee35bbcb7c7424f1d6ea80163c4f0f63e058b",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_29",
+      "ref": "sha256:79885482c3b633936168bc86cb68eab4721bf8c9fca90b6b736c2eb4241fe67c",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task6_30",
+      "ref": "sha256:a4b3e12a464ba997cb708620aab8ce83795dff6b1e5e6f43968e1f55b407c9c5",
+      "partition": "test",
+      "category": "task6"
+    },
+    {
+      "name": "stanford/task7_10",
+      "ref": "sha256:c4373fbfb501e91b03473e7204dffb362a9b57f2bcff954e28917d12119b126a",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_20",
+      "ref": "sha256:fd5ce950234ac9754091eb01454fd3e99460c5c4222db00b94e177740e22bd34",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_27",
+      "ref": "sha256:6f1e7af541af7e52d111be93c28fc9ab4e3eb41ee3e9eb0988723c4db96cfb12",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_3",
+      "ref": "sha256:7af87b09d61f854c5ca81bb12fd3627cf81d9f0f04f94004247cc065fed26023",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_30",
+      "ref": "sha256:f6dc78b99342f50bd38ed049fb666326ed77bcee165148773b4c69de1115b88c",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task7_4",
+      "ref": "sha256:1730bb58d3e46f383a3213e385bf78026d62c8a998f181e76f4bc44407317f2d",
+      "partition": "test",
+      "category": "task7"
+    },
+    {
+      "name": "stanford/task8_1",
+      "ref": "sha256:d9ef3dd05ffb2c26468dbf691390e5b5a4d426107761c307e0bbb63b397dd0f3",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_2",
+      "ref": "sha256:dbaa04b316017db34ba00e0a7bc4b6b7efbf28ff808e8526822e6baa3132266d",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_21",
+      "ref": "sha256:c8e280dee504dc73f028e17ef3fe0e2b4b9edb08b6a39cc0f4edf75911d185c1",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_22",
+      "ref": "sha256:999b1c0b7d58c1fa46863a3eb99fd9144753130f63205c9bef3be4c22f661139",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_3",
+      "ref": "sha256:eb162964e99c24ee3c3b6ecec233f49e39bfad17a72a64e3e70f950e6f25aa74",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task8_8",
+      "ref": "sha256:83cd48b8fe0c6a7bd9df3ebfe1f124da2d63c94d63c457a0069f80f72059757f",
+      "partition": "test",
+      "category": "task8"
+    },
+    {
+      "name": "stanford/task9_17",
+      "ref": "sha256:165abfe089ee45f1ed91ab25edda3fad48185274a98b18abef6c9064589dbe6e",
+      "partition": "test",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_23",
+      "ref": "sha256:2be400d102ce5da01e9328277bf170b79a9147cbcfe09983c1d865f0b1fc6e0a",
+      "partition": "test",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_24",
+      "ref": "sha256:6fde3ec7d094b9a803660a00c7cf1acc8df8ea1d3e2aaff0efcd68fc9ffcd5ba",
+      "partition": "test",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_26",
+      "ref": "sha256:84c46d4b8bc2b2d4b0f7df27ab6988c0f1aefb9dde87fa23c55dd8cf11d712a0",
+      "partition": "test",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_6",
+      "ref": "sha256:1cdb0bcca27aa3572e5537b84eb03c28beb99b059373404b7d631456529bf7dd",
+      "partition": "test",
+      "category": "task9"
+    },
+    {
+      "name": "stanford/task9_7",
+      "ref": "sha256:c502ecc941672691983c3acd92a673ac9d61dbb069d36c4c6a6375c6ea39b168",
+      "partition": "test",
+      "category": "task9"
+    }
+  ]
+}

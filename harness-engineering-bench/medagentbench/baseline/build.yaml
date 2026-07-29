@@ -1,0 +1,146 @@
+name: vero/optimize-medagentbench-baseline
+description: >-
+  Improve a clinical agent on MedAgentBench (Stanford). The agent queries a FHIR
+  electronic health record served inside the task container, issues POST actions
+  where the task requires one, and finishes through the shipped CLI, which writes
+  /workspace/answer.json. Scoring is a local Python verifier, no judge model.
+agent_repo: target
+# Harbor-native, so only a baseline and partitions are needed here. Note the
+# dataset pins its environment with docker_image =
+# "docker.io/alienkevin/medagentbench-harbor:latest", a mutable tag on a personal
+# Docker Hub account, which overrides the task's own Dockerfile. The digest pin in
+# that Dockerfile is not what runs. Reproducibility therefore depends on an image
+# we do not control; raise this before reporting a number from it.
+task_source: stanford/medagentbench@sha256:c52d82b3462fb26417707682095e43f224a31f8f785eb7da615c1ab6adc20bf0
+task_manifest: ../partitions/manifest.json
+agent_import_path: medagentbench_agent.agent:MedAgentBenchAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+# Four full passes over each agent-visible partition, the suite convention.
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 120
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 240
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # UNPINNED. score_baseline below is true only until a K=3 held-out pin exists.
+    # Run `scripts/rescore_candidate.py --seed` three times, put the mean here,
+    # and set score_baseline: false. Until then every run pays an extra full
+    # held-out pass and the reward is not reproducible; do not report a number
+    # measured this way.
+    failure_value: 0.0
+    max_attempts: 1
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: medagentbench
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit
+baseline_floor: false
+score_baseline: true  # see the note on baseline_reward above; flip to false once pinned
+rescore_top_k: 3
+rescore_attempts: 1
+
+model: fireworks_ai/deepseek-v4-flash
+environment_name: ${inner_env:-modal}
+# --no-force-build pulls the prebuilt image named above instead of rebuilding a
+# multi-GB image once per sandbox on the first wave, matching officeqa's handling
+# of its prebuilt corpus image.
+# If cases fail immediately with "Sandbox already shut down", the image sets an
+# ENTRYPOINT that Modal prepends to harbor's keepalive, the same way swe-atlas-qna
+# images do; add --ek 'keepalive=["-c","sleep infinity"]' as that benchmark does.
+extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Unreachable: worst case is ceil(180/24) x 1800 = 14400s, every finalize trial
+# (60 held-out x n_attempts=3) hitting its own cap.
+timeout_seconds: 16200
+# Exactly the dataset's declared [agent] timeout_sec (uniform across all 300
+# tasks), so vero's derived --agent-timeout-multiplier is 1.0.
+case_timeout_seconds: 1800
+task_agent_timeout_seconds: 1800
+# This dataset declares cpus = 2, the only one in the suite that does, so 24
+# concurrent cases is 48 vCPU of Modal per evaluation. If Modal capacity forces
+# this down, recompute timeout_seconds and verifier_timeout_seconds: both are
+# derived from 24.
+max_concurrency: 24
+error_rate_threshold: 0.1
+# Unreachable: worst-case finalize (14400) + worst-case rescore_top_k=3
+# validation rescore (14400). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 32400
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+# The FHIR server and the verifier are both local to the task container and no
+# judge model is involved, so this benchmark needs no task-side credential and
+# keeps the isolation tau3, browsecomp-plus and swe-atlas-qna had to give up.
+# The dataset does declare allow_internet = true even though its data is local;
+# worth setting false and re-verifying if we care about the closed-corpus claim.
+harness_user: harness
+
+agent_env:
+  # Above this benchmark's widest single blocking eval: a full validation pass is
+  # ceil(60/24) x 1800 = 5400s worst case.
+  BASH_MAX_TIMEOUT_MS: "7200000"
+  BASH_DEFAULT_TIMEOUT_MS: "7200000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+wandb:
+  project: harness-engineering-bench
+  group: medagentbench
+  name: ${wandb_run:-medagentbench}
+  tags: [medagentbench]
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    max_concurrency: 8
+  # Token caps are a runaway backstop, not the spend control. Sized at ~3M tokens
+  # per case-run against 360 agent case-runs (120 development + 240 validation).
+  evaluation:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 2000000000
+    max_concurrency: 64
+  # Reserved so a search-phase overspend cannot starve held-out scoring: 180
+  # finalize trials (60 test x3) plus rescore headroom.
+  finalization:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 2000000000
+    max_concurrency: 64
