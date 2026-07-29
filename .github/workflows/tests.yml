@@ -1,0 +1,96 @@
+name: tests
+
+# Nothing in this repository ran tests before this workflow: the only checks on a
+# pull request were Greptile Review and Socket Security, neither of which invokes
+# pytest. PR #61 sat open with a red target suite as a result.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancelling a superseded pull-request run costs nothing; cancelling a
+  # main-branch run throws away the only signal that a merged commit broke
+  # something. Gating cancel-in-progress on the event name is not enough on its
+  # own: with one group key per ref, a run that is still pending is cancelled
+  # when a newer one queues behind it, so a middle commit in a fast series of
+  # merges is dropped either way. Keying the group by sha on push gives every
+  # main commit a group of its own while pull requests keep collapsing.
+  group: tests-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every package here resolves from public PyPI (vero/pyproject.toml pins that
+  # index explicitly), so no private-registry credentials are needed. Pinned so a
+  # runner image bump cannot silently change the interpreter: vero requires
+  # >=3.11,<3.14 and the six targets require >=3.12.
+  UV_PYTHON: "3.12"
+
+jobs:
+  vero:
+    name: vero
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The task compiler refuses to emit a task whose declared credentials are
+      # absent ("declared task credentials are missing", compiler.py), so the
+      # build tests need these present. Placeholders only: nothing dials them,
+      # and port 1 fails fast instead of hanging if anything ever tries.
+      OPENAI_API_KEY: ci-not-a-real-key
+      OPENAI_BASE_URL: http://127.0.0.1:1/v1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: vero
+        # --locked fails rather than relocking, so a pyproject edit that forgets
+        # to update uv.lock is a visible error instead of a silent resolve.
+        run: uv sync --locked
+
+      - name: Run tests
+        working-directory: vero
+        run: uv run pytest -q
+
+  targets:
+    # The six editable baseline agents. Each is its own uv project with its own
+    # lock, so they get one job apiece rather than a shared environment.
+    name: ${{ matrix.benchmark }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # One broken agent should not mask the state of the other five.
+      fail-fast: false
+      matrix:
+        benchmark:
+          - browsecomp-plus
+          - gaia
+          - officeqa
+          - swe-atlas-qna
+          - swe-bench-pro
+          - tau3
+    steps:
+      # No `submodules: recursive`: the only submodule is the BrowseComp-Plus
+      # upstream corpus, which no test reads.
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: harness-engineering-bench/${{ matrix.benchmark }}/baseline/target
+        run: uv sync --locked
+
+      - name: Run tests
+        working-directory: harness-engineering-bench/${{ matrix.benchmark }}/baseline/target
+        run: uv run pytest -q
