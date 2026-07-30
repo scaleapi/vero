@@ -348,12 +348,22 @@ agent's reason/search-only-turn crash was fixed.
 `score_baseline: true` and no `baseline_reward`, so every run re-measures the seed
 on the held-out set and the reward is not reproducible. Pin each at K=3 with
 `scripts/rescore_candidate.py --seed` and flip the flag before quoting a number.
-Their splits are subsampled and stratified so the seed does not land at the floor:
-dabstep takes every easy task plus a deterministic hard sample (72/93, a 44/56 mix
-recorded as `difficulty_quotas`), because the dataset is 16% easy and o4-mini
-scores 76.4% easy against 14.55% hard; medagentbench takes 15 of each of its ten
-task categories, because retrieval and action scores diverge sharply and the
-ordering inverts by model. Both hold the finalize wall at 8-9 waves.
+Both are subsampled and stratified, and both hold the finalize wall at 8-9 waves.
+medagentbench takes 15 of each of its ten task categories, which is also
+proportional since the categories are uniform 30 apiece upstream; the mix matters
+because retrieval and action scores diverge sharply and the ordering inverts by
+model.
+
+dabstep ships **two configs**, like swe-bench-pro. The canonical
+`baseline/build.yaml` keeps the dataset's own 16/84 difficulty ratio, which puts
+about 5 easy tasks in a 33-case development partition and should seed near 0.12.
+`baseline/build.reweighted.yaml` uses the same 165 cases at 44/56 (every easy task
+plus 93 hard), roughly doubling the seed. Proportional is canonical because every
+other subsample in the suite preserves its population, so reporting the reweighted
+mix means stating that we chose the difficulty; the agreed order is to probe the
+canonical mix with the strongest optimizer first and reweight only if it shows no
+headroom. The two test partitions share only 9 of 66 cases, so each mix needs its
+own pin.
 
 ✧ medagentbench's 300 tasks all set
 `docker_image = "docker.io/alienkevin/medagentbench-harbor:latest"`, a mutable tag

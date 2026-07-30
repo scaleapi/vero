@@ -8,15 +8,17 @@ names here (`adyen/<id>`), while the difficulty tag used for stratification live
 in the local export (`dabstep-<id>/task.toml`). This script joins the two on the
 numeric id.
 
-It also applies a difficulty quota, which the shared script has no notion of.
-dabstep is 72 easy and 378 hard; a proportional sample of the whole dataset would
-put the seed near the floor (o4-mini scores 76.4% on easy and 14.55% on hard, and
-the next best model on hard is 13.76%). Taking every easy task plus a stratified
-hard sample places the seed mid-range instead, and records the mix as a parameter
-rather than leaving it implicit.
+It also applies a difficulty quota, which the shared script has no notion of, and
+writes two mixes at the same size so the choice between them is measurable rather
+than argued. See MIXES below.
 
+    # canonical, the dataset's own 16/84 ratio -> partitions/
     python scripts/partition_dabstep.py --tasks-dir <export> --fetch-registry
-    python scripts/partition_dabstep.py --tasks-dir <export> --check
+    # variant, 44/56 -> partitions/reweighted/
+    python scripts/partition_dabstep.py --tasks-dir <export> --fetch-registry \
+      --mix reweighted
+    # verify either
+    python scripts/partition_dabstep.py --tasks-dir <export> --mix reweighted --check
 """
 
 from __future__ import annotations
@@ -35,11 +37,29 @@ DATASET_DIGEST = "0edf62c0bdf7003b1d1f934f1547df1c051877e076d5b6f6a2d99caf8b6432
 TASK_SOURCE = f"{DATASET_NAME}@sha256:{DATASET_DIGEST}"
 SEED = "vero-dabstep-v1"
 
-# Every easy task the dataset has, plus a hard sample to reach 165. 165 matches
-# browsecomp-plus, which keeps the finalize wall at 9 waves
-# (ceil(66 x 3 / 24)) instead of the 23 a proportional 20/40/40 over all 450
-# would cost.
-QUOTAS = {"easy": 72, "hard": 93}
+# Two mixes at the same 165 cases, because which one to report is an open
+# question (thread of 2026-07-29). 165 matches browsecomp-plus and holds the
+# finalize wall at 9 waves, ceil(66 x 3 / 24), instead of the 23 a 20/40/40 over
+# all 450 would cost.
+#
+#   proportional  keeps the dataset's own 16/84 ratio. Consistent with every other
+#                 subsample in the suite: swe-bench-pro's sample is proportional by
+#                 repository and browsecomp-plus is a plain seeded shuffle. Nothing
+#                 to defend at review. Expected seed near 0.12, about 5 of 33
+#                 development cases, which may be too thin to optimise against.
+#   reweighted    every easy task plus a hard sample, 44/56. Roughly doubles the
+#                 seed. 44% is the ceiling at 165 because only 72 easy tasks exist.
+#                 The suite's only subsample that changes the population, so the
+#                 paper has to say so.
+#
+# Varun's call on the thread: probe the proportional mix with the strongest
+# optimizer first and only reweight if there is genuinely no headroom. Hence
+# proportional is the default and lives in partitions/, with the reweighted mix
+# alongside it in partitions/reweighted/.
+MIXES = {
+    "proportional": {"easy": 26, "hard": 139},
+    "reweighted": {"easy": 72, "hard": 93},
+}
 PARTITIONS = ("development", "validation", "test")
 RATIOS = {
     "development": Fraction(1, 5),
@@ -65,7 +85,7 @@ def _read_difficulties(tasks_dir: Path) -> dict[str, str]:
     for path in directories:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
         difficulty = config.get("metadata", {}).get("difficulty")
-        if difficulty not in QUOTAS:
+        if difficulty not in ("easy", "hard"):
             raise ValueError(f"{path.parent.name} has difficulty {difficulty!r}")
         difficulties[path.parent.name.removeprefix("dabstep-")] = str(difficulty)
     return difficulties
@@ -86,7 +106,9 @@ def _existing_refs(output_dir: Path) -> tuple[str, dict[str, str]]:
     return manifest["dataset_version"], {t["name"]: t["ref"] for t in manifest["tasks"]}
 
 
-def _select(names: list[str], difficulties: dict[str, str]) -> list[dict[str, str]]:
+def _select(
+    names: list[str], difficulties: dict[str, str], quotas: dict[str, int]
+) -> list[dict[str, str]]:
     """Apply the difficulty quota deterministically."""
     by_difficulty: dict[str, list[str]] = defaultdict(list)
     for name in names:
@@ -96,7 +118,7 @@ def _select(names: list[str], difficulties: dict[str, str]) -> list[dict[str, st
         by_difficulty[difficulties[task_id]].append(name)
 
     selected: list[dict[str, str]] = []
-    for difficulty, quota in QUOTAS.items():
+    for difficulty, quota in quotas.items():
         members = sorted(by_difficulty[difficulty], key=_stable_key)
         if len(members) < quota:
             raise ValueError(
@@ -155,10 +177,15 @@ def _allocate(tasks: list[dict[str, str]]) -> dict[str, list[str]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tasks-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).parent.parent / "partitions")
+    parser.add_argument("--mix", choices=sorted(MIXES), default="proportional")
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--fetch-registry", action="store_true")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
+    quotas = MIXES[args.mix]
+    if args.output_dir is None:
+        root = Path(__file__).parent.parent / "partitions"
+        args.output_dir = root if args.mix == "proportional" else root / args.mix
 
     difficulties = _read_difficulties(args.tasks_dir)
     if args.fetch_registry:
@@ -166,7 +193,7 @@ def main() -> None:
     else:
         version, refs = _existing_refs(args.output_dir)
 
-    selected = _select(sorted(refs), difficulties)
+    selected = _select(sorted(refs), difficulties, quotas)
     partitions = _allocate(selected)
     strata = {task["name"]: task["stratum"] for task in selected}
 
@@ -184,7 +211,8 @@ def main() -> None:
         "dataset_version": version,
         "seed": SEED,
         "ratios": {p: float(RATIOS[p]) for p in PARTITIONS},
-        "difficulty_quotas": QUOTAS,
+        "mix": args.mix,
+        "difficulty_quotas": quotas,
         "partition_counts": TARGET_COUNTS,
         "difficulty_counts": {
             partition: dict(Counter(strata[name] for name in names))
