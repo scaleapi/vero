@@ -4,9 +4,10 @@ Candidate Family A benchmark: the editable target is a terminal agent, the domai
 is long-horizon work in a command line, and each task's own tests decide pass or
 fail, so the reward is a pass rate.
 
-**Status: scaffolded, not runnable.** The deterministic split is done and pinned.
-The seed agent is not written and the baseline is not measured. See
-[What remains](#what-remains).
+**Status: compiles; two values still to settle.** The split is pinned, the seed
+agent is written and tested, and the config dry-compiles with the expected
+artifacts. What is missing is the target model choice and a measured
+`baseline_reward`. See [What remains](#what-remains).
 
 ## The dataset
 
@@ -113,37 +114,67 @@ Derived from the split and the declared budgets, at `max_concurrency: 24`:
 | `verifier_timeout_seconds` | 64,800 | finalize + a `rescore_top_k: 3` validation pass |
 | optimizer `BASH_MAX_TIMEOUT_MS` | 28,800,000 | above the widest single eval, so one evaluation fits in a single blocking foreground call |
 
+## The seed agent
+
+`baseline/target/`, `terminal_bench_agent.agent:TerminalBenchAgent`. A clean-room
+re-implementation of the **mini-SWE-agent** design (SWE-agent project, MIT) — not a
+copy of its source.
+
+Re-implementing rather than depending on the published package is required, not a
+preference: `agent_repo: target` is the tree the optimizer edits, so an installed
+dependency would leave it able to change a config and nothing else.
+
+The design also fits this benchmark natively. A bash-only loop is the right shape
+here rather than a compromise, because tasks grade the container's final state and
+there is no answer file to write.
+
+**Deliberately spare**, since a frozen-model benchmark only measures something if
+editing the harness can move the score. Left in on purpose: unbounded linear
+history, one command per turn, a constant step budget unrelated to the task's real
+clock, fixed-size head-and-tail output truncation, regex-on-markdown command
+extraction, and no verification before finishing. Each is a plausible thing for an
+optimizer to find; none is a bug.
+
+That also disposes of the scoping note's worry that Terminal-Bench has only medium
+headroom because "the public scaffold is already heavily tuned" — that is about
+adopting Terminus as the seed. We write our own, so the headroom is a choice.
+OfficeQA's +0.41 came from a seed with obvious room in it.
+
+It **fails closed on credentials**, following the fix made to the BrowseComp-Plus
+target: `OPENAI_*` inside the eval container can point at the unmetered upstream,
+so a fallback would bypass metering and the model allow-list while still appearing
+to work. 13 tests cover command extraction, truncation, the credential guard in
+both directions, and the run loop.
+
+### Verified
+
+`vero harbor build` produces the expected artifacts: only `harbor-test` carries
+`n_attempts: 3` / `aggregate: mean` (development and validation stay at 1/best),
+W&B routes to the shared project under group `terminal-bench`, and the gateway
+allow-lists hold the target model for evaluation and finalization.
+
+One gotcha: the compiler snapshots the target with `git archive HEAD:<path>`, so
+**the target must be committed before it will compile**. An uncommitted target
+fails with `not a valid object name`, which says nothing about the real cause.
+
 ## What remains
 
-In order. The first two are the real work; the rest is mechanical.
-
-1. **Write the seed agent** (`baseline/target/`, `terminal_bench_agent.agent:TerminalBenchAgent`).
-   A terminal agent: shell access, a turn loop, and whatever context handling it
-   needs. Model it on the other targets' shape (`gaia/baseline/target/` is the
-   closest registry-sourced example).
-
-   Make it **deliberately modest**. The scoping note's worry that Terminal-Bench
-   has only medium headroom because "the public scaffold is already heavily tuned"
-   is about adopting Terminus as the seed, not about the dataset — we write our
-   own seed, so the headroom is a choice. OfficeQA's +0.41 came from a seed with
-   obvious room in it.
-
-2. **Choose the target model.** `build.yaml` currently carries the house default,
+1. **Choose the target model.** `build.yaml` currently carries the house default,
    `fireworks_ai/deepseek-v4-flash`, and that is a guess. 30 of 89 tasks are
    `hard`; too weak a model floors the baseline near zero and the cell measures
    nothing. Probe two or three on development first. SWE-Atlas-QnA at 0.0676 is
    the cautionary example.
 
-3. **Pin `baseline_reward`** from three rounds, and record them in
+2. **Pin `baseline_reward`** from three rounds, and record them in
    `runs/BASELINES.md` the way the other five were.
 
-4. **Check the baseline spread.** 36 held-out cases is our smallest test set;
+3. **Check the baseline spread.** 36 held-out cases is our smallest test set;
    GAIA sits at sd 0.0524 with 66. If the spread swamps plausible contestant
    differences, raise the test target's `n_attempts` from 3 to 5 rather than
    moving cases out of development. Terminal-Bench is cheap per case, so attempts
    buy precision here in a way they would not on a long-horizon set.
 
-5. **Dry-compile and read the rendered `instruction.md`** before the first real
+4. **Re-read the rendered `instruction.md`** before the first real
    launch, per `skills/run-benchmark/SKILL.md`.
 
 ## Sources

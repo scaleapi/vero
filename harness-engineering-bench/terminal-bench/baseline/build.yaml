@@ -4,9 +4,10 @@ description: >-
   agent interface. Each task gives the agent a container and a goal; the task's
   own tests decide pass or fail, so the reward is a pass rate.
 
-# NOT YET RUNNABLE. The seed agent at `target/` does not exist and
-# `baseline_reward` has not been measured. See ../README.md for what remains and
-# in what order. Everything else here is settled and follows CONFIGURATION.md.
+# This compiles and the seed agent exists, but TWO VALUES BELOW ARE STILL GUESSES:
+# `model` (the target model, untested on this benchmark) and `baseline_reward`
+# (unmeasured, so currently absent). Do not report a number from this config until
+# both are settled -- see ../README.md.
 
 agent_repo: target
 task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
