@@ -598,9 +598,7 @@ class _RequestAttributor:
             self.errors += 1
             return {}
 
-    def register_response(
-        self, fields: dict[str, str] | None, head: bytes
-    ) -> None:
+    def register_response(self, fields: dict[str, str] | None, head: bytes) -> None:
         try:
             thread = (fields or {}).get("thread_id")
             if not thread or not head:
@@ -666,6 +664,67 @@ def _cost_fields(headers: Any) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return fields
+
+
+#: The upstream proxy's refusal to forward a parameter to a provider, naming the
+#: parameters at fault: ``does not support parameters: ['tool_choice']``. It
+#: rejects the whole request rather than dropping the parameter.
+_UNSUPPORTED_PARAMS = re.compile(
+    r"does not support parameters:\s*\[([^\]]*)\]", re.IGNORECASE
+)
+
+
+def _unsupported_params(body: bytes) -> list[str]:
+    """Parameter names an upstream 400 blamed, or [] if it blamed none.
+
+    Some providers reject parameters that every agentic harness sends. Fireworks
+    rejects ``tool_choice``, so a tool-driving harness cannot use those models at
+    all -- the run dies on its first real request -- even though the model emits
+    tool calls perfectly well without the parameter.
+
+    The error suggests three fixes. Two configure the upstream proxy, which we do
+    not own. The third, ``allowed_openai_params``, works on ``/chat/completions``
+    but is silently ignored on ``/responses`` (measured against the live
+    upstream), and ``/responses`` is exactly what an openai-prefixed harness
+    uses. So neither is a general fix.
+
+    Retrying without the blamed parameters is, and it is the conservative option:
+    it engages only on a request that has *already* failed, so providers that
+    accept the parameter are untouched and keep their exact semantics. That
+    matters more than elegance here -- an unconditional strip would silently
+    change behaviour for every harness that relies on ``tool_choice``.
+
+    Matched against the decoded ``error.message`` rather than the raw response
+    bytes, so JSON string escaping cannot corrupt the names. Reading the raw body
+    happens to work for the error shape we see today only because Python's list
+    repr quotes with ``'``, which JSON does not escape. Were the upstream to quote
+    with ``"``, the encoded body would carry ``[\\"tool_choice\\"]`` and the names
+    would come back with a trailing backslash -- which then fails the caller's
+    "is this parameter actually in the request" check, so the retry would silently
+    never fire and the model would stay unusable for a now-invisible reason.
+    """
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = None
+    text = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            candidate = error.get("message")
+            text = candidate if isinstance(candidate, str) else None
+        elif isinstance(error, str):
+            text = error
+    if text is None:
+        # Not the shape we expect: fall back to the raw body rather than give up,
+        # since a missed match costs a usable model.
+        text = body.decode("utf-8", "replace")
+    match = _UNSUPPORTED_PARAMS.search(text)
+    if not match:
+        return []
+    return re.findall(r"['\"]([^'\"]+)['\"]", match.group(1))
+
+
 def _provider_error(status_code: int, message: str, code: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -721,6 +780,10 @@ def create_inference_gateway_app(
     app.state.usage_store = store
     app.state.request_log = request_log
     app.state.request_attributor = attributor
+    # model -> parameters that model's provider has refused. Learned from the
+    # upstream's own 400 so there is no list to maintain or let go stale, and
+    # reset on restart, which costs one re-discovery per model.
+    app.state.refused_params: dict[str, frozenset[str]] = {}
 
     @app.get("/health")
     async def health():
@@ -792,6 +855,9 @@ def create_inference_gateway_app(
         # exit path -- streamed, non-streamed, and error -- records the cost
         # without each one having to remember to pass it.
         cost_fields: dict[str, float] = {}
+        # Parameters the upstream refused and we retried without. Recorded so a
+        # degraded request is auditable rather than a silent behaviour change.
+        dropped_params: list[str] = []
 
         async def log_request(
             *,
@@ -810,6 +876,7 @@ def create_inference_gateway_app(
                 attribution=attribution,
                 endpoint=endpoint,
                 model=value.get("model") if isinstance(value, dict) else None,
+                dropped_params=dropped_params or None,
                 stream=stream,
                 status=status,
                 error=error,
@@ -823,6 +890,7 @@ def create_inference_gateway_app(
                 response=response,
                 **thread_fields,
             )
+
         # Per-scope allow-list: producer (optimizer) and evaluation (target) have
         # separate tokens + allowed_models, so the target is normally confined to
         # its fixed eval model. NOTE (known, deferred): this is not a *hard*
@@ -866,17 +934,62 @@ def create_inference_gateway_app(
         }
         headers["authorization"] = f"Bearer {upstream_api_key}"
         url = f"{base_url}/{endpoint}"
-        try:
-            upstream = await app.state.upstream.send(
+
+        async def send(payload: bytes) -> httpx.Response:
+            return await app.state.upstream.send(
                 app.state.upstream.build_request(
                     "POST",
                     url,
                     params=request.query_params,
-                    content=body,
+                    content=payload,
                     headers=headers,
                 ),
                 stream=True,
             )
+
+        # Apply what this model has already told us it refuses, so the discovery
+        # below costs one extra round-trip per (model, parameter) for the lifetime
+        # of the gateway rather than one per request. A tool-driving harness sends
+        # the parameter on nearly every call -- 52 of 66 in a conformance run --
+        # so retrying each one would double that traffic against the RPM limit for
+        # no new information.
+        refused = app.state.refused_params.get(model, frozenset())
+        if refused and isinstance(value, dict):
+            known = [name for name in refused if name in value]
+            if known:
+                for name in known:
+                    value.pop(name)
+                body = json.dumps(value).encode()
+                dropped_params.extend(known)
+
+        try:
+            upstream = await send(body)
+            # A provider that refuses a parameter fails the request before it
+            # reaches the model, so nothing has been billed and nothing has been
+            # streamed downstream yet: dropping the blamed parameters and sending
+            # once more is safe here and nowhere later. Only a request that has
+            # already failed is touched, so providers that accept the parameter
+            # keep their exact semantics -- and because the refusal is learned
+            # from the provider rather than configured, a model that later gains
+            # support simply stops being asked to give it up, with no stale list
+            # to notice and prune.
+            if upstream.status_code == 400 and isinstance(value, dict):
+                failed_body = await upstream.aread()
+                blamed = [
+                    name for name in _unsupported_params(failed_body) if name in value
+                ]
+                if blamed:
+                    await upstream.aclose()
+                    for name in blamed:
+                        value.pop(name)
+                    # Re-serialize so the request log records what we really sent.
+                    body = json.dumps(value).encode()
+                    dropped_params.extend(blamed)
+                    # Bounded by allowed_models across scopes, so this cannot grow
+                    # with traffic: an unlisted model is rejected before reaching
+                    # here.
+                    app.state.refused_params[model] = refused.union(blamed)
+                    upstream = await send(body)
         except httpx.HTTPError:
             await asyncio.shield(
                 store.complete(scope_name, attribution, upstream_error=True)
