@@ -29,7 +29,7 @@ PKG = os.path.join(REPO, "vero")
 PROJECT = "harness-engineering-bench"
 
 
-def load_credentials(filename="heb.secrets.env"):
+def load_credentials(filename=None):
     """W&B settings out of a gitignored env file.
 
     ``WANDB_ENTITY`` is read here rather than left to the account default: if the
@@ -37,7 +37,10 @@ def load_credentials(filename="heb.secrets.env"):
     org the local default points at and reports "no runs matching", which reads
     as "nothing has started yet" rather than "you asked the wrong org".
     """
-    path = os.path.join(PKG, filename)
+    # Credential files are per-person and gitignored, so the name is not shared:
+    # HEB_SECRETS_FILE overrides it rather than making everyone rename theirs.
+    path = os.path.join(PKG, filename or os.environ.get(
+        "HEB_SECRETS_FILE", "heb.secrets.env"))
     if not os.path.exists(path):
         sys.exit(f"no credential file: vero/{filename}")
     with open(path, encoding="utf-8") as handle:
@@ -64,7 +67,10 @@ def main():
 
     # vero appends a `--<hash>` uniquifier to the wandb_run it is given, so the
     # suffix is not anchored to end-of-string.
-    want = re.compile(rf"^{re.escape(bench)}__.*__{re.escape(suffix)}(--\w+)?$")
+    # The middle <model> segment is optional: a run labelled <bench>__<suffix>
+    # with no model in the name would otherwise report as "nothing started yet".
+    want = re.compile(
+        rf"^{re.escape(bench)}__(.*__)?{re.escape(suffix)}(--\w+)?$")
     rows = []
     for run in runs:
         if not want.match(run.name or ""):
