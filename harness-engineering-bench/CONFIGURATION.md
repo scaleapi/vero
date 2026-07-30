@@ -203,7 +203,7 @@ either bypasses the gateway or fails closed against the wrong endpoint.
 | `opencode` | `anthropic/claude-sonnet-5` | provider `baseURL` written into `opencode.json`; keeps the `/v1` because opencode appends only `/messages` | yes |
 | `mini-swe-agent` | `anthropic/claude-sonnet-5` | litellm aliases: `OPENAI_API_BASE` keeps `/v1` (it appends `/chat/completions`), `ANTHROPIC_API_BASE` gets the fully qualified `/v1/messages` (it appends that unless already present) | yes |
 | `kimi-cli` | `openai/fireworks_ai/kimi-k3` | `--ak base_url`, written into the provider block of kimi-cli's config file | yes |
-| `codex` | — | reads `OPENAI_BASE_URL`/`OPENAI_API_KEY` | **not yet run** |
+| `codex` | `gpt-5.6-sol` (bare) | reads `OPENAI_BASE_URL`/`OPENAI_API_KEY` | yes |
 
 Two things are specific to `kimi-cli` and easy to get wrong:
 
@@ -221,9 +221,24 @@ Two things are specific to `kimi-cli` and easy to get wrong:
   below its real window; set `KIMI_MODEL_MAX_CONTEXT_SIZE` once that number is
   known.
 
+A harness may also send a *parameter* the provider refuses. `opencode` drives an
+openai-prefixed model through the Responses API and sends `tool_choice`, which
+fireworks-hosted models reject with a 400 — the agent then exits non-zero and the
+trial dies minutes in with no candidate. The gateway now learns such a refusal
+from the provider's own error and retries without the parameter, once per model,
+so this needs no per-harness configuration. Two things worth knowing if you meet a
+variant of it: the `allowed_openai_params` escape hatch the upstream error
+suggests works on `/chat/completions` but is ignored on `/responses`, and the
+gateway's request log records what it dropped, so a degraded request is visible
+rather than silent.
+
 Adding a harness means finding out how it addresses a base URL before spending a
 full run on it. A cheap conformance run — short budget, one benchmark — costs
-about two minutes and has caught this on every harness added so far.
+about two minutes and has caught this on every harness added so far. Run it
+against `vero/examples/harness-conformance/build.yaml`; a pass is `reward 1.0`
+with an empty verifier error block, and it is worth grepping the agent log for
+provider errors rather than trusting the score alone, since a partial failure can
+still score.
 
 ## Conventions
 

@@ -140,12 +140,92 @@ Also confirm, out of band:
 
 ## Launch discipline
 
-- **Launch detached** so the run outlives your shell/session. Redirect to a log
-  and record the PID, e.g. `nohup bash launch.sh > run.log 2>&1 &` (or `setsid`;
-  on macOS, which lacks `setsid`, a Python double-fork + `os.setsid()` daemonizer
-  works). Keep `launch.sh`, `run.log`, `run.pid` alongside the `jobs/` output.
+- **Use `scripts/launch_cell.sh`** rather than assembling this by hand. It writes
+  `launch.sh`, `run.log`, `run.pid` and `daemonize.py` into
+  `runs/<benchmark>/<label>/`, double-forks into a new session, and — importantly
+  — **fails non-zero if no live pid appears**, so a launch that did not start
+  cannot be mistaken for one that did.
+
+  ```bash
+  bash harness-engineering-bench/scripts/launch_cell.sh \
+    <benchmark>/<label> ../harness-engineering-bench/<benchmark>/baseline/build.yaml \
+    <envfile> modal <agent> <launch-model> <wire-model> <benchmark>__<label>
+  ```
+
+  Positions 6 and 7 are the launch form and the wire form of the model, which
+  differ for `opencode` and `kimi-cli` — see the routing table in
+  `CONFIGURATION.md`.
+
+- **Launch detached.** A plain `nohup ... &` is not enough: supervising harnesses
+  terminate process groups belonging to an idle session, and macOS has no
+  `setsid(1)`. The launcher's double-fork handles both.
+- **Never wrap launches in `|| true` inside a loop.** It converts every failure
+  into silence and the loop still exits 0, so you report N runs started when zero
+  did. This has cost a full grid.
 - Prefer to **confirm the launch** (of a full-budget run) before firing — these
   spend real target-model and optimizer tokens plus Modal compute.
+
+## Watching a run while it is in flight
+
+`agent/` and `verifier/` artifacts are written only when a run *ends*, and
+`run.log` holds nothing but the outer progress spinner. So mid-run, W&B is the
+only view of whether the optimizer is actually evaluating anything:
+
+```bash
+uv run --project vero python harness-engineering-bench/scripts/wandb_progress.py \
+  <benchmark> <suffix>
+```
+
+It reports, per cell, evaluations completed, evaluations terminated, upstream
+error counts and generated tokens. **`terminated` should be 0**; a non-zero value
+means evaluations are being invalidated mid-search, which costs the optimizer
+evidence without necessarily corrupting the reported score.
+
+Two traps when checking liveness:
+
+- **`ps aux | grep` truncates its command column to the terminal width** and will
+  report 0 processes for perfectly healthy runs, because the match text sits past
+  the cutoff. Use `pgrep -f` instead. Under a kill-on-failure policy this
+  false negative is an instruction to destroy working runs.
+- **Phase text is not liveness.** A status derived from the log will happily
+  report a phase for a dead run. Compare `stat -f %z run.log` across a sleep.
+
+## Concurrency
+
+Runs share one upstream provider account, so they contend. Steer by measurement,
+not arithmetic:
+
+**Steer on the marginal error rate across a check interval** — Δerrors ÷ Δrequests
+between two consecutive readings — and specifically on the rate imposed on the
+runs that were *already* going when load changed. Measured on one officeqa pass:
+4 concurrent cells sat at 0.15%; adding a fifth took the pass to 23.1% overall and
+put 17.1% on the four incumbents. Steady state at 4 later fell to 0.00%.
+
+**Do not derive a ceiling from tokens-per-minute against a published quota.** That
+was attempted twice on the same pass and mispredicted in both directions — first
+from anchoring elapsed time to process start rather than to when work began, then
+by reading a coincidental match as confirmation. The marginal error rate is the
+signal that held up.
+
+**Spikes are usually startup bursts, not a standing ceiling.** New cells hit their
+opening evaluation waves together. Wait a full interval after any load change
+before concluding anything.
+
+**Replace on completion rather than adding**, and **never kill a healthy run to
+reduce load** — see below.
+
+## Stopping a run is two operations
+
+Killing the local process does **not** stop the work. The compose topology is
+daemon-owned and Modal sandboxes are server-side (default 24h timeout), so a
+killed run keeps executing and keeps billing — only the local collector is gone,
+which makes the results unrecoverable. Killing therefore converts expensive useful
+work into expensive useless work.
+
+An intentional stop needs both halves; `scripts/cleanup_orphans.sh --dry-run`
+handles the remote half, but read its header first — all runs share one Modal app,
+so a bulk teardown mid-pass destroys healthy runs alongside orphans. Run it only
+between passes.
 
 ## Post-launch health check — verify AFTER launching
 
@@ -236,6 +316,63 @@ python .../per_trial_tokens.py <run1> <run2> ... --csv tokens.csv
 Check its `coverage_pct` (should be ~100% and `residual` ~0 when the build sets
 `inference_gateway.request_log_attribution: true`; low coverage means per-trial
 numbers are lower bounds and the per-evaluation totals are the envelope).
+
+## Auditing a finished pass
+
+A run that was degraded still emits a plausible in-range number, so a reward is
+only a measurement once you have checked that it is one. Per finished cell,
+confirm all of:
+
+- `error_rate` is `0.0` in `jobs/*/task__*/verifier/finalization.json` — the
+  held-out set scored completely — or account for what dropped;
+- the verifier error block is empty (a non-empty one means scoring aborted and the
+  number is an artefact, not a low score);
+- `shipped: true`;
+- no evaluations were terminated mid-search (this does not invalidate the score,
+  but it means the search ran on less evidence — a caveat on the comparison);
+- no two cells share a shipped content digest, which would mean they shipped the
+  same tree, usually the unmodified baseline. That is a null result, not agreement.
+
+```bash
+cd runs && python3 audit_pass.py <benchmark> <suffix> <baseline_reward>
+cd runs && python3 terminated_evals.py <benchmark> <suffix>
+```
+
+Both glob **relative to the working directory** and must be run from `runs/`. From
+anywhere else they print an empty table with a header, which reads as "no results
+yet" rather than "wrong directory".
+
+Prefer `session/database.json` inside the session archive over convenience
+sources: the agent's own log shows only the terminations it happened to print, and
+W&B summary fields are last-value-wins, so a count there proves only "at least
+one".
+
+## Per-benchmark quick reference
+
+Values drift; treat this as an index and confirm against each `baseline/build.yaml`
+before launching. Held-out baselines are the pinned `baseline_reward`.
+
+| benchmark | task data | target model | held-out baseline | dev / val cases |
+|---|---|---|---|---|
+| `officeqa` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.3412 | 196 / 392 |
+| `browsecomp-plus` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.4619 | 132 / 264 |
+| `gaia` | registry digest | `gpt-5.4-mini` | 0.6205 | 132 / 264 |
+| `tau3` | registry digest | `fireworks_ai/deepseek-v4-flash` | 0.7321 | 300 / 600 |
+| `swe-atlas-qna` | registry digest | `fireworks_ai/gpt-oss-120b` | 0.0676 | 100 / 196 |
+| `swe-bench-pro` | registry | `gpt-4o` | not pinned | 146 / 292 |
+
+All share the same shape: `selection_partition: validation`, `reward_mode: submit`,
+`baseline_floor: false`, global `n_attempts: 1` with the **test** target overridden
+to `n_attempts: 3` / `aggregate_attempts: mean`, and `environment_name:
+${inner_env:-modal}`.
+
+**The two benchmarks marked "local" cannot run from a fresh checkout.** Their task
+directories are gitignored, so they exist only where someone has already
+materialised them. Fetch them before launching (see the README) and do not assume a
+clean clone can run them. The failure is badly misreported: the loader leaves an
+unresolvable `task_source` untouched and the validator then reads it as a registry
+reference, so you get `registry task_source must include an explicit version`
+rather than anything pointing at a missing directory.
 
 ## Per-benchmark gotchas
 
