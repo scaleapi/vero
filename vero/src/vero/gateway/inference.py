@@ -690,6 +690,9 @@ def create_inference_gateway_app(
     app.state.usage_store = store
     app.state.request_log = request_log
     app.state.request_attributor = attributor
+    # One-shot latch for the server-side-conversation warning in `proxy`. A set
+    # rather than a bool so the closure can mark it without `nonlocal`.
+    _stateful_warned: set[bool] = set()
 
     @app.get("/health")
     async def health():
@@ -801,6 +804,29 @@ def create_inference_gateway_app(
             await log_request(status=403, error="model_denied")
             return _provider_error(
                 403, "model is not allowed for this scope", "model_denied"
+            )
+        # `previous_response_id` asks the SERVER to hold the conversation. This
+        # gateway never can: it is a passthrough with no response store. Whether the
+        # request still works therefore depends entirely on the upstream, and a
+        # litellm proxy in front of a provider with no response store accepts the
+        # field and drops it. Nothing errors, so from turn two the model receives a
+        # bare tool result with no task attached -- that scored the swe-bench-pro
+        # seed agent 0.0000 on all 66 sampled cases with nothing in any log to show
+        # for it. Rejecting outright would be wrong (a gateway fronting real OpenAI
+        # honours the field, and _RequestAttributor threads those chains), so warn
+        # once per process instead and leave the proxying alone: a delegated
+        # conversation is now one grep away instead of invisible.
+        if (
+            not _stateful_warned
+            and isinstance(value, dict)
+            and value.get("previous_response_id") is not None
+        ):
+            _stateful_warned.add(True)
+            logger.warning(
+                "request carried previous_response_id: this gateway has no response "
+                "store, so the conversation survives only if the upstream keeps one. "
+                "If it does not, the field is silently ignored and every turn after "
+                "the first loses its task. Send the full conversation instead."
             )
         if not attribution or any(
             not (character.isalnum() or character in "_.-") for character in attribution
