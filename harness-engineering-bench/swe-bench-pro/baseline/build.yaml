@@ -95,19 +95,22 @@ wandb:
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
-  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
-  # gateway token usage to individual trials (trusted, vs. content-matching).
-  # Without it the fallback recovers only each conversation's root turn: measured
-  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
-  request_log_attribution: true
   producer:
     # Both prefixed and bare forms: the gateway model match is prefix-sensitive.
     allowed_models: ["${optimizer_model:-gpt-5.3-codex}"]
     max_concurrency: 8
   evaluation:
     allowed_models: [gpt-4o]
-    max_requests: 15000
-    max_tokens: 100000000
+    max_requests: 200000
+    max_tokens: 1000000000  # 438 agent case-runs (146 dev + 292 validation)
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  # Absent, this block defaults to a COPY of `evaluation`, which is how the
+  # 2026-07-29 grid ran its held-out pass on a budget sized for nothing at all.
+  finalization:
+    allowed_models: [gpt-4o]
+    max_requests: 200000
+    max_tokens: 2000000000  # 293 test cases x3 attempts + rescore headroom
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true

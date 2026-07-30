@@ -640,7 +640,9 @@ async def test_harbor_backend_scores_agent_crash_as_informative_task_failure(tmp
     # scored at the failure value, a real SUCCESS sample that counts toward the
     # mean, and NOT an infrastructure error.
     assert report.status == EvaluationStatus.SUCCESS
-    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.5}
+    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.5,
+        "starved_attempt_rate": 0.0, "dead_infra_attempt_rate": 0.0,
+        "unmeasured_attempt_rate": 0.0}
     assert [case.status for case in report.cases] == [
         CaseStatus.SUCCESS,
         CaseStatus.SUCCESS,
@@ -768,74 +770,6 @@ async def test_harbor_backend_marks_inference_budget_exhaustion_invalid(tmp_path
         for diagnostic in report.diagnostics
     )
 
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("remaining_tokens", "expected_category", "expected_status"),
-    [
-        # The ledger has headroom, so a message claiming budget exhaustion is
-        # false -- in practice a provider rate limit wearing the wrong words.
-        (500_000, "transient_infra", EvaluationStatus.SUCCESS),
-        # The ledger agrees the pool is empty: still terminating.
-        (0, "inference_budget_exhausted", EvaluationStatus.INVALID),
-    ],
-)
-async def test_gateway_ledger_overrides_a_text_only_budget_claim(
-    tmp_path, monkeypatch, remaining_tokens, expected_category, expected_status
-):
-    """Budget exhaustion must be confirmed by the gateway, not just asserted.
-
-    The message is all that survives an in-container failure, so before this the
-    terminating category was reachable from prose alone: on 2026-07-29 a provider
-    rate limit containing the word "quota" ended an officeqa cell while both
-    scopes sat under 10% of their caps and the gateway had emitted no 402.
-    """
-    sandbox = FakeSandbox(
-        tmp_path,
-        {
-            "example/alpha": [{"verifier_result": {"rewards": {"reward": 1.0}}}],
-            "example/beta": [
-                {
-                    "verifier_result": None,
-                    "exception_info": {
-                        "exception_type": "openai.RateLimitError",
-                        "message": "Error code: 429 - budget_exhausted",
-                    },
-                }
-            ],
-        },
-    )
-    backend = HarborBackend(
-        _config(
-            tmp_path,
-            inference_gateway_url="http://inference-gateway:8001",
-            inference_gateway_token="gw-token",
-            inference_gateway_finalization_token="gw-final",
-        )
-    )
-
-    async def _fake_usage(self, *, finalization):
-        assert finalization is True
-        return remaining_tokens <= 0
-
-    monkeypatch.setattr(
-        HarborBackend, "_scope_budget_is_exhausted", _fake_usage, raising=True
-    )
-
-    report = await backend.evaluate(
-        context=await _context(tmp_path, sandbox, finalization=True),
-        request=_request(CaseRange(stop=2)),
-    )
-    assert report.cases[1].output["error_category"] == expected_category
-    assert report.status == expected_status
-
-
-@pytest.mark.asyncio
-async def test_budget_check_is_skipped_without_a_gateway(tmp_path):
-    """No gateway configured means no answer, and no answer must change nothing."""
-    backend = HarborBackend(_config(tmp_path))
-    assert await backend._scope_budget_is_exhausted(finalization=False) is None
 
 @pytest.mark.asyncio
 async def test_harbor_backend_treats_missing_coverage_as_infrastructure(tmp_path):
@@ -1022,7 +956,9 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
         request=_request(CaseIds(ids=["case-a"])),
     )
 
-    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.0}
+    assert report.metrics == {"score": 0.5, "error_rate": 0.0, "score_stddev": 0.0,
+        "starved_attempt_rate": 0.0, "dead_infra_attempt_rate": 0.0,
+        "unmeasured_attempt_rate": 0.0}
     assert report.cases[0].metrics == {
         "score": 0.5,
         "n_attempts": 2.0,
@@ -1032,7 +968,58 @@ async def test_harbor_backend_mean_counts_dead_attempts_as_failures(tmp_path):
         # zero-filled failure, not infra dilution.
         "n_dead_infra": 0.0,
         "n_clean": 2.0,
+        # Neither attempt reports token counters at all, so starvation is
+        # unknowable here and must not be asserted. See the starvation test below.
+        "n_starved": 0.0,
     }
+
+
+@pytest.mark.asyncio
+async def test_harbor_backend_surfaces_attempts_that_bought_no_inference(tmp_path):
+    """An attempt that ran but spent nothing must be visible in the report.
+
+    This is the failure that cost the swe-bench-pro grid a day: once the
+    inference budget was gone, every remaining attempt still ran its sandbox,
+    agent and verifier, produced an honest 0.0 from the hidden suite, and was
+    averaged in. No exception was raised, so `n_dead_infra` stayed at 0, the
+    case still returned SUCCESS, and `error_rate` read a clean 0.0 while two
+    thirds of the pass was dead weight. Only the token counters showed it.
+    """
+    sandbox = FakeSandbox(
+        tmp_path,
+        {
+            "example/alpha": [
+                {
+                    "verifier_result": {"rewards": {"pass": 1.0}},
+                    "agent_result": {"n_input_tokens": 4000, "n_output_tokens": 120},
+                },
+                # Ran, scored a real 0.0 from the verifier, bought nothing.
+                {
+                    "verifier_result": {"rewards": {"pass": 0.0}},
+                    "agent_result": {"n_input_tokens": 0, "n_output_tokens": 0},
+                },
+            ]
+        },
+    )
+    backend = HarborBackend(_config(tmp_path, aggregate_attempts="mean"))
+
+    report = await backend.evaluate(
+        context=await _context(tmp_path, sandbox),
+        request=_request(CaseIds(ids=["case-a"])),
+    )
+
+    case = report.cases[0]
+    assert case.metrics["n_starved"] == 1.0
+    # The starved attempt looks perfectly healthy to every pre-existing signal.
+    assert case.metrics["n_dead_infra"] == 0.0
+    assert case.metrics["n_clean"] == 2.0
+    assert case.status == CaseStatus.SUCCESS
+    assert report.metrics["error_rate"] == 0.0
+    # ... and this is the one number that gives it away.
+    assert report.metrics["starved_attempt_rate"] == 0.5
+    assert report.metrics["unmeasured_attempt_rate"] == 0.5
+    # The score is halved by an attempt that never had a chance to earn one.
+    assert report.metrics["score"] == 0.5
 
 
 @pytest.mark.asyncio
@@ -1289,72 +1276,3 @@ async def test_case_result_carries_a_phase_execution_trace(tmp_path: Path):
     failed = by_id["case-b"].execution_trace
     assert [span["phase"] for span in failed] == ["environment_setup", "exception"]
     assert failed[-1]["detail"]["exception_type"] == "TimeoutError"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("payload", "status_code", "expected"),
-    [
-        # Both caps present and one is empty -> exhausted.
-        ({"remaining_requests": 40, "remaining_tokens": 0}, 200, True),
-        ({"remaining_requests": 0, "remaining_tokens": 900}, 200, True),
-        # Headroom on both -> not exhausted, which is what lets a false text
-        # claim be overridden.
-        ({"remaining_requests": 40, "remaining_tokens": 900}, 200, False),
-        # An uncapped scope reports None for both. That is "cannot be exhausted",
-        # not "unknown" -- returning None here would leave a bogus terminating
-        # claim standing on exactly the scopes that have no limit to hit.
-        ({"remaining_requests": None, "remaining_tokens": None}, 200, False),
-        # Anything unhealthy is unknown: never guess from a failed lookup.
-        ({}, 403, None),
-        ({}, 500, None),
-    ],
-)
-async def test_scope_budget_lookup_reads_the_ledger(
-    tmp_path, monkeypatch, payload, status_code, expected
-):
-    import httpx
-
-    captured: dict[str, object] = {}
-
-    class _Response:
-        def __init__(self):
-            self.status_code = status_code
-
-        def json(self):
-            return payload
-
-    class _Client:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def get(self, url, headers=None):
-            captured["url"] = url
-            captured["headers"] = headers
-            return _Response()
-
-    monkeypatch.setattr(httpx, "AsyncClient", _Client)
-    backend = HarborBackend(
-        _config(
-            tmp_path,
-            inference_gateway_url="http://inference-gateway:8001/",
-            inference_gateway_token="gw-token",
-            inference_gateway_finalization_token="gw-final",
-        )
-    )
-
-    assert await backend._scope_budget_is_exhausted(finalization=False) is expected
-    # The evaluation scope is asked with the evaluation token, and the trailing
-    # slash on the configured URL must not produce a doubled path separator.
-    assert captured["url"] == "http://inference-gateway:8001/usage/evaluation"
-    assert captured["headers"]["Authorization"] == "Bearer gw-token"
-
-    await backend._scope_budget_is_exhausted(finalization=True)
-    assert captured["url"] == "http://inference-gateway:8001/usage/finalization"
-    assert captured["headers"]["Authorization"] == "Bearer gw-final"

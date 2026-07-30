@@ -148,8 +148,25 @@ inference_gateway:
     # Prefixed form only: the agents strip just `openai/` before calling the
     # gateway, which then matches this allow-list as an exact string.
     allowed_models: [fireworks_ai/deepseek-v4-flash]
-    max_requests: 15000
-    max_tokens: 100000000
+    # Sized from a MEASURED ~1.5M tokens and 55-102 requests per case-run on
+    # 2026-07-29. swe-bench-pro is the most expensive benchmark in this suite,
+    # because every case-run builds a real repository and executes its test
+    # suite, yet it was the only one of the six carrying a bare 100000000 with
+    # no arithmetic behind it (gaia/browsecomp-plus/swe-atlas-qna 2e9, officeqa
+    # 3e9, tau3 4e9, each with its case-run count in the comment).
+    max_requests: 200000
+    max_tokens: 1000000000  # 396 agent case-runs (132 dev + 264 validation)
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  # Absent, this block defaults to a COPY of `evaluation`. At 100000000 that
+  # funded only 62-84 of the held-out pass's 198 attempts; the rest still ran,
+  # still reached the verifier, and still scored an honest 0.0 against an
+  # unedited repository, so error_rate read 0.0 while two thirds of the pass was
+  # dead weight and every measured reward came out 2.4x to 3.4x too low.
+  finalization:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 500000000  # 66 test cases x3 attempts + rescore headroom
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
