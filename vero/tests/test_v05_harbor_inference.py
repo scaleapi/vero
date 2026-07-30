@@ -583,9 +583,7 @@ def test_gateway_request_log_rotation_boundary(tmp_path):
     asyncio.run(fill())
     files = sorted((tmp_path / "requests").glob("requests-*.jsonl"))
     assert len(files) > 1
-    total = sum(
-        len(path.read_text().splitlines()) for path in files
-    )
+    total = sum(len(path.read_text().splitlines()) for path in files)
     assert total == 6
 
 
@@ -646,7 +644,11 @@ def test_gateway_attribution_threads_stateful_and_stateless_requests(tmp_path):
         client.post(
             "/scopes/producer/optimizer/v1/responses",
             headers=headers,
-            json={"model": "gpt-test", "input": "Another task entirely", "stream": True},
+            json={
+                "model": "gpt-test",
+                "input": "Another task entirely",
+                "stream": True,
+            },
         )
         client.post(
             "/scopes/producer/optimizer/v1/responses",
@@ -862,3 +864,108 @@ def test_gateway_request_log_omits_cost_when_the_upstream_sends_none(tmp_path):
 
     record = _log_records(tmp_path)[0]
     assert not any(key.startswith("upstream_cost") for key in record)
+
+
+_UNSUPPORTED = (
+    "litellm.UnsupportedParamsError: fireworks_ai does not support parameters: "
+    "['tool_choice'], for model=accounts/fireworks/models/kimi-k3."
+)
+
+
+def test_gateway_retries_without_parameters_the_provider_refuses(tmp_path):
+    """A provider that refuses tool_choice must not kill the whole request.
+
+    Fireworks answers 400 for `tool_choice`, which every tool-driving harness
+    sends, so the model is unusable through the gateway -- the run dies on its
+    first real request. Neither documented workaround is general: two configure
+    the upstream proxy we do not own, and `allowed_openai_params` is honoured on
+    /chat/completions but ignored on /responses, which is the endpoint an
+    openai-prefixed harness actually uses.
+
+    Retrying without the blamed parameter is endpoint-agnostic and engages only
+    on an already-failed request.
+    """
+    seen = []
+
+    def upstream(request: httpx.Request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        if "tool_choice" in payload:
+            return httpx.Response(400, json={"error": {"message": _UNSUPPORTED}})
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=4),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        # /responses is the endpoint that matters: this is where the documented
+        # allowed_openai_params escape hatch does not work.
+        ok = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "tool_choice": "auto", "input": []},
+        )
+
+    assert ok.status_code == 200
+    assert len(seen) == 2, "expected one rejected attempt then one retry"
+    assert seen[0]["tool_choice"] == "auto"
+    assert "tool_choice" not in seen[1]
+    assert seen[1]["model"] == "gpt-test", "the rest of the request must survive"
+
+
+def test_gateway_does_not_retry_when_the_provider_accepts_the_parameter(tmp_path):
+    """Providers that accept tool_choice keep it, and their exact semantics.
+
+    This is the reason the fix is a retry rather than an unconditional strip: a
+    strip would silently change behaviour for every harness that relies on
+    tool_choice against a provider that supports it.
+    """
+    seen = []
+
+    def upstream(request: httpx.Request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=4),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        client.post(
+            "/scopes/producer/optimizer/v1/chat/completions",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "tool_choice": "required", "messages": []},
+        )
+
+    assert len(seen) == 1, "a successful request must not be retried"
+    assert seen[0]["tool_choice"] == "required"
+
+
+def test_gateway_does_not_retry_a_400_that_blames_nothing_droppable(tmp_path):
+    """An unrelated 400 is relayed once, not retried into a second charge."""
+    seen = []
+
+    def upstream(request: httpx.Request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(400, json={"error": {"message": "bad request"}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=4),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        failed = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "tool_choice": "auto", "input": []},
+        )
+
+    assert failed.status_code == 400
+    assert len(seen) == 1
