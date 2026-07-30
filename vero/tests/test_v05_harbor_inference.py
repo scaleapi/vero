@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 
 from vero.gateway.inference import (
     InferenceGatewayConfig,
+    InferenceRequestLogConfig,
     InferenceScopeConfig,
+    _unsupported_params,
     create_inference_gateway_app,
     token_digest,
 )
@@ -969,3 +971,96 @@ def test_gateway_does_not_retry_a_400_that_blames_nothing_droppable(tmp_path):
 
     assert failed.status_code == 400
     assert len(seen) == 1
+
+
+def test_unsupported_params_survives_json_escaped_quoting():
+    """The blamed names must parse whatever quoting the upstream uses.
+
+    Today's upstream builds the list with Python's repr, so it arrives
+    single-quoted and JSON leaves it alone. Were it ever double-quoted, JSON
+    would escape it to ``[\\"tool_choice\\"]``; matching the raw body then yields
+    ``tool_choice\\`` with a trailing backslash, which fails the caller's
+    "is this parameter in the request" check. The retry would silently never fire
+    -- a worse failure than the 400, because nothing says why.
+    """
+    message = (
+        "litellm.UnsupportedParamsError: fireworks_ai does not support parameters: "
+    )
+    single = json.dumps({"error": {"message": message + "['tool_choice']"}}).encode()
+    double = json.dumps({"error": {"message": message + '["tool_choice"]'}}).encode()
+
+    assert _unsupported_params(single) == ["tool_choice"]
+    assert _unsupported_params(double) == ["tool_choice"]
+    # Several parameters, and an unrelated error, both behave.
+    many = json.dumps(
+        {"error": {"message": "does not support parameters: ['tool_choice', 'top_k']"}}
+    ).encode()
+    assert _unsupported_params(many) == ["tool_choice", "top_k"]
+    assert _unsupported_params(b'{"error": {"message": "rate limited"}}') == []
+    # A non-JSON body still gets a best-effort read rather than giving up.
+    assert _unsupported_params(b"does not support parameters: ['tool_choice']") == [
+        "tool_choice"
+    ]
+
+
+def test_gateway_records_dropped_params_in_the_request_log(tmp_path):
+    """A degraded request must be auditable, not merely successful.
+
+    The retry silently changes what was asked of the provider. If the audit field
+    regresses, every future degraded request becomes invisible and the only signal
+    left is a behaviour difference nobody is looking for.
+    """
+
+    def upstream(request: httpx.Request):
+        payload = json.loads(request.content)
+        if "tool_choice" in payload:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "litellm.UnsupportedParamsError: fireworks_ai does not "
+                            "support parameters: ['tool_choice'],"
+                        )
+                    }
+                },
+            )
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    config = _config(tmp_path, max_requests=4).model_copy(
+        update={
+            "request_log": InferenceRequestLogConfig(
+                directory=str(tmp_path / "requests")
+            )
+        }
+    )
+    app = create_inference_gateway_app(
+        config=config,
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        retried = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "tool_choice": "auto", "input": []},
+        )
+        untouched = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": []},
+        )
+    assert retried.status_code == 200
+    assert untouched.status_code == 200
+
+    records = [
+        json.loads(line)
+        for path in sorted((tmp_path / "requests").glob("*.jsonl"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 2, records
+    assert records[0]["dropped_params"] == ["tool_choice"]
+    # A request nothing was dropped from must not carry a misleading empty list.
+    assert records[1].get("dropped_params") is None

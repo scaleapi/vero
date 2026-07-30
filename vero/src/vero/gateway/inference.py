@@ -693,8 +693,33 @@ def _unsupported_params(body: bytes) -> list[str]:
     accept the parameter are untouched and keep their exact semantics. That
     matters more than elegance here -- an unconditional strip would silently
     change behaviour for every harness that relies on ``tool_choice``.
+
+    Matched against the decoded ``error.message`` rather than the raw response
+    bytes, so JSON string escaping cannot corrupt the names. Reading the raw body
+    happens to work for the error shape we see today only because Python's list
+    repr quotes with ``'``, which JSON does not escape. Were the upstream to quote
+    with ``"``, the encoded body would carry ``[\\"tool_choice\\"]`` and the names
+    would come back with a trailing backslash -- which then fails the caller's
+    "is this parameter actually in the request" check, so the retry would silently
+    never fire and the model would stay unusable for a now-invisible reason.
     """
-    match = _UNSUPPORTED_PARAMS.search(body.decode("utf-8", "replace"))
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        payload = None
+    text = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            candidate = error.get("message")
+            text = candidate if isinstance(candidate, str) else None
+        elif isinstance(error, str):
+            text = error
+    if text is None:
+        # Not the shape we expect: fall back to the raw body rather than give up,
+        # since a missed match costs a usable model.
+        text = body.decode("utf-8", "replace")
+    match = _UNSUPPORTED_PARAMS.search(text)
     if not match:
         return []
     return re.findall(r"['\"]([^'\"]+)['\"]", match.group(1))
