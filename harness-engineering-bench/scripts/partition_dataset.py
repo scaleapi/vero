@@ -31,17 +31,25 @@ class BenchmarkSpec:
     target_counts: dict[str, int]
     export_dir_name: str
     stratified_by: tuple[str, ...]
-    #: Registry version to pin instead of a content digest. Some hub datasets are
-    #: addressed by an incrementing version rather than a sha256, and the loader
-    #: only requires the reference to be explicit -- not that it be a digest.
-    #: Prefer a digest when one is published: a version number is a mutable
-    #: pointer in principle, so record which form was used.
-    dataset_version_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every dataset here is pinned by content digest, never by a registry
+        # version. A hub dataset can be *fetched* by version -- terminal-bench 2.1
+        # answers to `@6` -- but a version is a mutable pointer, so pinning one
+        # would let the task set change underneath a published result. Reject
+        # anything that is not a full sha256 rather than accept a placeholder that
+        # silently produces a malformed reference.
+        if len(self.dataset_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.dataset_digest
+        ):
+            raise ValueError(
+                f"{self.dataset_name} dataset_digest must be a lowercase "
+                f"64-character sha256, got {self.dataset_digest!r}. Resolve it with "
+                "--fetch-registry, which reports the digest the registry serves."
+            )
 
     @property
     def task_source(self) -> str:
-        if self.dataset_version_ref is not None:
-            return f"{self.dataset_name}@{self.dataset_version_ref}"
         return f"{self.dataset_name}@sha256:{self.dataset_digest}"
 
 
