@@ -12,9 +12,11 @@ Reads credentials from a gitignored `*.secrets.env` in vero/ and prints none of
 them.
 
 Scope names matter and must not be collapsed. Gateway metrics are logged under
-paths like `gateway/<scope>/<metric>`; keying on the last path segment alone
+paths like `inference/<scope>/<metric>`; keying on the last path segment alone
 makes `evaluation` and `finalization` overwrite each other, which previously
-produced a badly wrong error-rate figure. Key on the full path.
+produced a badly wrong error-rate figure. Key on the full path, and report the
+scopes separately -- a clean search alongside a throttled finalization is a
+different situation from the reverse, and a single total hides which you have.
 """
 
 import os
@@ -28,14 +30,23 @@ PROJECT = "harness-engineering-bench"
 
 
 def load_credentials(filename="heb.secrets.env"):
-    """WANDB_API_KEY / WANDB_BASE_URL out of a gitignored env file."""
+    """W&B settings out of a gitignored env file.
+
+    ``WANDB_ENTITY`` is read here rather than left to the account default: if the
+    file names an entity and we ignore it, the query silently targets whatever
+    org the local default points at and reports "no runs matching", which reads
+    as "nothing has started yet" rather than "you asked the wrong org".
+    """
     path = os.path.join(PKG, filename)
     if not os.path.exists(path):
         sys.exit(f"no credential file: vero/{filename}")
-    for line in open(path):
-        match = re.match(r"\s*(WANDB_API_KEY|WANDB_BASE_URL)\s*=\s*(.+)", line)
-        if match:
-            os.environ[match.group(1)] = match.group(2).strip().strip("'\"")
+    with open(path, encoding="utf-8") as handle:
+        for line in handle:
+            match = re.match(
+                r"\s*(WANDB_API_KEY|WANDB_BASE_URL|WANDB_ENTITY)\s*=\s*(.+)", line
+            )
+            if match:
+                os.environ[match.group(1)] = match.group(2).strip().strip("'\"")
 
 
 def main():
@@ -59,14 +70,15 @@ def main():
         if not want.match(run.name or ""):
             continue
         summary = dict(run.summary)
-        # Full-path keys: gateway/<scope>/<metric>. Never key on the last segment.
-        scopes = {}
+        # Keys are inference/<scope>/<metric>, and the scope must be kept: keying
+        # on the last path segment alone collapses `evaluation` into
+        # `finalization`, which once produced a badly wrong error figure.
+        scopes: dict[str, dict[str, float]] = {}
         for key, value in summary.items():
-            match = re.match(r"gateway/([^/]+)/(requests|errors)$", str(key))
+            match = re.match(r"inference/([^/]+)/(requests|upstream_errors)$", str(key))
             if match and isinstance(value, (int, float)):
                 scopes.setdefault(match.group(1), {})[match.group(2)] = value
-        rows.append((run.name, run.state, summary, scopes,
-                     run.created_at, run.id))
+        rows.append((run.name, run.state, summary, scopes, run.created_at, run.id))
 
     if not rows:
         print(f"no W&B runs matching {bench}__*__{suffix} in {entity}/{PROJECT}")
@@ -80,23 +92,24 @@ def main():
         return int(sum(found)) if found else None
 
     print(f"{'run':46} {'state':8} {'ok':>3} {'kill':>4} {'err':>5} {'reqs':>7} "
-          f"{'gen tok':>10} {'tok/min':>8}")
+          f"{'gen tok':>10} {'tok/min':>8}  per-scope err/reqs")
     flagged = []
-    for name, state, summary, _scopes, created, _rid in sorted(rows):
+    for name, state, summary, scopes, created, _rid in sorted(rows):
         ok = total(summary, "success_total")
         killed = total(summary, "terminated_total")
-        errors = int(sum(v for k, v in summary.items()
-                         if re.match(r"inference/.+/upstream_errors$", str(k))
-                         and isinstance(v, (int, float))))
-        reqs = int(sum(v for k, v in summary.items()
-                       if re.match(r"inference/.+/requests$", str(k))
-                       and isinstance(v, (int, float))))
+        errors = int(sum(v.get("upstream_errors", 0) for v in scopes.values()))
+        reqs = int(sum(v.get("requests", 0) for v in scopes.values()))
         gen = int(sum(v for k, v in summary.items()
                       if re.match(r"inference/.+/output_tokens$", str(k))
                       and isinstance(v, (int, float))))
         minutes = max((now_utc() - parse_created(created)).total_seconds() / 60.0, 1.0)
-        print(f"{name:46} {state:8} {str(ok or 0):>3} {str(killed or 0):>4} "
-              f"{errors:>5} {reqs:>7} {gen:>10,} {gen / minutes:>8,.0f}")
+        # Per scope, because a clean search alongside a throttled finalization is
+        # a different situation from the reverse, and the totals hide which.
+        detail = "  ".join(
+            f"{scope}={int(v.get('upstream_errors', 0))}/{int(v.get('requests', 0))}"
+            for scope, v in sorted(scopes.items())) or "-"
+        print(f"{name:46} {state:8} {ok or 0!s:>3} {killed or 0!s:>4} "
+              f"{errors:>5} {reqs:>7} {gen:>10,} {gen / minutes:>8,.0f}  {detail}")
         if killed:
             flagged.append(f"{name}: {killed} evaluation(s) TERMINATED")
 
