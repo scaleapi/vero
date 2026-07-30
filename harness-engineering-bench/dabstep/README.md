@@ -74,10 +74,8 @@ optimizer can do better.
 
 ## Open before this is reported
 
-- **`baseline_reward` is unset and `score_baseline: true`.** Every run currently
-  pays an extra full held-out pass and the reward is not reproducible. Run
-  `../scripts/rescore_candidate.py --seed` three times, put the mean in
-  `baseline/build.yaml`, and set `score_baseline: false`.
+- **Re-pin if the seed changes.** The 0.596 above belongs to `agent.py` as it
+  stands. Any edit, including propagating fixes from the other seeds, invalidates it.
 - **First cold build.** `build_timeout_sec` is 600 while the build downloads from
   an external host, and `error_rate_threshold: 0.1` means a rate-limited host
   aborts the whole evaluation rather than one case. Watch the first build with 24
