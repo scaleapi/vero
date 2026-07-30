@@ -116,35 +116,36 @@ Derived from the split and the declared budgets, at `max_concurrency: 24`:
 
 ## The seed agent
 
-`baseline/target/`, `terminal_bench_agent.agent:TerminalBenchAgent`. A clean-room
-re-implementation of the **mini-SWE-agent** design (SWE-agent project, MIT) — not a
-copy of its source.
+`baseline/target/`, `terminal_bench_agent.agent:TerminalBenchAgent`. A shell loop:
+one command per turn via function calling, linear history, a step budget. Grading
+runs each task's own tests against the container's final state, so there is nothing
+to submit.
 
-Re-implementing rather than depending on the published package is required, not a
-preference: `agent_repo: target` is the tree the optimizer edits, so an installed
-dependency would leave it able to change a config and nothing else.
+It is written into the target repo rather than pulled in as a dependency because
+`agent_repo: target` is the tree the optimizer edits — an installed package would
+leave it able to change a config and nothing else.
 
-The design also fits this benchmark natively. A bash-only loop is the right shape
-here rather than a compromise, because tasks grade the container's final state and
-there is no answer file to write.
+**It uses function calling, and an earlier version did not.** The first draft
+followed mini-SWE-agent in parsing a fenced ```bash``` block out of a plain reply.
+That silently filtered the *target model* population: measured against a real task,
+`mistral/devstral-small-latest` and `anthropic/claude-haiku-4-5` both replied
+conversationally and emitted no block, because they are trained to call tools.
+Either would have scored near zero for protocol reasons rather than capability.
 
-**Deliberately spare**, since a frozen-model benchmark only measures something if
-editing the harness can move the score. Left in on purpose: unbounded linear
-history, one command per turn, a constant step budget unrelated to the task's real
-clock, fixed-size head-and-tail output truncation, regex-on-markdown command
-extraction, and no verification before finishing. Each is a plausible thing for an
-optimizer to find; none is a bug.
+Worse, it handed the optimizer a large gain for repairing a handicap the seed's
+author introduced, which measures nothing about harness engineering. After the
+switch all eight candidate models drive the loop, and the two that had failed open
+by inspecting the environment rather than guessing — better first moves than some
+that passed before.
 
-That also disposes of the scoping note's worry that Terminal-Bench has only medium
-headroom because "the public scaffold is already heavily tuned" — that is about
-adopting Terminus as the seed. We write our own, so the headroom is a choice.
-OfficeQA's +0.41 came from a seed with obvious room in it.
+**Keep design rationale out of `target/`.** The optimizer reads that tree, so
+notes about what is weak or improvable are hints, and turn the benchmark into an
+instruction-following test. Reasoning about the seed's limitations belongs here.
 
-It **fails closed on credentials**, following the fix made to the BrowseComp-Plus
-target: `OPENAI_*` inside the eval container can point at the unmetered upstream,
-so a fallback would bypass metering and the model allow-list while still appearing
-to work. 13 tests cover command extraction, truncation, the credential guard in
-both directions, and the run loop.
+It fails closed on credentials, following the BrowseComp-Plus fix: `OPENAI_*` in
+the eval container can point at the unmetered upstream, so a fallback would bypass
+metering and the allow-list while still appearing to work. 15 tests cover the tool
+schema, argument parsing, truncation, the credential guard, and the run loop.
 
 ### Verified
 
