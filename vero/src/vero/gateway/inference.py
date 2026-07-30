@@ -780,6 +780,10 @@ def create_inference_gateway_app(
     app.state.usage_store = store
     app.state.request_log = request_log
     app.state.request_attributor = attributor
+    # model -> parameters that model's provider has refused. Learned from the
+    # upstream's own 400 so there is no list to maintain or let go stale, and
+    # reset on restart, which costs one re-discovery per model.
+    app.state.refused_params: dict[str, frozenset[str]] = {}
 
     @app.get("/health")
     async def health():
@@ -943,14 +947,32 @@ def create_inference_gateway_app(
                 stream=True,
             )
 
+        # Apply what this model has already told us it refuses, so the discovery
+        # below costs one extra round-trip per (model, parameter) for the lifetime
+        # of the gateway rather than one per request. A tool-driving harness sends
+        # the parameter on nearly every call -- 52 of 66 in a conformance run --
+        # so retrying each one would double that traffic against the RPM limit for
+        # no new information.
+        refused = app.state.refused_params.get(model, frozenset())
+        if refused and isinstance(value, dict):
+            known = [name for name in refused if name in value]
+            if known:
+                for name in known:
+                    value.pop(name)
+                body = json.dumps(value).encode()
+                dropped_params.extend(known)
+
         try:
             upstream = await send(body)
-            # A provider that refuses a parameter fails the whole request before
-            # reaching the model, so nothing has been billed and nothing has been
+            # A provider that refuses a parameter fails the request before it
+            # reaches the model, so nothing has been billed and nothing has been
             # streamed downstream yet: dropping the blamed parameters and sending
             # once more is safe here and nowhere later. Only a request that has
             # already failed is touched, so providers that accept the parameter
-            # keep their exact semantics.
+            # keep their exact semantics -- and because the refusal is learned
+            # from the provider rather than configured, a model that later gains
+            # support simply stops being asked to give it up, with no stale list
+            # to notice and prune.
             if upstream.status_code == 400 and isinstance(value, dict):
                 failed_body = await upstream.aread()
                 blamed = [
@@ -963,6 +985,10 @@ def create_inference_gateway_app(
                     # Re-serialize so the request log records what we really sent.
                     body = json.dumps(value).encode()
                     dropped_params.extend(blamed)
+                    # Bounded by allowed_models across scopes, so this cannot grow
+                    # with traffic: an unlisted model is rejected before reaching
+                    # here.
+                    app.state.refused_params[model] = refused.union(blamed)
                     upstream = await send(body)
         except httpx.HTTPError:
             await asyncio.shield(

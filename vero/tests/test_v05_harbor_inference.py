@@ -1064,3 +1064,50 @@ def test_gateway_records_dropped_params_in_the_request_log(tmp_path):
     assert records[0]["dropped_params"] == ["tool_choice"]
     # A request nothing was dropped from must not carry a misleading empty list.
     assert records[1].get("dropped_params") is None
+
+
+def test_gateway_learns_a_refusal_once_instead_of_retrying_every_request(tmp_path):
+    """The discovery must cost one extra round-trip, not one per request.
+
+    A tool-driving harness sends `tool_choice` on nearly every call (52 of 66 in a
+    conformance run), so retrying each one would double that traffic against the
+    RPM limit to re-learn something the gateway already knows.
+    """
+    attempts = []
+
+    def upstream(request: httpx.Request):
+        payload = json.loads(request.content)
+        attempts.append("tool_choice" in payload)
+        if "tool_choice" in payload:
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "fireworks_ai does not support parameters: ['tool_choice'],"
+                        )
+                    }
+                },
+            )
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=20, max_tokens=10_000),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        for _ in range(5):
+            response = client.post(
+                "/scopes/producer/optimizer/v1/responses",
+                headers={"Authorization": "Bearer scoped-token"},
+                json={"model": "gpt-test", "tool_choice": "auto", "input": []},
+            )
+            assert response.status_code == 200
+
+    # Five client requests cost six upstream calls: the first pays a rejected
+    # attempt plus its retry, the remaining four are stripped up front and go
+    # straight through. Retrying per request would have cost ten.
+    assert attempts == [True, False, False, False, False, False], attempts
+    assert attempts.count(True) == 1, "the refusal must be discovered only once"
