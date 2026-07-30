@@ -1,0 +1,156 @@
+name: vero/optimize-terminal-bench-baseline
+description: >-
+  Improve a terminal agent on Terminal-Bench 2.1 while preserving the Harbor
+  agent interface. Each task gives the agent a container and a goal; the task's
+  own tests decide pass or fail, so the reward is a pass rate.
+
+# NOT YET RUNNABLE. The seed agent at `target/` does not exist and
+# `baseline_reward` has not been measured. See ../README.md for what remains and
+# in what order. Everything else here is settled and follows CONFIGURATION.md.
+
+agent_repo: target
+task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
+task_manifest: ../partitions/manifest.json
+agent_import_path: terminal_bench_agent.agent:TerminalBenchAgent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+# total_cases = 4 full passes per partition (dev 17*4, validation 36*4).
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 68
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 144
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # UNMEASURED. Pin from three baseline rounds before reporting anything, the
+    # way every other benchmark here was pinned (see runs/BASELINES.md). With 36
+    # held-out cases this set is our smallest, so expect a wider round-to-round
+    # spread than officeqa's 0.0330 at 99 cases -- gaia sits at 0.0524 with 66.
+    # If the measured spread is bad enough to swamp contestant differences, raise
+    # n_attempts below rather than moving cases out of development: Terminal-Bench
+    # is cheap per case (median declared budget 900s) so attempts are affordable
+    # here in a way they would not be on a long-horizon set.
+    # baseline_reward: TBD
+    failure_value: 0.0
+    max_attempts: 1
+    # Score the selected candidate 3x per case and average, so the reported
+    # reward carries the same standard error as a 3-round pinned baseline.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: terminal-bench
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 3
+rescore_attempts: 1
+
+# UNDECIDED. Terminal-Bench is hard -- 30 of 89 tasks are tagged `hard`, 55
+# `medium` -- so a weak target model risks a baseline pinned at or near zero,
+# which leaves nothing for the optimizer to improve and makes the cell useless.
+# swe-atlas-qna is the cautionary case at 0.0676. Probe two or three candidate
+# models on the development partition and pick one that scores clearly off the
+# floor before pinning anything.
+model: fireworks_ai/deepseek-v4-flash
+environment_name: ${inner_env:-modal}
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 4
+retry_max_wait_seconds: 120
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+
+# Unlike every other benchmark here, Terminal-Bench declares a DIFFERENT agent
+# timeout per task: 600s to 12,000s, 48 of 89 at 900s, 13 at 3600s. That is fine
+# and needs no special handling, because vero passes Harbor a single ratio
+# (`case_timeout_seconds / task_agent_timeout_seconds`) which Harbor applies to
+# each task's own declared budget. Keeping the pair equal therefore gives every
+# task exactly the clock its author intended. The absolute value is irrelevant as
+# long as the two match -- do not "fix" this by setting them to different numbers.
+case_timeout_seconds: 900
+task_agent_timeout_seconds: 900
+
+# Worst-case finalize wall: 36 test x 3 attempts = 108 case-runs, ceil(108/24) =
+# 5 waves, slowest test task declares 7200s -> 36,000s. Set above that so a
+# pathological run cannot lose a scored result to the job clock.
+timeout_seconds: 43200
+# Worst-case finalize (36,000) plus a rescore_top_k=3 validation pass, whose
+# widest single eval is ceil(36/24) = 2 waves x the slowest validation task
+# (12,000s) = 24,000s. A verifier timeout loses the score outright.
+verifier_timeout_seconds: 64800
+max_concurrency: 24
+error_rate_threshold: 0.1
+
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+harness_user: harness
+agent_env:
+  # Above this benchmark's widest single search eval: a full validation pass is
+  # ceil(36/24) = 2 waves x 12,000s = 24,000s worst case. The optimizer must be
+  # able to block on one evaluation in a single foreground call -- a headless run
+  # that backgrounds a long call is never re-woken and the search dies there.
+  BASH_MAX_TIMEOUT_MS: "28800000"
+  BASH_DEFAULT_TIMEOUT_MS: "28800000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+wandb:
+  project: harness-engineering-bench  # one project for the whole suite
+  group: terminal-bench
+  name: ${wandb_run:-terminal-bench}
+  tags: [terminal-bench]
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    max_concurrency: 8
+  # The case budget is the spend control; these caps only stop a runaway. Sized
+  # per CONFIGURATION.md at the same per-case-run rate as the other benchmarks:
+  # 212 agent case-runs here (68 dev + 144 validation).
+  evaluation:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 1200000000
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  finalization:
+    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    max_requests: 200000
+    max_tokens: 700000000  # 36 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
