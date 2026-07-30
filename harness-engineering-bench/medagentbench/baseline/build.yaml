@@ -71,7 +71,12 @@ environment_name: ${inner_env:-modal}
 extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-max_retries: 1
+# Four retries with a 120s ceiling, the suite convention since a single retry
+# could not survive a provider rate-limit storm: seven rejections over ten
+# minutes destroyed a 37-case evaluation. This benchmark's target is the model
+# currently throwing ~30% 429s, so this is load-bearing here.
+max_retries: 4
+retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
 infrastructure_retry_delay_seconds: 5
 aggregate_attempts: best
