@@ -7,7 +7,12 @@
 #   outdir        path under runs/, e.g. officeqa/gpt-5.6-sol-codex-r2
 #   config        build.yaml, relative to the vero/ package dir
 #   envfile       credential file in vero/, e.g. heb.secrets.env (gitignored)
-#   environment   outer harbor environment, normally `modal`
+#   environment   outer harbor environment. Use `docker` if the upstream endpoint
+#                 is only reachable from your own network: the gateway runs
+#                 wherever the optimizer runs, so on `modal` it cannot resolve an
+#                 internal-only host and the optimizer's first request comes back
+#                 502 `upstream inference request failed` after ~3 minutes. Inner
+#                 evals stay on modal either way (`${inner_env:-modal}`).
 #   agent         optimizer harness: claude-code | opencode | codex | kimi-cli
 #   launch-model  the form the HARNESS wants (see CONFIGURATION.md routing table):
 #                   claude-code  bare          claude-opus-5
