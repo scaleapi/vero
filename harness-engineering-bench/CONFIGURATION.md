@@ -172,7 +172,7 @@ benchmark can be checked against the others at a glance.
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | swe-bench-pro | dabstep | medagentbench |
 |---|---|---|---|---|---| --- |---|---|
 | target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash | gpt-4o ◈ | deepseek-v4-flash | deepseek-v4-flash |
-| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.294 ±0.008 ◈ | unpinned ✦ | unpinned ✦ |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.294 ±0.008 ◈ | 0.596 ±0.026 | unpinned ✦ |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 146/292/293 ◈ | 33/66/66 | 30/60/60 |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 146 ◈ | 100 / 132 | 100 / 120 |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 292 ◈ | 100 / 264 | 100 / 240 |
@@ -187,7 +187,7 @@ benchmark can be checked against the others at a glance.
 | BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s | n/a | 7200 s | 7200 s |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness | harness | harness |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false | false | false |
-| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | registry dataset; `expose_case_resources: false`; sampled variant ◈ | registry dataset; difficulty-quota split | registry dataset; `--no-force-build`; mutable `:latest` image ✧ |
+| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | registry dataset; `expose_case_resources: false`; sampled variant ◈ | registry dataset; proportional 16/84 mix | registry dataset; `--no-force-build`; mutable `:latest` image ✧ |
 
 ## Choosing an optimizer harness
 
@@ -343,27 +343,23 @@ agent's reason/search-only-turn crash was fixed.
 
 **gaia and tau3 are too noisy for single-run comparisons.** gaia's own three rounds spanned 0.554-0.682 (sd 0.052), and tau3's optimizer scored one *unchanged* harness at 0.800 and 0.547 on development -- its user-simulator and NL-assertion grader are both LLMs, so their variance rides on every eval. Treat a gaia or tau3 delta under ~0.1 as unresolved. Their splits are not the problem: domain mix matches to the percentage point across all three partitions (airline 13%, banking 26%, retail 30%, telecom 31%), as does telecom persona difficulty.
 
-✦ dabstep and medagentbench are candidate tau3 replacements (see
-`tau3-replacement-analysis.md`) and are **not reportable yet**: both ship with
+✦ medagentbench is a candidate tau3 replacement (see
+`tau3-replacement-analysis.md`) and is **not reportable yet**: it ships with
 `score_baseline: true` and no `baseline_reward`, so every run re-measures the seed
-on the held-out set and the reward is not reproducible. Pin each at K=3 with
-`scripts/rescore_candidate.py --seed` and flip the flag before quoting a number.
-Both are subsampled and stratified, and both hold the finalize wall at 8-9 waves.
-medagentbench takes 15 of each of its ten task categories, which is also
-proportional since the categories are uniform 30 apiece upstream; the mix matters
-because retrieval and action scores diverge sharply and the ordering inverts by
-model.
+and the reward is not reproducible. Pin it at K=3 with
+`scripts/rescore_candidate.py --seed` and flip the flag first. Its split takes 15 of
+each of the ten task categories, which is also proportional since the categories are
+uniform 30 apiece upstream; the mix matters because retrieval and action scores
+diverge sharply and the ordering inverts by model.
 
-dabstep ships **two configs**, like swe-bench-pro. The canonical
-`baseline/build.yaml` keeps the dataset's own 16/84 difficulty ratio, which puts
-about 5 easy tasks in a 33-case development partition and should seed near 0.12.
-`baseline/build.reweighted.yaml` uses the same 165 cases at 44/56 (every easy task
-plus 93 hard), roughly doubling the seed. Proportional is canonical because every
-other subsample in the suite preserves its population, so reporting the reweighted
-mix means stating that we chose the difficulty; the agreed order is to probe the
-canonical mix with the strongest optimizer first and reweight only if it shows no
-headroom. The two test partitions share only 9 of 66 cases, so each mix needs its
-own pin.
+dabstep is pinned and reportable. Its split keeps the dataset's own 16/84 difficulty
+ratio, matching how every other subsample in the suite preserves its population
+(swe-bench-pro's sample is proportional by repository, browsecomp-plus is a plain
+seeded shuffle). A difficulty-reweighted 44/56 variant was built and then dropped:
+the concern it addressed was that the proportional mix would seed near the floor,
+and the measured seed is 0.596, so there was nothing to fix. The seed's own
+run-to-run spread on this benchmark is ~0.05 (rounds 0.621 / 0.561 / 0.606), which
+is worth knowing before reading much into any single-round delta.
 
 ✧ medagentbench's 300 tasks all set
 `docker_image = "docker.io/alienkevin/medagentbench-harbor:latest"`, a mutable tag

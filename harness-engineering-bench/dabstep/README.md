@@ -19,48 +19,48 @@ no network at run time.
 
 ## Split
 
-165 of the 450 tasks as 33 / 66 / 66, in **two difficulty mixes**. 165 matches
+165 of the 450 tasks as 33 / 66 / 66, keeping the dataset's own 16/84 difficulty
+ratio (dev 5 easy / 28 hard, val 10 / 56, test 11 / 55). 165 matches gaia and
 browsecomp-plus and holds the finalize wall at 9 waves, `ceil(66 x 3 / 24)`; a
 20/40/40 over all 450 would cost 23.
 
-| | mix | dev | val | test | config |
-|---|---|---|---|---|---|
-| `partitions/` | 16/84, the dataset's own ratio | 5 easy / 28 hard | 10 / 56 | 11 / 55 | `baseline/build.yaml` |
-| `partitions/reweighted/` | 44/56 | 14 / 19 | 29 / 37 | 29 / 37 | `baseline/build.reweighted.yaml` |
+Proportional, like every other subsample in the suite: swe-bench-pro's sample is
+proportional by repository and browsecomp-plus is a plain seeded shuffle.
 
-The dataset is 72 easy and 378 hard, and the two are far apart: o4-mini scores
-76.4% on easy against 14.55% on hard, with the next best model at 13.76% on hard.
-So the proportional mix puts about **5 easy tasks in a 33-case development
-partition** and should seed near 0.12, which may be too thin a signal for the
-optimizer to climb. The reweighted mix takes every easy task plus 93 hard and
-roughly doubles the seed. 44% is the ceiling at this size because only 72 easy
-tasks exist; a clean 50/50 would mean 144 cases and drop held-out from 66 to 58.
+A difficulty-reweighted 44/56 variant was built and dropped. The worry it addressed
+was that the natural mix would seed near the floor, since the dataset is 84% hard
+and published frontier scores on hard are around 14.5%. Measurement disagreed: the
+seed reads 0.596 on held-out and 0.636 on development, so there was nothing to fix,
+and reweighting would have meant being the only benchmark that chooses its own
+difficulty. `git log` has it if the question returns.
 
-**Proportional is canonical** because every other subsample in the suite preserves
-its population: swe-bench-pro's sample is proportional by repository and
-browsecomp-plus is a plain seeded shuffle. Reporting from the reweighted mix means
-stating in the paper that we chose the difficulty, so it stays a variant until a
-probe shows the canonical mix has no headroom. That ordering is Varun's call from
-the 2026-07-29 thread: run the strongest optimizer (opus + claude-code) against
-the proportional mix first and reweight only if it finds nothing.
-
-Both mixes record their quota as `mix` and `difficulty_quotas` in their manifest,
-and both are deterministic. Regenerate or verify:
+Regenerate or verify:
 
 ```bash
 cd harness-engineering-bench/dabstep
 uvx --from 'harbor[modal]==0.20.0' python scripts/partition_dabstep.py \
   --tasks-dir <local export of the dataset> --check
-uvx --from 'harbor[modal]==0.20.0' python scripts/partition_dabstep.py \
-  --tasks-dir <local export of the dataset> --mix reweighted --check
 ```
 
 The export is only needed for the `difficulty` tag; canonical names and refs come
-from the registry. `scripts/partition_dabstep.py` explains why this is not an
-entry in `../scripts/partition_dataset.py`.
+from the registry. `scripts/partition_dabstep.py` explains why this is not an entry
+in `../scripts/partition_dataset.py`, and still carries the reweighted quota behind
+`--mix` if it is ever wanted.
 
-The two test partitions overlap in only 9 of 66 cases, so a baseline pinned on one
-mix says nothing about the other. Each needs its own K=3 pin.
+## Baseline
+
+**0.596 ±0.026** on the 66-case held-out partition: pooled mean over K=3 rounds
+(0.621 / 0.561 / 0.606), 198 trials, zero exceptions, measured 2026-07-30 with
+`../scripts/rescore_candidate.py --seed`.
+
+Two things worth carrying forward. The seed's run-to-run spread is about 0.05, so
+treat any single-round delta under that as unresolved. And the pin belongs to the
+seed as of the turn-cap-40 commit: change `agent.py` at all and it has to be redone.
+
+The seed turn cap is 40, not the 24 inherited from officeqa. At 24 the seed
+truncated 18 of 33 development cases and force-answered 17; measured 9.1s per turn
+against the declared 1800s clock, so 24 was leaving the optimizer a large
+one-integer win. 40 matches swe-atlas-qna and brings truncation to 3 of 33.
 
 ## Scoring
 

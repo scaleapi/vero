@@ -36,11 +36,12 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # UNPINNED. score_baseline below is true only until a K=3 held-out pin exists.
-    # Run `scripts/rescore_candidate.py --seed` three times, put the mean here,
-    # and set score_baseline: false. Leaving it as-is costs one extra full
-    # held-out pass per run and makes the reward irreproducible, which is exactly
-    # what swe-bench-pro shipped with; do not report a number measured this way.
+    # Pooled mean over K=3 independent rounds of the 66-case held-out partition,
+    # 2026-07-30: 0.621 / 0.561 / 0.606, sd 0.0258 across round means, 198 trials,
+    # zero exceptions. Measured with scripts/rescore_candidate.py --seed, the same
+    # path that produced every other pinned baseline. Re-pin if the seed agent
+    # changes at all: this number belongs to the seed as of the turn-cap-40 commit.
+    baseline_reward: 0.5960
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
@@ -55,7 +56,7 @@ objective:
   direction: maximize
 reward_mode: submit
 baseline_floor: false
-score_baseline: true  # see the note on baseline_reward above; flip to false once pinned
+score_baseline: false  # pinned above, so runs do not re-measure the seed
 rescore_top_k: 3
 rescore_attempts: 1
 
