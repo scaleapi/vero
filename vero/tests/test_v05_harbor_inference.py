@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
 import httpx
 from fastapi.testclient import TestClient
@@ -773,3 +774,54 @@ def test_budget_exhaustion_status_is_not_retryable():
     assert budget_exhausted_status not in EvaluationLimits().retry.retry_status_codes
     # The transient ones stay retryable.
     assert 429 in EvaluationLimits().retry.retry_status_codes
+
+
+def test_gateway_warns_once_when_a_request_delegates_its_conversation(tmp_path, caplog):
+    """A conversation delegated to the server must be visible, not invisible.
+
+    The swe-bench-pro seed agent scored 0.0000 on all 66 sampled cases because it
+    passed ``previous_response_id`` to an upstream with no response store: the
+    field was accepted, dropped, and from turn two the model saw a tool result
+    with no task attached. Nothing errored anywhere. We cannot reject the field
+    (a gateway fronting real OpenAI honours it) so proxying is untouched, but the
+    warning puts the diagnosis one grep away instead of costing a day.
+    """
+    observed = []
+
+    def upstream(request: httpx.Request):
+        observed.append(request)
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    app = create_inference_gateway_app(
+        config=_config(tmp_path, max_requests=5, max_tokens=None),
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with caplog.at_level(logging.WARNING, logger="vero.gateway.inference"):
+        with TestClient(app) as client:
+            headers = {"Authorization": "Bearer scoped-token"}
+            # SDKs serialise the key as null when unused: that must stay quiet.
+            quiet = client.post(
+                "/scopes/producer/optimizer/v1/responses",
+                headers=headers,
+                json={"model": "gpt-test", "input": "hi", "previous_response_id": None},
+            )
+            assert not [r for r in caplog.records if "previous_response_id" in r.message]
+            first = client.post(
+                "/scopes/producer/optimizer/v1/responses",
+                headers=headers,
+                json={"model": "gpt-test", "input": [], "previous_response_id": "resp_1"},
+            )
+            second = client.post(
+                "/scopes/producer/optimizer/v1/responses",
+                headers=headers,
+                json={"model": "gpt-test", "input": [], "previous_response_id": "resp_2"},
+            )
+
+    # Proxying is untouched: every call still reached the provider.
+    assert [quiet.status_code, first.status_code, second.status_code] == [200, 200, 200]
+    assert len(observed) == 3
+    warnings = [r for r in caplog.records if "previous_response_id" in r.message]
+    assert len(warnings) == 1, "warn once per process, not once per request"
+    assert "no response store" in warnings[0].message

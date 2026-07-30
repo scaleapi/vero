@@ -60,7 +60,7 @@ MAX_HISTORY_CHARS = 300_000
 REPO_DIR = "/app"
 
 # Retry policy for the Responses API. The GAIA baseline scored 0.0 in the first
-# VeRO run because a single transient error on ``responses.create`` crashed the
+# VeRO run because a single transient error on the create call crashed the
 # whole rollout; the optimizer's winning fix was exactly this retry-with-backoff.
 # It ships here from the start so the baseline is robust before optimization.
 MAX_API_RETRIES = 6
@@ -93,7 +93,7 @@ Rules:
 When you are confident the change is correct and the tests you can see pass, call
 submit. Do not merely describe what you would do."""
 
-TOOLS: list[dict[str, Any]] = [
+_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "name": "run_shell",
@@ -215,6 +215,16 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Chat Completions nests the schema under a "function" key; the Responses API puts
+# it at the top level. Same schemas either way, so wrap rather than restate them.
+TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {key: value for key, value in schema.items() if key != "type"},
+    }
+    for schema in _TOOL_SCHEMAS
+]
+
 
 class SweBenchProAgent(BaseAgent):
     """Code-editing agent whose source is the editable optimization target."""
@@ -250,8 +260,8 @@ class SweBenchProAgent(BaseAgent):
                 result.stderr or f"task repository is missing at {REPO_DIR}"
             )
 
-    async def _responses_create(self, **request: Any) -> Any:
-        """Call the Responses API with retry-and-backoff on transient errors.
+    async def _completion_create(self, **request: Any) -> Any:
+        """Call Chat Completions with retry-and-backoff on transient errors.
 
         This is the load-bearing robustness fix: an unguarded ``create`` call is
         what made the first GAIA baseline score 0.0. Any exception is retried with
@@ -261,7 +271,7 @@ class SweBenchProAgent(BaseAgent):
         last_error: Exception | None = None
         for attempt in range(1, MAX_API_RETRIES + 1):
             try:
-                return await self._client.responses.create(**request)
+                return await self._client.chat.completions.create(**request)
             except Exception as error:  # noqa: BLE001 - transient classes vary by SDK
                 last_error = error
                 if attempt == MAX_API_RETRIES:
@@ -273,7 +283,7 @@ class SweBenchProAgent(BaseAgent):
                 delay += random.uniform(0, delay / 2)
                 self._trace(
                     {
-                        "event": "responses_retry",
+                        "event": "completion_retry",
                         "attempt": attempt,
                         "delay": round(delay, 2),
                         "error": repr(error),
@@ -302,8 +312,9 @@ class SweBenchProAgent(BaseAgent):
     def _trim_history(self, blocks: list[list[dict[str, Any]]]) -> int:
         """Drop whole oldest turns until the transcript fits the budget.
 
-        Whole turns, never individual items: a ``function_call`` sent without its
-        matching ``function_call_output`` is a hard 400 from the Responses API.
+        Whole turns, never individual items: a ``tool`` message whose
+        ``tool_call_id`` is not declared by the assistant message before it is a
+        hard 400, and so is an assistant ``tool_calls`` left without its results.
         """
         dropped = 0
         while len(blocks) > 1 and self._history_size(blocks) > MAX_HISTORY_CHARS:
@@ -476,51 +487,57 @@ class SweBenchProAgent(BaseAgent):
         input_tokens = 0
         output_tokens = 0
         cached_tokens = 0
-        # The conversation is held HERE, not on the provider. An earlier version
-        # sent only the newest tool result and passed ``previous_response_id`` to
-        # let the server reconstruct the rest. That silently loses everything on
-        # any OpenAI-compatible gateway that accepts the field without backing it
-        # with a response store: from turn 2 the model saw a bare tool result with
-        # no task attached, so it re-explored the repository until the turn budget
-        # ran out. Measured on the 66-case sample with deepseek-v4-flash: 66/66
-        # exhausted all 50 turns, 3163 of 3300 tool calls were ls/find/git/cat, and
-        # write_file, apply_patch and submit were called zero times, for a reward
-        # of 0.0000 on every case.
+        # The conversation is held HERE, not on the provider, and Chat Completions
+        # is stateless by construction so there is no way to delegate it even by
+        # accident. An earlier version used the Responses API and passed
+        # ``previous_response_id`` to let the server reconstruct the history. Any
+        # OpenAI-compatible gateway that accepts that field without backing it with
+        # a response store silently loses everything: from turn 2 the model saw a
+        # bare tool result with no task attached, so it re-explored the repository
+        # until the turn budget ran out. Measured on the 66-case sample with
+        # deepseek-v4-flash: 66/66 exhausted all 50 turns, 3163 of 3300 tool calls
+        # were ls/find/git/cat, write_file/apply_patch/submit were called zero
+        # times, and every case scored 0.0000. Chat Completions has no such field.
+        system_item: dict[str, Any] = {"role": "system", "content": INSTRUCTIONS}
         task_item: dict[str, Any] = {"role": "user", "content": instruction}
         blocks: list[list[dict[str, Any]]] = []
 
         for turn in range(1, MAX_TURNS + 1):
-            conversation: list[Any] = [task_item]
+            conversation: list[Any] = [system_item, task_item]
             for block in blocks:
                 conversation.extend(block)
             request: dict[str, Any] = {
                 "model": self._api_model,
-                "instructions": INSTRUCTIONS,
-                "input": conversation,
+                "messages": conversation,
                 "tools": TOOLS,
-                "max_output_tokens": 12_000,
+                "max_tokens": 12_000,
                 "parallel_tool_calls": False,
             }
-            # Only reasoning models accept `reasoning`; sending it to gpt-4o or
-            # gpt-4.1 is a hard 400 on the very first turn.
+            # Only reasoning models accept `reasoning_effort`; sending it to gpt-4o
+            # or gpt-4.1 is a hard 400 on the very first turn.
             if _is_reasoning_model(self._api_model):
-                request["reasoning"] = {"effort": "high"}
-            response = await self._responses_create(**request)
+                request["reasoning_effort"] = "high"
+            response = await self._completion_create(**request)
             usage = response.usage
-            input_tokens += self._usage_value(usage, "input_tokens")
-            output_tokens += self._usage_value(usage, "output_tokens")
+            input_tokens += self._usage_value(usage, "prompt_tokens")
+            output_tokens += self._usage_value(usage, "completion_tokens")
             cached_tokens += self._usage_value(
-                getattr(usage, "input_tokens_details", None), "cached_tokens"
+                getattr(usage, "prompt_tokens_details", None), "cached_tokens"
             )
 
-            calls = [item for item in response.output if item.type == "function_call"]
+            message = response.choices[0].message
+            calls = list(message.tool_calls or [])
+            content = message.content or ""
             self._trace(
                 {
                     "turn": turn,
                     "response_id": response.id,
-                    "output_text": response.output_text,
+                    "output_text": content,
                     "function_calls": [
-                        {"name": call.name, "arguments": call.arguments}
+                        {
+                            "name": call.function.name,
+                            "arguments": call.function.arguments,
+                        }
                         for call in calls
                     ],
                 }
@@ -531,62 +548,69 @@ class SweBenchProAgent(BaseAgent):
                 context.metadata = {"turns": turn, "trace": "swe-bench-pro-trace.jsonl"}
                 break
 
-            turn_items: list[dict[str, Any]] = []
-            if response.output_text:
-                turn_items.append(
-                    {"role": "assistant", "content": response.output_text}
-                )
+            # One assistant message carries the turn's text AND its tool calls.
+            # Chat Completions rejects a `tool` message whose tool_call_id is not
+            # declared by the immediately preceding assistant message, so the two
+            # cannot be split the way Responses-API items could be.
+            turn_items: list[dict[str, Any]] = [
+                {
+                    "role": "assistant",
+                    "content": content or None,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for call in calls
+                    ],
+                }
+            ]
             submitted = False
             for call in calls:
-                # Echo the call itself before its output: the API matches the two
-                # by call_id, and an orphaned output is rejected.
-                turn_items.append(
-                    {
-                        "type": "function_call",
-                        "call_id": call.call_id,
-                        "name": call.name,
-                        "arguments": call.arguments,
-                    }
-                )
+                name = call.function.name
                 try:
-                    arguments = json.loads(call.arguments or "{}")
+                    arguments = json.loads(call.function.arguments or "{}")
                 except json.JSONDecodeError as error:
                     result: dict[str, Any] = {"error": f"invalid arguments: {error}"}
                 else:
-                    if call.name == "run_shell":
+                    if name == "run_shell":
                         result = await self._run_shell(
                             environment, arguments["command"]
                         )
-                    elif call.name == "read_file":
+                    elif name == "read_file":
                         result = await self._read_file(
                             environment,
                             arguments["path"],
                             arguments.get("start_line"),
                             arguments.get("end_line"),
                         )
-                    elif call.name == "write_file":
+                    elif name == "write_file":
                         result = await self._write_file(
                             environment, arguments["path"], arguments["content"]
                         )
-                    elif call.name == "apply_patch":
+                    elif name == "apply_patch":
                         result = await self._apply_patch(
                             environment, arguments["patch"]
                         )
-                    elif call.name == "run_tests":
+                    elif name == "run_tests":
                         result = await self._run_tests(
                             environment, arguments.get("command")
                         )
-                    elif call.name == "submit":
+                    elif name == "submit":
                         result = {"submitted": True}
                         submitted = True
                     else:
-                        result = {"error": f"unknown tool: {call.name}"}
-                self._trace({"turn": turn, "tool": call.name, "result": result})
+                        result = {"error": f"unknown tool: {name}"}
+                self._trace({"turn": turn, "tool": name, "result": result})
                 turn_items.append(
                     {
-                        "type": "function_call_output",
-                        "call_id": call.call_id,
-                        "output": json.dumps(result, ensure_ascii=False),
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
                 if submitted:
