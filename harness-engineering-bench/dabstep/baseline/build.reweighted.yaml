@@ -116,7 +116,8 @@ harness_user: harness
 
 agent_env:
   # Above this benchmark's widest single blocking eval: a full validation pass is
-  # ceil(66/24) x 1800 = 5400s worst case.
+  # ceil(66/24) x 1800 = 5400s worst case. Measured mean case wall is ~170s, so
+  # this is ~10x the realistic figure; the convention sizes it against the cap.
   BASH_MAX_TIMEOUT_MS: "7200000"
   BASH_DEFAULT_TIMEOUT_MS: "7200000"
   ENABLE_BACKGROUND_TASKS: "0"

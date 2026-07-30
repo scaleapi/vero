@@ -39,7 +39,20 @@ def _is_reasoning_model(model: str) -> bool:
     return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
 
 
-MAX_TURNS = 24
+# Measured on the 33-case development partition, 2026-07-30: 9.1s per turn, so the
+# 1800s case clock this dataset declares would allow roughly 197 turns. 24 (copied
+# from officeqa, whose own value came from gaia's 600s clock, three times shorter
+# than ours) truncated 18 of 33 cases and forced a best-effort answer on 17 of
+# them. 40 matches swe-atlas-qna, brings the median case under the cap, and costs
+# 2-3x tokens rather than the ~50x that filling the clock would: history is resent
+# every turn, and the seed already spends a median 419k input tokens per case.
+#
+# Deliberately not sized so the clock binds. On this benchmark the binding budget
+# is tokens, not wall time, and reward does not price tokens (CONFIGURATION.md:
+# accuracy is the only input to selection). Leaving the cap where the seed is
+# truncated on half its cases would hand the optimizer a large one-integer win that
+# generalises to nothing.
+MAX_TURNS = 40
 MAX_TOOL_OUTPUT_CHARS = 20_000
 SHELL_TIMEOUT_SEC = 120
 
