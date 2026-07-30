@@ -102,15 +102,24 @@ inference_gateway:
   evaluation:
     allowed_models: [gpt-4o]
     max_requests: 200000
-    max_tokens: 1000000000  # 438 agent case-runs (146 dev + 292 validation)
+    # Sized by the suite convention in harness-engineering-bench/CONFIGURATION.md:
+    # ~5M tokens per case-run, which is 3.3-5.1x the worst MEASURED cost of an
+    # *optimized* candidate, itself ~3x its own baseline, because more turns and
+    # bigger contexts are exactly what the optimizer buys. Sizing off a baseline
+    # measurement instead (swe-bench-pro's seed costs ~1.5M/case-run) under-funds
+    # the run by ~3x. Siblings: gaia and officeqa 5.1M, tau3 4.4M per case-run.
+    # ~90% of these are cache reads, which count at full weight against max_tokens.
+    max_tokens: 2500000000  # 438 agent case-runs (146 dev + 292 validation)
     max_concurrency: 64
-  # Reserved so a search-phase overspend can never starve held-out scoring.
-  # Absent, this block defaults to a COPY of `evaluation`, which is how the
-  # 2026-07-29 grid ran its held-out pass on a budget sized for nothing at all.
+  # Declared explicitly, as every sibling now does. Left unset it inherits
+  # `evaluation`'s LIMITS as a separate pool of the same size (the compiler mints
+  # a finalization token unconditionally and the gateway keys each ledger by scope
+  # name), so the risk is not search stealing it: the risk is a held-out pass
+  # funded at search-sized numbers. That is exactly what happened on 2026-07-29.
   finalization:
     allowed_models: [gpt-4o]
     max_requests: 200000
-    max_tokens: 2000000000  # 293 test cases x3 attempts + rescore headroom
+    max_tokens: 4500000000  # 293 test cases x3 attempts + rescore headroom
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true

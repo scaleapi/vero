@@ -148,14 +148,20 @@ inference_gateway:
     # Prefixed form only: the agents strip just `openai/` before calling the
     # gateway, which then matches this allow-list as an exact string.
     allowed_models: [fireworks_ai/deepseek-v4-flash]
-    # Sized from a MEASURED ~1.5M tokens and 55-102 requests per case-run on
-    # 2026-07-29. swe-bench-pro is the most expensive benchmark in this suite,
-    # because every case-run builds a real repository and executes its test
-    # suite, yet it was the only one of the six carrying a bare 100000000 with
-    # no arithmetic behind it (gaia/browsecomp-plus/swe-atlas-qna 2e9, officeqa
-    # 3e9, tau3 4e9, each with its case-run count in the comment).
+    # swe-bench-pro is the most expensive benchmark in this suite, because every
+    # case-run builds a real repository and executes its test suite, yet it was
+    # the only one of the six carrying a bare 100000000 with no arithmetic behind
+    # it. Its seed measures ~1.5M tokens/case-run; the convention below is why
+    # that measurement is NOT the number to size from.
+    # Sized by the suite convention in harness-engineering-bench/CONFIGURATION.md:
+    # ~5M tokens per case-run, which is 3.3-5.1x the worst MEASURED cost of an
+    # *optimized* candidate, itself ~3x its own baseline, because more turns and
+    # bigger contexts are exactly what the optimizer buys. Sizing off a baseline
+    # measurement instead (swe-bench-pro's seed costs ~1.5M/case-run) under-funds
+    # the run by ~3x. Siblings: gaia and officeqa 5.1M, tau3 4.4M per case-run.
+    # ~90% of these are cache reads, which count at full weight against max_tokens.
     max_requests: 200000
-    max_tokens: 1000000000  # 396 agent case-runs (132 dev + 264 validation)
+    max_tokens: 2000000000  # 396 agent case-runs (132 dev + 264 validation)
     max_concurrency: 64
   # Reserved so a search-phase overspend can never starve held-out scoring.
   # Absent, this block defaults to a COPY of `evaluation`. At 100000000 that
@@ -166,7 +172,7 @@ inference_gateway:
   finalization:
     allowed_models: [fireworks_ai/deepseek-v4-flash]
     max_requests: 200000
-    max_tokens: 500000000  # 66 test cases x3 attempts + rescore headroom
+    max_tokens: 1000000000  # 66 test cases x3 attempts + rescore headroom
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
