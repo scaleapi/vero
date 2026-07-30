@@ -21,10 +21,11 @@ exact failures and target-agent logs—under
 `.evals/results/`. Neither validation nor test resources are mounted.
 
 The pinned GAIA tasks declare a 600-second Harbor agent timeout. The build
-config sets `case_timeout_seconds: 180` and
-`task_agent_timeout_seconds: 600`, so VeRO invokes Harbor with an agent-timeout
-multiplier of `0.3`. The 180-second limit reported to the optimizer is therefore
-the timeout enforced by the inner Harbor trial.
+config sets both `case_timeout_seconds` and `task_agent_timeout_seconds` to that
+same 600, so VeRO's derived agent-timeout multiplier is `1.0` and the target
+agent gets exactly the clock the dataset intends. (This was 180/600 with a `0.3`
+multiplier until 2026-07-28, when timeouts were taken from each dataset's own
+declaration rather than chosen by us.)
 
 To verify or regenerate the split after downloading the pinned Harbor dataset:
 
