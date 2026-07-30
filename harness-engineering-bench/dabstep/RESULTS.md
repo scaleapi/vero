@@ -74,29 +74,29 @@ partitions.
 +1 022 lines across 5 commits: `dabstep_lib.py` (535), `agent.py` (+332),
 `tests/test_agent.py` (+174).
 
-**57433be — fee engine + playbook.** Diagnosed all 15 seed failures as fee-rule
+**57433be, fee engine + playbook.** Diagnosed all 15 seed failures as fee-rule
 questions with two undocumented semantics: a null rule field is a wildcard, and a
 transaction is charged the sum of every rule it matches. Seed returned 78.55 for
-148.61, 385.79 for 642.39, 329.88 for 1120.77 — all the same missing summation.
+148.61, 385.79 for 642.39, 329.88 for 1120.77, all the same missing summation.
 Wrote a 26-function rule engine, uploaded at `setup()`. Validated offline against
 all 33 development answers, 28 exact checks. Upload failure degrades to the plain
 playbook instead of burning turns on ImportError. Memoised rule matching on
 (merchant, month): one pass over a merchant's year went 22s to 0.6s.
 
-**872a3f6 — eager load, mean-not-max.** Its own library loaded lazily, so a trial
+**872a3f6, eager load and mean-not-max.** Its own library loaded lazily, so a trial
 reading `L.merchant_category_codes` before any call got an empty dict and spent 15
 of 24 turns introspecting. Also fixed an MCC ranking graded on mean, not max.
 
-**f6abf08 — one-directional narrowing.** A trial "talked itself out of it at turn
+**f6abf08, one-directional narrowing.** A trial "talked itself out of it at turn
 37" on rule-narrowing questions. Added `narrowed_out_merchants()` so there is a
 helper to call rather than a judgement to make, and recorded why `patch=` cannot
 express it.
 
-**0bb8ee4 — corrected its own docs.** Had listed one country set for all three
+**0bb8ee4, corrected its own docs.** Had listed one country set for all three
 country columns; `acquirer_country` differs from `ip_country`, which is why
 intracountry holds for 17.84% of rows.
 
-**60aeb15 — template gaps.** Cases the 33 dev tasks do not exercise, including
+**60aeb15, template gaps.** Cases the 33 dev tasks do not exercise, including
 that 25 of 30 merchants have no transactions.
 
 Notable: it never touched `MAX_TURNS`. Every change was structural, each driven by
