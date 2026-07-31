@@ -162,7 +162,14 @@ inference_gateway:
   finalization:
     allowed_models: [xai/grok-build-0.1]
     max_requests: 200000
-    max_tokens: 700000000  # 36 test cases x3 attempts + rescore headroom
+    # 216 case-runs (36 test x3 attempts, plus rescore_top_k=3 over 36 validation)
+    # at the suite's per-case-run rate of ~5.05M, which officeqa and
+    # browsecomp-plus both use. Was 700M, i.e. 3.24M per case-run -- 36% tighter
+    # than the rest of the suite for no stated reason. Erring low here is the
+    # expensive direction: an exhausted finalization budget surfaces as an
+    # upstream 429 and silently starves held-out scoring, which is exactly how
+    # officeqa lost a re-score. The case budget is the real spend control.
+    max_tokens: 1100000000
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
