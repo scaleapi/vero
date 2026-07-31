@@ -32,6 +32,22 @@ class BenchmarkSpec:
     export_dir_name: str
     stratified_by: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        # Every dataset here is pinned by content digest, never by a registry
+        # version. A hub dataset can be *fetched* by version -- terminal-bench 2.1
+        # answers to `@6` -- but a version is a mutable pointer, so pinning one
+        # would let the task set change underneath a published result. Reject
+        # anything that is not a full sha256 rather than accept a placeholder that
+        # silently produces a malformed reference.
+        if len(self.dataset_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in self.dataset_digest
+        ):
+            raise ValueError(
+                f"{self.dataset_name} dataset_digest must be a lowercase "
+                f"64-character sha256, got {self.dataset_digest!r}. Resolve it with "
+                "--fetch-registry, which reports the digest the registry serves."
+            )
+
     @property
     def task_source(self) -> str:
         return f"{self.dataset_name}@sha256:{self.dataset_digest}"
@@ -59,6 +75,38 @@ SPECS = {
         target_counts={"development": 75, "validation": 150, "test": 150},
         export_dir_name="tau3-bench",
         stratified_by=("domain",),
+    ),
+    # Terminal-Bench 2.1: the whole 89-task set, unfiltered. Filtering to a
+    # SWE/ML subset was considered and rejected -- it drops the set to ~50 tasks
+    # (10/20/20), and choosing which tasks count as in-domain is a selection knob
+    # we would then have to defend. Taking everything removes that argument.
+    #
+    # Stratified by category AND difficulty. Category alone looks sufficient --
+    # 16 categories over 89 tasks, and crossing with difficulty leaves many
+    # singleton strata -- but it is not, and the measured spread says so:
+    #
+    #   stratified by            dev hard   val hard   test hard
+    #   category only               29%        28%        42%
+    #   category + difficulty       35%        31%        36%   (dataset: 34%)
+    #
+    # Category alone hands the optimizer an easier search set than the set it is
+    # scored on, which biases every measured improvement downward and confounds
+    # it with difficulty. The singleton strata are harmless: allocation floors
+    # per stratum and then fills to the exact target by largest remainder, so a
+    # stratum of one simply lands wherever the remainder ordering puts it.
+    "terminal-bench": BenchmarkSpec(
+        dataset_name="terminal-bench/terminal-bench-2-1",
+        dataset_digest=(
+            "7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a"
+        ),
+        seed="vero-terminal-bench-2-1-v1",
+        task_count=89,
+        # 89 does not divide 1:2:2. Validation and test hold the exact 2/5 each
+        # and development absorbs the rounding loss, because development is the
+        # optimizer's own full-disclosure search set while test is the measurement.
+        target_counts={"development": 17, "validation": 36, "test": 36},
+        export_dir_name="terminal-bench-2-1",
+        stratified_by=("category", "difficulty"),
     ),
 }
 
@@ -101,6 +149,21 @@ def _task_details(
         }
         if not all(details.values()):
             raise ValueError(f"{task_dir.name} has incomplete SWE-Atlas metadata")
+        return details
+
+    if benchmark == "terminal-bench":
+        details = {
+            "category": str(metadata.get("category") or ""),
+            "difficulty": str(metadata.get("difficulty") or ""),
+        }
+        # Both come from the task's own metadata, so a task that stops declaring
+        # them would silently join an empty-string stratum and skew the split.
+        # Fail instead.
+        missing = [key for key, value in details.items() if not value]
+        if missing:
+            raise ValueError(
+                f"{task_dir.name} is missing task metadata: {', '.join(missing)}"
+            )
         return details
 
     keywords = config.get("task", {}).get("keywords", [])

@@ -1,0 +1,19 @@
+[
+  "terminal-bench/code-from-image",
+  "terminal-bench/crack-7z-hash",
+  "terminal-bench/feal-linear-cryptanalysis",
+  "terminal-bench/fix-ocaml-gc",
+  "terminal-bench/large-scale-text-editing",
+  "terminal-bench/mteb-leaderboard",
+  "terminal-bench/path-tracing",
+  "terminal-bench/polyglot-c-py",
+  "terminal-bench/protein-assembly",
+  "terminal-bench/prove-plus-comm",
+  "terminal-bench/pytorch-model-recovery",
+  "terminal-bench/qemu-startup",
+  "terminal-bench/regex-log",
+  "terminal-bench/sparql-university",
+  "terminal-bench/sqlite-db-truncate",
+  "terminal-bench/torch-pipeline-parallelism",
+  "terminal-bench/tune-mjcf"
+]
