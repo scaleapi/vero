@@ -143,20 +143,25 @@ inference_gateway:
     # anthropic-routed optimizer gets a 403 "model is not allowed for this scope"
     # on its very first call. swe-bench-pro's grid config already carries both
     # after that cost a whole run; this one still had a single entry.
-    # A third entry for the harness's auxiliary model. opencode issues one
-    # summarisation/title call per session on a small model of the same provider
-    # family, and it sends the DATED id: the live 2026-07-30 sonnet5 run logged
-    # exactly one `claude-haiku-4-5-20251001` producer request and it came back
-    # 403 model_denied, while all 190 `claude-sonnet-5` calls passed. Non-fatal
-    # (1 call in 191) and not a speed lever, but it is invisible outside the
-    # gateway request log. CONFIGURATION.md names the bare `claude-haiku-4-5` /
-    # `gpt-5.4-nano`; the gateway compares exact strings, so the dated spelling
-    # that actually goes on the wire is what has to be here. Parameterised
-    # because the name varies by provider family.
+    # A third entry for the harness's auxiliary model. opencode routes its
+    # summarisation/title work to a small model of the SAME provider family, and
+    # this is not a rounding error: measured in the gateway request log of the
+    # live 2026-07-30 claude-opus-5 opencode run, the producer scope served 339
+    # `claude-haiku-4-5-20251001` requests against 248 `claude-opus-5` -- the aux
+    # model was 58% of producer traffic. Leaving it off the list does not cost one
+    # denied call, it costs most of them.
+    # The default must match the DEFAULT OPTIMIZER'S FAMILY, hence gpt-5.4-nano
+    # next to openai/gpt-5.4. Pairing an OpenAI optimizer default with an
+    # Anthropic aux default is what the terra run hit: one `gpt-5.4-nano` producer
+    # request, 403 model_denied, because the slot did not exist at all.
+    # Anthropic optimizers must pass the DATED id explicitly
+    # (`claude-haiku-4-5-20251001`). CONFIGURATION.md names the bare
+    # `claude-haiku-4-5`, but the gateway compares exact strings, so the dated
+    # spelling that actually goes on the wire is what has to be here.
     allowed_models:
       - "${optimizer_model:-openai/gpt-5.4}"
       - "${optimizer_model_bare:-gpt-5.4}"
-      - "${optimizer_aux_model:-claude-haiku-4-5-20251001}"
+      - "${optimizer_aux_model:-gpt-5.4-nano}"
     max_concurrency: 8
   # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
   # the spend control, so a token cap only needs to stop a runaway.
