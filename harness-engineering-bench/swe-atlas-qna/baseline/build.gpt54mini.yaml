@@ -31,7 +31,15 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.0676  # re-pinned 0.061 / 0.102 / 0.040 (sd 0.0257); was 0.0966. See runs/BASELINES.md
+    # NO baseline_reward. The pinned 0.0676 was measured on
+    # fireworks_ai/gpt-oss-120b and says nothing about this target; a delta
+    # against it would be a model comparison dressed up as an optimization
+    # result.
+    # With `score_baseline: false` below, this run therefore reports an ABSOLUTE
+    # held-out score and no delta. That is deliberate: the seed floor for this
+    # target is measured out of band by holdout/validate-model.sh, which scores
+    # the unmodified seed on held-out cases for a fraction of a finalization
+    # pass. Pair the two numbers; do not compare this score to 0.0676.
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
@@ -49,11 +57,11 @@ objective:
   direction: maximize
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
-score_baseline: false
+score_baseline: false  # one held-out pass only; seed floor measured out of band
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: fireworks_ai/gpt-oss-120b
+model: gpt-5.4-mini
 environment_name: ${inner_env:-modal}
 # inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default.
 # keepalive: these images set ENTRYPOINT ["/bin/bash"], which Modal prepends to the
@@ -75,7 +83,11 @@ extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandb
 optimizer_harbor_args: ["--agent-setup-timeout-multiplier", "4"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# This benchmark's target is fireworks_ai/gpt-oss-120b, on the SAME org-wide
+# Retries are kept at the sibling value but are near-idle on this target:
+# gpt-5.4-mini resolves to azure_ai/gpt-5.4-mini, NOT the fireworks pool, and
+# gaia has run 51 rounds against it at a 0.5% upstream error rate versus 47%
+# for gpt-oss-120b on 2026-07-30. Original gpt-oss rationale, kept for history:
+# the old target was fireworks_ai/gpt-oss-120b, on the SAME org-wide
 # fireworks quota that swe-bench-pro measured as bursty (429 on 11 of 12
 # sequential calls, then 1 of 4 a minute later). That is a provider-level limit,
 # not this key's, so it cannot be tuned away from here and has to be ridden out.
@@ -134,6 +146,8 @@ inference_gateway:
   # gateway token usage to individual trials (trusted, vs. content-matching).
   # Without it the fallback recovers only each conversation's root turn: measured
   # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
+  # Matches origin/main's build.yaml (aff0419); needed here because the point of
+  # this run is a per-case cost number for the mini-vs-nano decision.
   request_log_attribution: true
   producer:
     # BOTH spellings, prefixed and bare. The gateway compares the requested model
@@ -143,21 +157,16 @@ inference_gateway:
     # anthropic-routed optimizer gets a 403 "model is not allowed for this scope"
     # on its very first call. swe-bench-pro's grid config already carries both
     # after that cost a whole run; this one still had a single entry.
-    # A third entry for the harness's auxiliary model. opencode routes its
-    # summarisation/title work to a small model of the SAME provider family, and
-    # this is not a rounding error: measured in the gateway request log of the
-    # live 2026-07-30 claude-opus-5 opencode run, the producer scope served 339
-    # `claude-haiku-4-5-20251001` requests against 248 `claude-opus-5` -- the aux
-    # model was 58% of producer traffic. Leaving it off the list does not cost one
-    # denied call, it costs most of them.
-    # The default must match the DEFAULT OPTIMIZER'S FAMILY, hence gpt-5.4-nano
-    # next to openai/gpt-5.4. Pairing an OpenAI optimizer default with an
-    # Anthropic aux default is what the terra run hit: one `gpt-5.4-nano` producer
-    # request, 403 model_denied, because the slot did not exist at all.
-    # Anthropic optimizers must pass the DATED id explicitly
-    # (`claude-haiku-4-5-20251001`). CONFIGURATION.md names the bare
-    # `claude-haiku-4-5`, but the gateway compares exact strings, so the dated
-    # spelling that actually goes on the wire is what has to be here.
+    # A third entry for the harness's auxiliary model. opencode issues one
+    # summarisation/title call per session on a small model of the same provider
+    # family, and it sends the DATED id: the live 2026-07-30 sonnet5 run logged
+    # exactly one `claude-haiku-4-5-20251001` producer request and it came back
+    # 403 model_denied, while all 190 `claude-sonnet-5` calls passed. Non-fatal
+    # (1 call in 191) and not a speed lever, but it is invisible outside the
+    # gateway request log. CONFIGURATION.md names the bare `claude-haiku-4-5` /
+    # `gpt-5.4-nano`; the gateway compares exact strings, so the dated spelling
+    # that actually goes on the wire is what has to be here. Parameterised
+    # because the name varies by provider family.
     allowed_models:
       - "${optimizer_model:-openai/gpt-5.4}"
       - "${optimizer_model_bare:-gpt-5.4}"
@@ -166,13 +175,13 @@ inference_gateway:
   # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
   # the spend control, so a token cap only needs to stop a runaway.
   evaluation:
-    allowed_models: [fireworks_ai/gpt-oss-120b]
+    allowed_models: [gpt-5.4-mini]
     max_requests: 200000
     max_tokens: 2000000000  # 296 agent case-runs (100 dev + 196 validation)
     max_concurrency: 64
   # Reserved so a search-phase overspend can never starve held-out scoring.
   finalization:
-    allowed_models: [fireworks_ai/gpt-oss-120b]
+    allowed_models: [gpt-5.4-mini]
     max_requests: 200000
     max_tokens: 2000000000  # 50 test cases x3 attempts + rescore headroom
     max_concurrency: 64
