@@ -141,6 +141,7 @@ agent_env:
 
 wandb:
   project: harness-engineering-bench
+  entity: egp  # the shared team org, NOT the launching user's default
   group: officeqa  # keeps the benchmark distinguishable in the shared project
   name: ${wandb_run:-officeqa}  # per-launch label, e.g. --param wandb_run=officeqa__claude-sonnet-5
   tags: [officeqa]

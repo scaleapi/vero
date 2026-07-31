@@ -104,6 +104,7 @@ secrets:
 
 wandb:
   project: harness-engineering-bench  # one project for the whole suite
+  entity: egp  # the shared team org, NOT the launching user's default
   group: browsecomp-plus  # keeps the benchmark distinguishable in the shared project
   name: ${wandb_run:-browsecomp-plus}  # per-launch label, e.g. --param wandb_run=browsecomp-plus__claude-sonnet-5
   tags: [browsecomp-plus]

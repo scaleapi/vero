@@ -89,6 +89,7 @@ harness_user: harness
 
 wandb:
   project: vero-swe-bench-pro
+  entity: egp  # the shared team org, NOT the launching user's default
   group: swe-bench-pro
   log_traces: true
 

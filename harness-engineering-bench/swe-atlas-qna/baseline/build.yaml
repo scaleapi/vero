@@ -122,6 +122,7 @@ secrets:
 
 wandb:
   project: harness-engineering-bench  # one project for the whole suite
+  entity: egp  # the shared team org, NOT the launching user's default
   group: swe-atlas-qna  # keeps the benchmark distinguishable in the shared project
   name: ${wandb_run:-swe-atlas-qna}  # per-launch label, e.g. --param wandb_run=swe-atlas-qna__claude-sonnet-5
   tags: [swe-atlas-qna]

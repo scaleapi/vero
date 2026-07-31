@@ -134,6 +134,7 @@ agent_env:
 
 wandb:
   project: harness-engineering-bench  # one project for the whole suite
+  entity: egp  # the shared team org, NOT the launching user's default
   group: terminal-bench
   name: ${wandb_run:-terminal-bench}
   tags: [terminal-bench]
