@@ -138,6 +138,7 @@ def harbor_command(
     jobs_dir: Path,
     attempts: int,
     concurrency: int,
+    model: str,
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -162,7 +163,7 @@ def harbor_command(
         *source_args,
         "--agent-import-path", build["agent_import_path"],
         "-e", resolve_param(build.get("environment_name", "modal")),
-        "-m", str(build["model"]),
+        "-m", str(model),
         "-n", str(concurrency),
         "--n-attempts", str(attempts),
         "--jobs-dir", str(jobs_dir),
@@ -209,6 +210,12 @@ def main() -> int:
     parser.add_argument("--benchmark", required=True)
     parser.add_argument("--version", help="candidate sha (default: the shipped one)")
     parser.add_argument("--partition", default="test")
+    parser.add_argument(
+        "--model",
+        help="Target model to score with, overriding the build's own. Use when "
+             "choosing a target for a new benchmark: the pinned baseline is "
+             "model-specific, so a model change invalidates it.",
+    )
     parser.add_argument("--cases", type=int,
                         help="score only the first N cases (for a cheap smoke)")
     parser.add_argument("--rounds", type=int, default=3,
@@ -277,6 +284,7 @@ def main() -> int:
         command = harbor_command(
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
+            model=args.model or build["model"],
         )
         if args.dry_run:
             print(" ".join(command))

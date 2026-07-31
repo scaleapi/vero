@@ -169,25 +169,25 @@ benchmark can be checked against the others at a glance.
 
 ## Per-benchmark values
 
-| | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | swe-bench-pro |
-|---|---|---|---|---|---| --- |
-| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash | gpt-4o ◈ |
-| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.294 ±0.008 ◈ |
-| split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 146/292/293 ◈ |
-| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 146 ◈ |
-| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 292 ◈ |
-| gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B | 100 M |
-| max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 | 24 | 8 ◈ |
-| timeout_seconds (per eval) ‖ | 7200 | 28800 | 90000 | 79200 | 39600 | 28800 |
-| case_timeout_seconds = declared † | 600 | 1800 | 10800 | 3600 | 3600 | 1800 ◈ |
-| task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 | 3000 |
-| declared `[verifier] timeout_sec` | 300 | 300 | 900 | 300 | 300 | n/a (registry dataset) |
-| declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 | n/a (registry dataset) |
-| verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 | 28800 |
-| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s | n/a |
-| harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness |
-| task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false |
-| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | registry dataset; `expose_case_resources: false`; sampled variant ◈ |
+| | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | terminal-bench | swe-bench-pro |
+|---|---|---|---|---|---|---| --- |
+| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.260 ±0.018 | 0.294 ±0.008 ◈ |
+| split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 17/36/36 | 146/292/293 ◈ |
+| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 68 | 100 / 146 ◈ |
+| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 144 | 100 / 292 ◈ |
+| gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B | 1.2 B / 0.7 B | 100 M |
+| max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 | 24 | 24 | 8 ◈ |
+| timeout_seconds (per eval) ‖ | 7200 | 28800 | 90000 | 79200 | 39600 | 43200 | 28800 |
+| case_timeout_seconds = declared † | 600 | 1800 | 10800 | 3600 | 3600 | 900 ✦ | 1800 ◈ |
+| task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 | 900 ✦ | 3000 |
+| declared `[verifier] timeout_sec` | 300 | 300 | 900 | 300 | 300 | 360–12000 ✦ | n/a (registry dataset) |
+| declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 | 600 | n/a (registry dataset) |
+| verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 | 64800 | 28800 |
+| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s | 28800 s | n/a |
+| harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness | harness |
+| task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false (own tests) | false |
+| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | per-task declared timeouts ✦ | registry dataset; `expose_case_resources: false`; sampled variant ◈ |
 
 ## Choosing an optimizer harness
 
@@ -321,6 +321,22 @@ build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for 
   failure value rather than excluded — a candidate cannot inflate its mean by
   emitting a timeout/connection error. Coverage gaps (no trial produced) and
   gateway budget/auth exhaustion remain excluded/terminating for both.
+
+✦ **Terminal-Bench is the one benchmark whose tasks declare a different timeout
+each.** `[agent] timeout_sec` ranges 600–12000s (48 of 89 at 900s, 13 at 3600s)
+and `[verifier] timeout_sec` 360–12000s, where every other benchmark here declares
+one value for the whole set. This needs no special handling: vero passes Harbor a
+single ratio (`case_timeout_seconds / task_agent_timeout_seconds`), which Harbor
+applies to each task's *own* declared budget, so keeping the pair equal gives every
+task exactly the clock its author intended. The 900 in those two rows is therefore
+the modal value, not a global one — do not "fix" it by making the pair differ.
+
+Consequence worth knowing before comparing a candidate against its baseline: the
+seed allows 40 steps at a 300s per-command cap, so on a 900s task three slow
+commands exhaust the clock. 18 of 108 baseline trials ended in
+`AgentTimeoutError`, a 20% exception rate against 0.3–3.5% elsewhere. That is real
+harness headroom, but a sixth of the baseline's failures are wall-clock rather than
+capability. See `runs/BASELINES.md`.
 
 ◆ Held-out baseline of the seed harness on the **test** partition, mean over
 K=3 independent rounds; ± is the stdev across the three round means. Pinned

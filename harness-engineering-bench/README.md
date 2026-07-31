@@ -59,6 +59,7 @@ promote a task set to the top level once it is ready.
 | [SWE-Atlas-QnA baseline](swe-atlas-qna/baseline/) | Codebase investigation agent | Harbor `scale-ai/swe-atlas-qna` | 20% / 40% / 40% |
 | [tau3 baseline](tau3/baseline/) | MCP customer-service agent | Harbor `sierra-research/tau3-bench` | 20% / 40% / 40% |
 | [BrowseComp-Plus baseline](browsecomp-plus/baseline/) | Fixed-corpus deep-research agent | Pinned local Harbor tasks | 20% / 40% / 40% |
+| [Terminal-Bench baseline](terminal-bench/baseline/) | Shell-loop terminal agent | Harbor `terminal-bench/terminal-bench-2-1` | 20% / 40% / 40% |
 
 **`swe-bench-pro/` is at the top level but is not promoted, and its numbers are
 not comparable to the five above.** It predates the normalization pass those five

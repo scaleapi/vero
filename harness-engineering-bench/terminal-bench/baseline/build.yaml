@@ -4,10 +4,8 @@ description: >-
   agent interface. Each task gives the agent a container and a goal; the task's
   own tests decide pass or fail, so the reward is a pass rate.
 
-# This compiles and the seed agent exists, but TWO VALUES BELOW ARE STILL GUESSES:
-# `model` (the target model, untested on this benchmark) and `baseline_reward`
-# (unmeasured, so currently absent). Do not report a number from this config until
-# both are settled -- see ../README.md.
+# Target model and baseline_reward are both measured and pinned. See
+# ../README.md for the model probe and runs/BASELINES.md for the pinning.
 
 agent_repo: target
 task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
@@ -38,15 +36,11 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # UNMEASURED. Pin from three baseline rounds before reporting anything, the
-    # way every other benchmark here was pinned (see runs/BASELINES.md). With 36
-    # held-out cases this set is our smallest, so expect a wider round-to-round
-    # spread than officeqa's 0.0330 at 99 cases -- gaia sits at 0.0524 with 66.
-    # If the measured spread is bad enough to swamp contestant differences, raise
-    # n_attempts below rather than moving cases out of development: Terminal-Bench
-    # is cheap per case (median declared budget 900s) so attempts are affordable
-    # here in a way they would not be on a long-horizon set.
-    # baseline_reward: TBD
+    baseline_reward: 0.2600  # K=3: 0.273 / 0.235 / 0.273 (sd 0.0176, n=100). See runs/BASELINES.md
+    # 36 held-out cases was expected to be noisy -- it is the smallest test set in
+    # the suite -- but the measured sd is the second tightest of the six, behind
+    # only tau3. Deterministic per-task tests instead of an LLM judge is the
+    # likely reason. So n_attempts stays at 3; it does not need raising to 5.
     failure_value: 0.0
     max_attempts: 1
     # Score the selected candidate 3x per case and average, so the reported
@@ -66,13 +60,26 @@ score_baseline: false
 rescore_top_k: 3
 rescore_attempts: 1
 
-# UNDECIDED. Terminal-Bench is hard -- 30 of 89 tasks are tagged `hard`, 55
-# `medium` -- so a weak target model risks a baseline pinned at or near zero,
-# which leaves nothing for the optimizer to improve and makes the cell useless.
-# swe-atlas-qna is the cautionary case at 0.0676. Probe two or three candidate
-# models on the development partition and pick one that scores clearly off the
-# floor before pinning anything.
-model: fireworks_ai/deepseek-v4-flash
+# Chosen from a measured probe: seed harness, all 17 development tasks, one round
+# each, direct to the proxy.
+#
+#   model                          solved   reward   $/Mtok*  notes
+#   xai/grok-build-0.1              6/17    0.3529    0.380
+#   azure_ai/gpt-5-nano             2/17    0.1176    0.044
+#   xai/grok-4-1-fast-reasoning     2/17    0.1176    0.095   dominated by nano
+#   gemini/gemini-2.5-flash-lite    0/12    0.0000    0.049   5 trials crashed
+#   * 90% cache-read + 10% output, our measured token mix
+#
+# grok-build wins despite 8.6x the cheapest rate, because what matters for a
+# benchmark is a baseline with headroom, not reward per dollar. 0.35 sits where
+# officeqa's baseline does (0.3412), and officeqa's best cell moved +0.41 from
+# there; 0.12 is swe-atlas-qna territory (0.0676), the least informative cell in
+# the suite. Estimated ~$130/cell, ~$1,170 for a nine-cell pass.
+#
+# Not on Fireworks, deliberately: the shared per-minute generated-token quota is
+# what limits how many cells can run at once, so a target off that provider does
+# not contend with the officeqa or browsecomp-plus grids.
+model: xai/grok-build-0.1
 environment_name: ${inner_env:-modal}
 extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
@@ -143,13 +150,13 @@ inference_gateway:
   # per CONFIGURATION.md at the same per-case-run rate as the other benchmarks:
   # 212 agent case-runs here (68 dev + 144 validation).
   evaluation:
-    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    allowed_models: [xai/grok-build-0.1]
     max_requests: 200000
     max_tokens: 1200000000
     max_concurrency: 64
   # Reserved so a search-phase overspend can never starve held-out scoring.
   finalization:
-    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    allowed_models: [xai/grok-build-0.1]
     max_requests: 200000
     max_tokens: 700000000  # 36 test cases x3 attempts + rescore headroom
     max_concurrency: 64

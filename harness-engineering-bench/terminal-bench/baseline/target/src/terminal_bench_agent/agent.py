@@ -13,11 +13,27 @@ from typing import Any, override
 from harbor.agents.base import BaseAgent
 from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 
 MAX_STEPS = 40
 MAX_OUTPUT_CHARS = 8_000
 COMMAND_TIMEOUT_SEC = 300
+
+# Providers word a full context window differently; match on any of them.
+_OVERFLOW_MARKERS = (
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "too many tokens",
+    "prompt is too long",
+    "reduce the length",
+    "input length and `max_tokens` exceed",
+)
+
+
+def _is_context_overflow(error: Exception) -> bool:
+    text = str(error).lower()
+    return any(marker in text for marker in _OVERFLOW_MARKERS)
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -129,12 +145,23 @@ class TerminalBenchAgent(BaseAgent):
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
-    async def _complete(self, messages: list[dict[str, Any]]) -> Any:
-        response = await self._client.chat.completions.create(
-            model=self._api_model,
-            messages=messages,  # type: ignore[arg-type]
-            tools=TOOLS,  # type: ignore[arg-type]
-        )
+    async def _complete(self, messages: list[dict[str, Any]]) -> Any | None:
+        """The next assistant message, or None if the context window is full.
+
+        None rather than an exception: a full window is a property of the harness,
+        so it should land as a low score, not an infrastructure failure. swe-atlas
+        lost 5 trials this way (128k overflow, BadRequestError).
+        """
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._api_model,
+                messages=messages,  # type: ignore[arg-type]
+                tools=TOOLS,  # type: ignore[arg-type]
+            )
+        except BadRequestError as error:
+            if _is_context_overflow(error):
+                return None
+            raise
         choices = getattr(response, "choices", None)
         if not choices:
             raise RuntimeError("upstream returned no completion choices")
@@ -153,6 +180,9 @@ class TerminalBenchAgent(BaseAgent):
         ]
         for step in range(1, MAX_STEPS + 1):
             message = await self._complete(messages)
+            if message is None:
+                self._trace({"step": step, "context_exhausted": True})
+                return
             calls = list(getattr(message, "tool_calls", None) or [])
             entry: dict[str, Any] = {
                 "role": "assistant",

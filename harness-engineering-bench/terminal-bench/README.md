@@ -4,10 +4,16 @@ Candidate Family A benchmark: the editable target is a terminal agent, the domai
 is long-horizon work in a command line, and each task's own tests decide pass or
 fail, so the reward is a pass rate.
 
-**Status: compiles; two values still to settle.** The split is pinned, the seed
-agent is written and tested, and the config dry-compiles with the expected
-artifacts. What is missing is the target model choice and a measured
-`baseline_reward`. See [What remains](#what-remains).
+**Status: measured and pinned.** Target model `xai/grok-build-0.1`, held-out
+baseline **0.2600 ±0.0176** (K=3, n=100). Recorded in `runs/BASELINES.md` and
+`CONFIGURATION.md`, reproducible with `python3 runs/recompute.py`.
+
+One number to know before comparing a candidate against it: 18 of 108 baseline
+trials ended in `AgentTimeoutError`, a 20% exception rate against 0.3-3.5%
+elsewhere in the suite. The seed allows 40 steps at a 300s per-command cap while
+48 of 89 tasks declare a 900s budget, so three slow commands exhaust the clock.
+That is real headroom, but a sixth of the baseline's failures are wall-clock rather
+than capability.
 
 ## The dataset
 
@@ -158,25 +164,45 @@ One gotcha: the compiler snapshots the target with `git archive HEAD:<path>`, so
 **the target must be committed before it will compile**. An uncommitted target
 fails with `not a valid object name`, which says nothing about the real cause.
 
-## What remains
+## Target model
 
-1. **Choose the target model.** `build.yaml` currently carries the house default,
-   `fireworks_ai/deepseek-v4-flash`, and that is a guess. 30 of 89 tasks are
-   `hard`; too weak a model floors the baseline near zero and the cell measures
-   nothing. Probe two or three on development first. SWE-Atlas-QnA at 0.0676 is
-   the cautionary example.
+`xai/grok-build-0.1`, chosen from a measured probe (seed harness, all 17
+development tasks, one round each):
 
-2. **Pin `baseline_reward`** from three rounds, and record them in
-   `runs/BASELINES.md` the way the other five were.
+| model | solved | reward | $/Mtok* |
+| --- | --- | --- | --- |
+| `xai/grok-build-0.1` | 6/17 | 0.3529 | 0.380 |
+| `azure_ai/gpt-5-nano` | 2/17 | 0.1176 | 0.044 |
+| `xai/grok-4-1-fast-reasoning` | 2/17 | 0.1176 | 0.095 |
+| `gemini/gemini-2.5-flash-lite` | 0/12 | 0.0000 | 0.049 |
 
-3. **Check the baseline spread.** 36 held-out cases is our smallest test set;
-   GAIA sits at sd 0.0524 with 66. If the spread swamps plausible contestant
-   differences, raise the test target's `n_attempts` from 3 to 5 rather than
-   moving cases out of development. Terminal-Bench is cheap per case, so attempts
-   buy precision here in a way they would not on a long-horizon set.
+\* 90% cache-read + 10% output, matching our measured token mix. Gemini also
+crashed 5 of 17 trials returning bodies the SDK could not parse.
 
-4. **Re-read the rendered `instruction.md`** before the first real
-   launch, per `skills/run-benchmark/SKILL.md`.
+It costs ~8.6x the cheapest candidate, which is the right trade: what a benchmark
+needs is a baseline with headroom, not reward per dollar. 0.26 sits near officeqa's
+0.3412, where the best cell moved +0.41; 0.12 is swe-atlas-qna territory (0.0676),
+the least informative cell in the suite.
+
+Deliberately **not** a Fireworks model. The shared per-minute generated-token quota
+is what limits how many cells run at once, so a target off that provider does not
+contend with the officeqa or browsecomp-plus grids.
+
+## Spread, and why n_attempts stays at 3
+
+36 held-out cases is the smallest test partition in the suite and was expected to
+be noisy. Measured sd is **0.0176** -- second tightest of the six, behind only
+tau3's 0.0099, and tighter than officeqa at 99 cases (0.0330) or gaia at 66
+(0.0524). Each task ships its own deterministic tests, so no LLM judge or user
+simulator rides on the score. Raising `n_attempts` to 5 was on the table before
+this was measured; it is not needed.
+
+## Known seed bug
+
+`UnicodeDecodeError` killed 4 baseline trials: a command emitting undecodable bytes
+ends the trial instead of degrading to truncated output. Unlike the timeouts, this
+is a bug rather than headroom. Fixing it changes the seed and therefore requires
+re-pinning the baseline, so it is recorded rather than fixed.
 
 ## Sources
 
