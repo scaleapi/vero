@@ -31,15 +31,16 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # NO baseline_reward. The pinned 0.0676 was measured on
-    # fireworks_ai/gpt-oss-120b and says nothing about this target; a delta
-    # against it would be a model comparison dressed up as an optimization
-    # result.
-    # With `score_baseline: false` below, this run therefore reports an ABSOLUTE
-    # held-out score and no delta. That is deliberate: the seed floor for this
-    # target is measured out of band by holdout/validate-model.sh, which scores
-    # the unmodified seed on held-out cases for a fraction of a finalization
-    # pass. Pair the two numbers; do not compare this score to 0.0676.
+    # Measured on THIS target model, not inherited: build.yaml's 0.0676 was
+    # measured on fireworks_ai/gpt-oss-120b and says nothing about gpt-5.4-mini
+    # -- a delta against it would be a model comparison dressed up as an
+    # optimization result. Pinned via
+    #   rescore_candidate.py --seed --benchmark swe-atlas-qna --model gpt-5.4-mini
+    # (the same path that produced every other pinned baseline).
+    baseline_reward: 0.1324  # K=3: 0.109 / 0.136 / 0.152 (sd 0.0180, n=136). See runs/BASELINES.md
+    # 14 of 150 baseline trials raised: 12 RuntimeError ("model returned neither
+    # an answer nor a tool call"), 1 RateLimitError, 1 VerifierTimeoutError. The
+    # RuntimeError rate (~8%) is seed headroom, not task difficulty.
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
@@ -57,7 +58,7 @@ objective:
   direction: maximize
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
-score_baseline: false  # one held-out pass only; seed floor measured out of band
+score_baseline: false  # seed floor pinned above; don't re-score it every run
 rescore_top_k: 3
 rescore_attempts: 1
 

@@ -171,8 +171,8 @@ benchmark can be checked against the others at a glance.
 
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | terminal-bench | swe-bench-pro |
 |---|---|---|---|---|---|---| --- |
-| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
-| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.260 ±0.018 | 0.294 ±0.008 ◈ |
+| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b (alt: gpt-5.4-mini) | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632); alt 0.132 ±0.018 | 0.732 ±0.010 | 0.462 ±0.028 | 0.260 ±0.018 | 0.294 ±0.008 ◈ |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 17/36/36 | 146/292/293 ◈ |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 68 | 100 / 146 ◈ |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 144 | 100 / 292 ◈ |
@@ -354,6 +354,15 @@ signal — a candidate `reward_key` switch, pending the verifier emitting
 deepseek benchmarks logged zero exceptions over 945 trials, swe-atlas lost
 5/150 to gpt-oss 128k context overflow, and gaia lost 4/198 (infra) after the
 agent's reason/search-only-turn crash was fixed.
+
+swe-atlas also carries a second pinned target build,
+`baseline/build.gpt54mini.yaml`: **gpt-5.4-mini at 0.132 ±0.018** (n=136, K=3:
+0.109 / 0.136 / 0.152, measured 2026-07-31 with the same `--seed` path). The
+two pins are per-build, not interchangeable — each build's delta is against its
+own target's floor, never the other's. 12 of its 150 trials raised the seed's
+"neither an answer nor a tool call" RuntimeError (~8%), which is seed headroom
+in the same sense as terminal-bench's timeouts; 2 more fell to one
+RateLimitError and one VerifierTimeoutError.
 
 **Re-pin these whenever a seed agent changes.** The first set went stale because the seed agents moved 4-10 commits afterwards -- one commit touched all five -- and nothing recorded the dependency. Re-measured 2026-07-28 with `scripts/rescore_candidate.py --seed`, which reuses the original path exactly. Only tau3 moved materially (+0.121 against an sd of 0.0099, so a genuine seed improvement); the other four shifted inside their own noise.
 
