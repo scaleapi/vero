@@ -12,11 +12,15 @@ comparison, not an optimization result:
 
 | build | target model | pinned `baseline_reward` |
 | --- | --- | --- |
-| `build.yaml` | `fireworks_ai/gpt-oss-120b` | 0.0676 (K=3, n=148) |
-| `build.gpt54mini.yaml` | `gpt-5.4-mini` | 0.1324 (K=3, n=136) |
+| `build.yaml` | `fireworks_ai/gpt-oss-120b` | 0.0667 (K=3, n=150) |
+| `build.gpt54mini.yaml` | `gpt-5.4-mini` | 0.1216 (K=3, n=148) |
 
 Both floors were measured with `scripts/rescore_candidate.py --seed`, the same
-path that produced every other pinned baseline in the suite.
+path that produced every other pinned baseline in the suite. Trials the seed
+itself killed score 0 (they are harness headroom, and finalization taxes a
+candidate's dead attempts the same way); trials the platform killed are
+excluded. For gpt-5.4-mini that prices in the seed's ~8% empty-completion
+fail-fast — the largest single piece of fixable headroom in this seed.
 
 The Harbor tasks retain their canonical rubric-based verifier. That verifier
 needs `OPENAI_API_BASE`; the target agent uses `OPENAI_BASE_URL`. They may

@@ -5,15 +5,20 @@ is long-horizon work in a command line, and each task's own tests decide pass or
 fail, so the reward is a pass rate.
 
 **Status: measured and pinned.** Target model `xai/grok-build-0.1`, held-out
-baseline **0.2600 ±0.0176** (K=3, n=100). Recorded in `runs/BASELINES.md` and
-`CONFIGURATION.md`, reproducible with `python3 runs/recompute.py`.
+baseline **0.2407 ±0.0131** (K=3, n=108). Recorded in `runs/BASELINES.md` and
+`CONFIGURATION.md`, reproducible with `python3 runs/recompute.py`. Trials the
+seed itself killed score 0 in the pin (4 `UnicodeDecodeError` from the seed's
+undecodable-output bug plus 4 timeouts the verifier could not score); trials
+the platform killed are excluded. The convention is documented at the ◆
+footnote in `CONFIGURATION.md`.
 
 One number to know before comparing a candidate against it: 18 of 108 baseline
 trials ended in `AgentTimeoutError`, a 20% exception rate against 0.3-3.5%
 elsewhere in the suite. The seed allows 40 steps at a 300s per-command cap while
 48 of 89 tasks declare a 900s budget, so three slow commands exhaust the clock.
 That is real headroom, but a sixth of the baseline's failures are wall-clock rather
-than capability.
+than capability. (14 of the 18 still scored — grading runs on the container's
+final state — and were always inside the pin.)
 
 ## The dataset
 
@@ -180,9 +185,9 @@ development tasks, one round each):
 crashed 5 of 17 trials returning bodies the SDK could not parse.
 
 It costs ~8.6x the cheapest candidate, which is the right trade: what a benchmark
-needs is a baseline with headroom, not reward per dollar. 0.26 sits near officeqa's
-0.3412, where the best cell moved +0.41; 0.12 is swe-atlas-qna territory (0.0676),
-the least informative cell in the suite.
+needs is a baseline with headroom, not reward per dollar. 0.24 sits near officeqa's
+0.3412, where the best cell moved +0.41; 0.12 is swe-atlas-qna territory (0.0667
+on gpt-oss-120b), the least informative cell in the suite.
 
 Deliberately **not** a Fireworks model. The shared per-minute generated-token quota
 is what limits how many cells run at once, so a target off that provider does not
@@ -191,18 +196,20 @@ contend with the officeqa or browsecomp-plus grids.
 ## Spread, and why n_attempts stays at 3
 
 36 held-out cases is the smallest test partition in the suite and was expected to
-be noisy. Measured sd is **0.0176** -- second tightest of the six, behind only
+be noisy. Measured sd is **0.0131** -- second tightest of the six, behind only
 tau3's 0.0099, and tighter than officeqa at 99 cases (0.0330) or gaia at 66
 (0.0524). Each task ships its own deterministic tests, so no LLM judge or user
 simulator rides on the score. Raising `n_attempts` to 5 was on the table before
-this was measured; it is not needed.
+this was measured; it is not needed. (Scoring seed-killed trials as zeros
+*tightened* the spread, from 0.0176: the seed's failure rate was itself part of
+the round-to-round variance, and pricing it consistently removes that noise.)
 
 ## Known seed bug
 
 `UnicodeDecodeError` killed 4 baseline trials: a command emitting undecodable bytes
-ends the trial instead of degrading to truncated output. Unlike the timeouts, this
-is a bug rather than headroom. Fixing it changes the seed and therefore requires
-re-pinning the baseline, so it is recorded rather than fixed.
+ends the trial instead of degrading to truncated output. Those trials score 0 in
+the pin -- the defect is priced, not hidden. Fixing it changes the seed and
+therefore requires re-pinning the baseline, so it is recorded rather than fixed.
 
 ## Sources
 

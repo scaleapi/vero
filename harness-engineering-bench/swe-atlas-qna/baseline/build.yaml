@@ -31,7 +31,10 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.0676  # re-pinned 0.061 / 0.102 / 0.040 (sd 0.0257); was 0.0966. See runs/BASELINES.md
+    # Seed-killed trials score 0 (2 BadRequestError: the seed overflowing the
+    # 128k context, which context management -- a harness concern -- would fix);
+    # platform-killed trials are dropped. See runs/recompute.py.
+    baseline_reward: 0.0667  # K=3: 0.060 / 0.100 / 0.040 (sd 0.0249, n=150); was 0.0676 excluding seed-killed trials, 0.0966 pre-repin. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
