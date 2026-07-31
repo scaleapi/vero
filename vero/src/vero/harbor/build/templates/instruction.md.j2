@@ -25,8 +25,10 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
      --partition {{ selection_partition }}
    ```
 
-   An evaluation can take many minutes — that is expected; let the call block
-   and read the result it returns. Iterate cheaply on a subset first
+   An evaluation can take many minutes. For a **short** one, let the call block
+   and read the result it returns. For anything longer than a few minutes, use
+   the bounded wait loop below instead: a single call that blocks in silence for
+   half an hour can get your run killed. Iterate cheaply on a subset first
    (`--start 0 --stop N`, or repeated `--case-id ID`).
    {% if seed_supported %}
    Pass `--seed N` to reproduce a noisy comparison exactly.
@@ -45,19 +47,42 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    and `evals diff OLD NEW`. Do not re-run an evaluation to see a number you
    truncated — look it up.
 
-   Add `--detach` **only** to run several evaluations at once: it returns a
-   `job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks
-   until that job finishes and prints its result (or poll `evals status JOB_ID`,
-   which also shows elapsed time).
+   Add `--detach` to run several evaluations at once, and to keep any long one
+   from going silent: it returns a `job_id` immediately instead of blocking.
+   Then wait for it in **bounded** steps rather than one open-ended call:
+
+   ```bash
+   job=$(evals run --detach ... | grep -o '"job_id": *"[^"]*"' | cut -d'"' -f4)
+   until evals wait "$job" --timeout 300 | tee /dev/stderr | grep -q '"status": *"complete"'; do :; done
+   ```
+
+   `evals wait --timeout N` prints the current status and exits 0 when N seconds
+   pass, so you simply call it again; it is idempotent by design. Plain
+   `evals wait JOB_ID` with no `--timeout` blocks until the job finishes, and
+   `evals status JOB_ID` reports elapsed time.
+
+   **Why bounded, and not one long block.** Your process is read through a
+   single long-lived stdout stream, and a harness only flushes a command's
+   output when that command *returns*. A wait that blocks for half an hour
+   therefore emits nothing for half an hour, and a stream idle that long can be
+   torn down by the network path even though the machine, the connection and the
+   sandbox are all healthy. When that happens the run dies with
+   `StreamTerminatedError` / "Connection lost", the outer trial is not retried,
+   and the whole optimization is lost. Observed 2026-07-31: a cell
+   died at 71 minutes, 9m57s into a silent wait, having already earned a 0.1224
+   validation score. A `--timeout 300` loop caps that silence at five minutes
+   and costs nothing, because each return is just one more line of output.
 
    **Run every `evals` call in the foreground.** You are a single-shot headless
    run: nothing exists to deliver a notification or wake you later. If you put a
    long call in a background task, schedule a wake-up, or say you will "report
    back when it finishes", the run simply ends there and whatever you have not
-   submitted is lost. A foreground call that blocks for half an hour is working
-   correctly — let it block. To wait on two jobs, `evals wait` the first, then
-   the second. Do not claim an improvement before its comparison baseline has
-   been scored on the same cases.
+   submitted is lost. The bounded wait loop above is still foreground: it blocks
+   the whole time, it just returns and re-enters every few minutes instead of
+   sitting silent, so it satisfies this rule rather than bending it. A call that
+   blocks for a few minutes is working correctly — let it block. To wait on two
+   jobs, wait out the first, then the second. Do not claim an improvement before
+   its comparison baseline has been scored on the same cases.
 
 4. Use `evals status` to inspect evaluation jobs and allowed evaluation
    sets{% if disclose_budget %}, and to see remaining budgets{% endif %}.
