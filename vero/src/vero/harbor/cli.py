@@ -237,6 +237,38 @@ OPENCODE_STEP_LIMIT = 1000
 # override and calls the provider's public endpoint instead of the gateway.
 _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 
+# How long a dropped Modal stdio stream keeps trying to reconnect before the
+# trial dies, and how often.
+#
+# Harbor reads a whole agent phase through one Modal stdio stream, and Modal
+# budgets reconnects per *stream*: `stream_stdio_max_retries` is 10 for the life
+# of the stream and is never replenished, because a successful chunk resets only
+# the backoff delay. Shipped as 0.01s with a doubling factor, those ten attempts
+# are spent in 10.23 seconds, so a multi-hour run is protected against ten
+# seconds of network trouble and the next drop is fatal whenever it lands. Two
+# cells died that way on 2026-07-31 and 2026-08-01.
+#
+# A flat delay rather than a doubling one, because the count is not the useful
+# knob: with a factor of 2 the sleeps outgrow the run by roughly the seventeenth
+# attempt, so raising the count alone converts a crash into a hang. Flat keeps
+# every gap short and makes the tolerated outage the simple product below.
+#
+# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is bounded by how long the worker keeps
+# stdout available for a reconnect at a byte offset: past that, a reconnect
+# resumes with a hole rather than failing, which is worse than dying. Measured
+# rather than assumed; see tests and the probe recorded in the PR.
+MODAL_STREAM_RECONNECT_DELAY_SECONDS = 2.0
+MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 120
+MODAL_STREAM_RECONNECT_FACTOR = 1.0
+
+# Directory holding the `sitecustomize` that applies the above inside the harbor
+# subprocess. Modal exposes these three only as constructor keywords that
+# `TaskCommandRouterClient._connect` never forwards, and `modal/config.py` has no
+# entry for them, so there is no supported path: not an argument, not an
+# environment variable. PYTHONPATH plus `sitecustomize` is the seam that reaches
+# a dependency's defaults without vendoring it.
+_STREAM_PATCH_DIRECTORY = Path(__file__).parent / "_stream_patch"
+
 
 def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
     """Give litellm-based harnesses the gateway URL under the name they read.
@@ -464,6 +496,36 @@ def _agent_environment_blanks(task: Path) -> list[str]:
     return arguments
 
 
+def _modal_stream_patch_environment(base: dict[str, str]) -> dict[str, str]:
+    """Put the reconnect-budget `sitecustomize` on the harbor subprocess's path.
+
+    Prepended to any inherited PYTHONPATH rather than replacing it, and the
+    `sitecustomize` chains to whichever module it shadows, so a caller who
+    already relies on one keeps it.
+
+    A caller who sets the three values explicitly keeps them: this fills in the
+    vero defaults and never overrides an explicit choice, which is what makes the
+    window tunable per run without a code change.
+    """
+
+    patched = {"PYTHONPATH": str(_STREAM_PATCH_DIRECTORY)}
+    inherited = base.get("PYTHONPATH")
+    if inherited:
+        patched["PYTHONPATH"] = os.pathsep.join([patched["PYTHONPATH"], inherited])
+
+    retries = int(
+        MODAL_STREAM_RECONNECT_WINDOW_SECONDS / MODAL_STREAM_RECONNECT_DELAY_SECONDS
+    )
+    for name, value in (
+        ("VERO_MODAL_STREAM_RETRY_DELAY_SECS", MODAL_STREAM_RECONNECT_DELAY_SECONDS),
+        ("VERO_MODAL_STREAM_RETRY_FACTOR", MODAL_STREAM_RECONNECT_FACTOR),
+        ("VERO_MODAL_STREAM_MAX_RETRIES", retries),
+    ):
+        if not base.get(name):
+            patched[name] = str(value)
+    return patched
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -476,6 +538,7 @@ def _compiled_run_environment(
     environment = os.environ.copy()
     if overrides:
         environment.update(overrides)
+    environment.update(_modal_stream_patch_environment(environment))
     path = task / "environment/gateway/launch.json"
     if not path.exists():
         return environment
