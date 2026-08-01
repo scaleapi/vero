@@ -11,6 +11,21 @@ user = "agent"
 environment_mode = "shared"
 timeout_sec = {{ verifier_timeout }}
 
+# Snapshot the trusted session before artifact collection, so a trial that never
+# reaches the verifier still yields its candidates and evaluation records.
+# Harbor's agent phase only swallows AgentTimeoutError and
+# NonZeroAgentExitCodeError (harbor/trial/single_step.py); every other exception
+# propagates past `await self._run_verifier()`, so `vero harbor export-session`
+# never runs. Collect hooks and artifact downloads still do, because
+# Trial._recover_outputs calls _collect_artifacts on the failure path. Measured
+# 2026-07-31: a Modal grpclib StreamTerminatedError killed an outer trial at 71
+# minutes and left no archive at all, while artifact collection from the same
+# sandbox still succeeded moments later.
+[[verifier.collect]]
+service = "{{ layout.sidecar_host }}"
+command = "vero harbor archive-session"
+timeout_sec = {{ session_rescue_timeout }}
+
 [environment]
 build_timeout_sec = {{ build_timeout }}
 {% if secrets %}
@@ -20,3 +35,11 @@ build_timeout_sec = {{ build_timeout }}
 {{ secret }} = "${{ '{' }}{{ secret }}{{ '}' }}"
 {% endfor %}
 {% endif %}
+
+# Collected from the sidecar's own filesystem, a channel the optimizer cannot
+# write to. Best-effort on Harbor's side: a missing source is recorded as a
+# failed manifest entry, never a trial failure.
+[[artifacts]]
+source = "{{ layout.session_rescue_archive }}"
+destination = "{{ session_rescue_destination }}"
+service = "{{ layout.sidecar_host }}"

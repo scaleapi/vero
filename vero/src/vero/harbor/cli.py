@@ -1125,6 +1125,53 @@ def finalize_command(token_file, output):
     click.echo(json.dumps(result, indent=2))
 
 
+@harbor.command("archive-session")
+@click.option(
+    "--session-dir",
+    default=LAYOUT.session_dir,
+    show_default=True,
+    type=click.Path(path_type=Path, file_okay=False),
+)
+@click.option(
+    "--output",
+    default=LAYOUT.session_rescue_archive,
+    show_default=True,
+    type=click.Path(path_type=Path, dir_okay=False),
+)
+def archive_session_command(session_dir, output):
+    """Snapshot the session to a tar.gz in place, without finalizing.
+
+    The rescue half of `export-session`. It reads the session directory off the
+    admin volume and writes an archive beside it: no admin token, no HTTP call,
+    and above all no `/finalize`, so it cannot spend the finalization budget or
+    take the 28 minutes the verifier phase took on 2026-07-31. Measured at 3.2s
+    on a real 63M / ~2300-file session.
+
+    That cheapness is the point. This runs from a `[[verifier.collect]]` hook,
+    which Harbor invokes on *every* terminal outcome (`Trial._recover_outputs`
+    runs it even when the trial raised), whereas `export-session` runs only from
+    the verifier phase. Harbor swallows just `AgentTimeoutError` and
+    `NonZeroAgentExitCodeError` out of the agent phase; anything else skips the
+    verifier entirely. Measured: two outer trials died the same night, and the
+    one that raised `NonZeroAgentExitCodeError` reached the verifier and left an
+    8.8M `session.tar.gz`, while the one that raised a Modal
+    `grpclib.StreamTerminatedError` at 71 minutes left nothing at all, losing a
+    candidate that had already scored 0.1224 on 49 validation cases.
+
+    The archive is the same format `export-session` produces, minus the
+    finalization/status/report files that only exist after a finalize. It still
+    carries `candidates/repository.git` (every candidate commit) and
+    `database.json` (every evaluation and score).
+    """
+    archive = create_harbor_session_archive(session_dir, output)
+    click.echo(
+        json.dumps(
+            {"session": str(archive), "sha256": file_sha256(archive)},
+            indent=2,
+        )
+    )
+
+
 @harbor.command("export-session")
 @click.option(
     "--token-file",
