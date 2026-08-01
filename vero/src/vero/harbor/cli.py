@@ -240,13 +240,17 @@ OPENCODE_STEP_LIMIT = 1000
 # The ceiling vero puts on a single optimizer tool call, in seconds.
 #
 # The optimizer's stdout reaches harbor as one long-lived stream, and an agent
-# harness only flushes output when a tool call *returns*. "How long may one tool
-# call run" is therefore the same question as "how long may that stream go
-# silent", and an idle stream gets reaped by the network path while the machine,
-# the connection and the sandbox all stay healthy. The outer trial is not
-# retried, so the whole optimization goes with it: on 2026-07-31 a cell died at
-# 71 minutes, 9m57s into one silent call, discarding a candidate that had
-# already scored 0.1224 on 49 validation cases.
+# harness only flushes output when a tool call *returns*, so "how long may one
+# tool call run" is the same question as "how long may that stream go silent".
+# A cell that goes quiet for tens of minutes reports nothing while it is quiet:
+# no progress, no partial trajectory, and no way to tell a working optimizer
+# from a wedged one. This bounds that blind window.
+#
+# It is *not* what keeps the stream alive. Two runs on 2026-08-01 each sat
+# through repeated 242s silences and then died anyway during shorter ones (104s
+# and 188s), which rules out an idle-reap threshold: no single threshold is both
+# above 242 and below 104. See HARNESS_TRIAL_RETRIES for what actually drops the
+# stream and what survives it.
 #
 # Configured on the harness rather than requested in the instruction, because
 # the instruction is advisory and this is not. Telling the optimizer to wait in
@@ -255,6 +259,41 @@ OPENCODE_STEP_LIMIT = 1000
 # first on its own terms; the cap is the backstop for everything else the
 # optimizer runs.
 HARNESS_TOOL_TIMEOUT_SECONDS = 300
+
+# How many times harbor may restart a failed outer trial, and on what.
+#
+# Modal reconnects a dropped stdio stream transparently, but the budget for
+# those reconnects is per *stream*, not per drop: `stream_stdio_max_retries` is
+# 10, is decremented for the life of the stream, and is never replenished (only
+# the backoff delay resets on a successful chunk, see
+# modal/_utils/task_command_router_client.py). Harbor reads the whole agent
+# phase through one stream, so an hour-long optimizer run gets 10 reconnects
+# total and the 11th drop is fatal whenever it lands. The backoff sums to about
+# 10s, so one outage longer than that also exhausts the budget in a single
+# burst. Neither is reachable from vero: the limits are constructor keywords on
+# a client vero does not build.
+#
+# What *is* reachable is harbor's own retry. It already treats
+# StreamTerminatedError as retryable (the exception is absent from
+# RetryConfig.exclude_exceptions), but max_retries defaults to 0, so the two
+# 2026-08-01 runs recorded `Trials 0 | Exceptions 1` rather than trying again.
+#
+# One retry, not more: a retry discards the trial directory and restarts the
+# optimizer from zero, so each attempt costs a full run's wall clock and tokens.
+# This is mitigation, not a cure -- if the drops accumulate with stream age then
+# a second attempt re-rolls the same dice -- but it converts the common case of
+# a transient blip from "no result" into "a result, late".
+HARNESS_TRIAL_RETRIES = 1
+
+# Restricted to transport failures a fresh attempt could plausibly fix. Harbor's
+# default is to retry *every* exception not explicitly excluded, which would
+# spend a second full optimizer run on a deterministic crash. ConnectionError is
+# included because Modal raises it from the same reconnect path when the give-up
+# is a timeout or a socket error rather than a terminated stream.
+_RETRYABLE_TRIAL_EXCEPTIONS: tuple[str, ...] = (
+    "ConnectionError",
+    "StreamTerminatedError",
+)
 
 # How each harness spells "bound one tool call". Only knobs verified in the
 # harness's own source or docs are listed: a harness missing here keeps its own
@@ -436,6 +475,23 @@ def _agent_tool_timeout_args(agent: str) -> list[str]:
     arguments: list[str] = []
     for name in _TOOL_TIMEOUT_ENVIRONMENT.get(agent, ()):
         arguments.extend(["--ae", f"{name}={milliseconds}"])
+    return arguments
+
+
+def _trial_retry_args() -> list[str]:
+    """Let harbor restart an outer trial that lost its connection to the sandbox.
+
+    `--retry-include` *replaces* harbor's include set rather than adding to it,
+    so naming these two is what narrows retries to transport failures. A build or
+    caller passing its own `--retry-include` later on the command line widens the
+    set (typer collects repeats), which is the intended direction: a benchmark
+    may know of another exception worth a second attempt, and none of them should
+    have to re-state these.
+    """
+
+    arguments = ["--max-retries", str(HARNESS_TRIAL_RETRIES)]
+    for name in _RETRYABLE_TRIAL_EXCEPTIONS:
+        arguments.extend(["--retry-include", name])
     return arguments
 
 
@@ -884,6 +940,9 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
         command.extend(_kimi_gateway_args(agent, task))
+        # Ahead of both, so a build or a caller can raise, lower or disable the
+        # retry: a later `--max-retries` wins on click's last-value rule.
+        command.extend(_trial_retry_args())
         # Build-declared outer-trial flags first, so a command-line arg can still
         # override them (harbor's `--ek` takes the last value for a key).
         command.extend(config.optimizer_harbor_args)

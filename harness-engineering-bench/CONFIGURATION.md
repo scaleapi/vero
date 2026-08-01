@@ -185,6 +185,7 @@ benchmark can be checked against the others at a glance.
 | declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 | 600 | n/a (registry dataset) |
 | verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 | 64800 | 28800 |
 | optimizer tool-call cap ¤ | 300 s | 300 s | 300 s | 300 s | 300 s | 300 s | 300 s |
+| outer-trial retries ¤ | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness | harness |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false (own tests) | false |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | per-task declared timeouts ✦ | registry dataset; `expose_case_resources: false`; sampled variant ◈ |
@@ -308,15 +309,23 @@ build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for 
 - **Optimizer `agent_env`** (now on all five): inner evals take 15–30 min, and no
   benchmark sets a Bash timeout any more. Both ways of sizing one were wrong. The
   10-minute default forces the agent into `--detach` + background-poll +
-  end-turn, and in headless `--print` mode ending the turn ends the run; raising
-  it above a full validation eval, which is what these configs did until
-  2026-08-01, makes one tool call sit silent for hours, and harbor reads the
-  optimizer through a single long-lived stdout stream that gets reaped when it
-  idles. Run #2 died the first way and a swe-atlas-qna cell died the second, at
-  71 minutes, 9m57s into one wait. Both are now handled below the config: `evals
-  run` returns inside its own bound with a `job_id` to wait on again, so no
-  evaluation needs a long call, and vero caps the tool call itself
-  (`HARNESS_TOOL_TIMEOUT_SECONDS`, `vero/harbor/cli.py`). **Do not set
+  end-turn, and in headless `--print` mode ending the turn ends the run; run #2
+  died that way. Raising it above a full validation eval, which is what these
+  configs did until 2026-08-01, is not a fix but a different problem: one tool
+  call then sits silent for hours, and harbor reads the optimizer through a
+  single long-lived stdout stream, so nothing distinguishes a working optimizer
+  from a wedged one for that whole window. Both are now handled below the
+  config: `evals run` returns inside its own bound with a `job_id` to wait on
+  again, so no evaluation needs a long call, and vero caps the tool call itself
+  (`HARNESS_TOOL_TIMEOUT_SECONDS`, `vero/harbor/cli.py`).
+
+  The cap does **not** keep that stream alive, and an earlier version of this
+  note claimed it did. Modal's budget for silently reconnecting a dropped stream
+  is per stream and never replenished (10 for its whole life), so a long run
+  exhausts it and the next drop kills the trial regardless of how quiet the
+  stream was; two runs on 2026-08-01 survived repeated 242 s silences and then
+  died during 104 s and 188 s ones. What covers that is `--max-retries 1`, also
+  set by vero (`HARNESS_TRIAL_RETRIES`). **Do not set
   `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS` (or opencode's
   `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS`) in a build**: a build's
   `agent_env` is forwarded after vero's, harbor keeps the last value for a key,
@@ -474,6 +483,13 @@ returns inside a 240 s bound with a `job_id` to wait on again. Until 2026-08-01
 each benchmark instead raised `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS`
 above its widest single blocking eval so one evaluation fit in one call; see the
 `agent_env` bullet above for why that was replaced.
+
+The retry row is vero-set for the same reason (`HARNESS_TRIAL_RETRIES`) and is
+narrowed to `StreamTerminatedError`/`ConnectionError`: a lost Modal stdio stream
+costs a trial rather than the run, while a deterministic crash still fails once.
+It is an *outer*-trial retry, unrelated to `n_attempts` (§) on the held-out
+target. Each attempt restarts the optimizer from zero, so raising it multiplies
+wall clock and tokens.
 
 ¶ `evaluation` and `finalization` each get this cap independently — they are
 separate scopes with separate tokens and separate ledgers, so the numbers do not

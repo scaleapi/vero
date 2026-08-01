@@ -417,17 +417,18 @@ def test_opencode_gets_a_step_limit_that_does_not_truncate_the_search(tmp_path):
 
 
 def test_the_harness_is_configured_to_bound_one_tool_call():
-    """A silent tool call is what kills a run, so the bound goes on the harness.
+    """How long a run may report nothing is a harness setting, not a request.
 
     The optimizer's stdout reaches harbor as one long-lived stream and a harness
     flushes a command's output only when that command returns, so the length of
-    one tool call *is* the length of the stream's silence. On 2026-07-31 a cell
-    died at 71 minutes, 9m57s into a single silent call, discarding a candidate
-    already scored at 0.1224 on 49 validation cases.
+    one tool call *is* the length of the stream's silence, and a cell that goes
+    quiet for tens of minutes cannot be told from a wedged one.
 
-    The first fix for this asked the optimizer, in the instruction, to wait in
-    bounded steps. A prompt enforces nothing: the recipe it shipped had to be
-    corrected twice in review, and a model reconstructing the loop from memory
+    This does not keep the stream alive; see the trial-retry test for what does.
+
+    The first fix asked the optimizer, in the instruction, to wait in bounded
+    steps. A prompt enforces nothing: the recipe it shipped had to be corrected
+    twice in review, and a model reconstructing the loop from memory
     reintroduces the failure. Both harnesses expose the bound as a setting.
     """
     from vero.evals_cli import WAIT_TIMEOUT_SECONDS
@@ -471,6 +472,10 @@ def test_a_build_can_override_the_tool_call_bound_it_is_given(tmp_path, monkeypa
     Harbor keeps the last `--ae` value for a key, so ordering decides who wins.
     A build that legitimately needs a longer single call has to be able to say
     so through `agent_env`, the same way it declares any other agent variable.
+    The same ordering rule has to hold for every vero default on this command
+    line, so the trial retry is checked here too: emitting it after the build's
+    own flags is exactly what made the first version of the tool-call cap a
+    no-op on every benchmark that set BASH_MAX_TIMEOUT_MS.
     """
     from vero.harbor import build as harbor_build
     from vero.harbor import cli as harbor_cli
@@ -481,7 +486,7 @@ def test_a_build_can_override_the_tool_call_bound_it_is_given(tmp_path, monkeypa
     class _Config:
         harbor_requirement = "harbor[modal]==0.20.0"
         agent_env = {"OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS": "900000"}
-        optimizer_harbor_args: list[str] = []
+        optimizer_harbor_args = ["--max-retries", "3"]
         extra_harbor_args: list[str] = []
         name = "vero/stub-benchmark"
 
@@ -521,6 +526,42 @@ def test_a_build_can_override_the_tool_call_bound_it_is_given(tmp_path, monkeypa
     )
     override = "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=900000"
     assert command.index(default) < command.index(override)
+
+    # Same rule for the trial retry: vero's value first, the build's last, so
+    # click's last-value-wins leaves the build with 3 attempts rather than ours.
+    assert command.count("--max-retries") == 2
+    assert command.index("3") > command.index(str(harbor_cli.HARNESS_TRIAL_RETRIES))
+
+
+def test_a_lost_connection_costs_a_trial_rather_than_the_whole_run():
+    """A dropped stdio stream is transport noise; harbor must be told to retry.
+
+    Modal reconnects a dropped stream on its own, but the budget is per stream
+    and never replenished: `stream_stdio_max_retries` is 10 for the life of the
+    stream, with about 10s of backoff in total. Harbor reads the whole agent
+    phase through one stream, so a long optimizer run exhausts that budget
+    either by accumulating drops or in one outage, and the next drop is fatal.
+    Two runs on 2026-08-01 died that way and recorded `Trials 0 | Exceptions 1`,
+    because harbor's own max_retries defaults to 0.
+
+    Timing bounds do not help here. Both runs sat through repeated 242s
+    silences and then died during shorter ones (104s and 188s), which is what
+    ruled out the idle-reap explanation this fix originally shipped with.
+    """
+    from vero.harbor.cli import HARNESS_TRIAL_RETRIES, _trial_retry_args
+
+    arguments = _trial_retry_args()
+    assert arguments[:2] == ["--max-retries", str(HARNESS_TRIAL_RETRIES)]
+
+    # Restricted to transport failures. Harbor's default retries *every*
+    # exception not explicitly excluded, so an unrestricted retry would spend a
+    # second full optimizer run re-deriving a deterministic crash.
+    assert arguments[2::2] == ["--retry-include", "--retry-include"]
+    assert arguments[3::2] == ["ConnectionError", "StreamTerminatedError"]
+
+    # One attempt, not a loop: a retry restarts the optimizer from zero, so each
+    # one costs a full run's wall clock and tokens.
+    assert HARNESS_TRIAL_RETRIES == 1
 
 
 def test_litellm_harnesses_get_the_gateway_url_under_the_name_they_read(tmp_path):

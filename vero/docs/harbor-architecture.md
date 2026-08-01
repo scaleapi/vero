@@ -84,6 +84,24 @@ propagates past `await self._run_verifier()`. Two outer trials died on
 `StreamTerminatedError` at 71 minutes left nothing, discarding a candidate that
 had already scored 0.1224 on 49 validation cases.
 
+That last one is transport, not the optimizer. Harbor reads the whole agent
+phase through a single Modal stdio stream, and Modal's budget for silently
+reconnecting that stream is per *stream* rather than per drop:
+`stream_stdio_max_retries` is 10 for its entire life and is never replenished,
+with roughly 10s of backoff in total. A long optimizer run exhausts it either by
+accumulating drops or in one outage, and the next drop ends the trial. Harbor
+already classes `StreamTerminatedError` as retryable but defaults `max_retries`
+to 0, so vero passes `--max-retries 1` with `--retry-include` narrowed to
+`StreamTerminatedError` and `ConnectionError` (`HARNESS_TRIAL_RETRIES`,
+`vero/harbor/cli.py`). A retry restarts the optimizer from zero, which is why
+it is one attempt and why it is scoped to transport failures.
+
+Timing bounds do not help with this, and it is worth recording why, because the
+first fix assumed they would. If an idle stream were being reaped, a shorter
+maximum silence would prevent the reap. Two runs on 2026-08-01 falsified that:
+both sat through repeated 242s silences and then died during shorter ones, at
+104s and 188s. No single idle threshold is both above 242 and below 104.
+
 What still runs on that path is **artifact collection**: Harbor calls
 `_collect_artifacts` from `Trial._recover_outputs` too, and in the failed run it
 succeeded from the same sandbox moments after the stream died. So the compiled
