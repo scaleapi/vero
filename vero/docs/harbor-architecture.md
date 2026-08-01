@@ -72,6 +72,41 @@ Named volumes carry state between services: `agent_repo`, `agent_context`,
 6. Harbor collects `/logs` back to **`jobs/<timestamp>/<task>/`** on disk and
    reports the reward.
 
+### When step 5 never happens
+
+Step 5 runs in Harbor's *verifier phase*, and the verifier phase is not
+guaranteed. Harbor's agent phase swallows only `AgentTimeoutError` and
+`NonZeroAgentExitCodeError` (`harbor/trial/single_step.py`); anything else
+propagates past `await self._run_verifier()`. Two outer trials died on
+2026-07-31: the one that hit a provider budget limit raised
+`NonZeroAgentExitCodeError`, reached the verifier, and left the full
+`verifier/session.tar.gz`. The one that hit a Modal `grpclib`
+`StreamTerminatedError` at 71 minutes left nothing, discarding a candidate that
+had already scored 0.1224 on 49 validation cases.
+
+What still runs on that path is **artifact collection**: Harbor calls
+`_collect_artifacts` from `Trial._recover_outputs` too, and in the failed run it
+succeeded from the same sandbox moments after the stream died. So the compiled
+task declares a `[[verifier.collect]]` hook that runs `vero harbor
+archive-session` inside the sidecar, plus a matching `[[artifacts]]` entry, and
+the snapshot lands at **`<task>/artifacts/session-rescue.tar.gz`** on *every*
+terminal outcome. It is token-free and does not finalize, so it is safe to run
+during teardown.
+
+The rescue archive is the same format as `verifier/session.tar.gz` minus the
+files a finalize produces, so it carries `candidates/repository.git` (every
+candidate commit) and `database.json` (every evaluation and score). To recover a
+candidate from either one: `extract_harbor_session_archive`, then
+`git --git-dir=<session>/candidates/repository.git archive <sha>`. Re-scoring it
+against a benchmark's pinned baseline is
+`harness-engineering-bench/scripts/rescore_candidate.py --session <archive>`,
+which lives out of tree because it needs that benchmark's `build.yaml`.
+
+A true *resume* is not available and is not the goal here: the optimizer's
+working tree, its harness process, and its agent context all live in the Modal
+sandbox, which is torn down. What survives is every candidate the optimizer
+committed and every score it measured.
+
 ## The evaluation core
 
 - **`EvaluationEngine`** (`evaluation/engine.py`) runs every evaluation through a
@@ -190,7 +225,7 @@ honest*. Paths are under `vero/src/vero/` unless noted.
    `gateway/inference.py`; the session archive in `sidecar/session.py`.
 9. **Observability** — `runtime/wandb.py` (`SidecarWandbSink`).
 10. **The CLI glue** — `harbor/cli.py` (`vero harbor run`, `finalize`,
-    `export-session`, `score-baseline`).
+    `export-session`, `archive-session`, `score-baseline`).
 
 Tests mirror this order (`tests/test_v05_harbor_*.py`) and are a good
 executable spec for each layer.

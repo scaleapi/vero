@@ -129,6 +129,14 @@ records, budget state, the finalization result, and the producer trajectory —
 re-render it any time with `vero report`. Export failure fails the run rather
 than discarding the only durable copy.
 
+A run that *fails* never reaches the verifier phase, so it leaves none of that.
+For those, the compiled task also snapshots the session from a Harbor collect
+hook, which runs on every terminal outcome, leaving
+`artifacts/session-rescue.tar.gz` alongside the trial. Same archive format,
+minus the files a finalize produces, so the candidate repo and every evaluation
+score are still recoverable. See `docs/harbor-architecture.md`, "When step 5
+never happens".
+
 > **Security boundary.** The inference gateway protects *provider credentials*,
 > not the OS process. The pinned Harbor overlay and sidecar keep budget and
 > scoring trusted, but candidate code still runs inside the nested Harbor

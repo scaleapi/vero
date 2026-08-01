@@ -23,7 +23,11 @@ from vero.harbor import (
     compile_harbor_task,
     load_harbor_build_config,
 )
-from vero.harbor.build.compiler import GATEWAY_ROUTED_CREDENTIALS
+from vero.harbor.build.compiler import (
+    GATEWAY_ROUTED_CREDENTIALS,
+    SESSION_RESCUE_DESTINATION,
+    SESSION_RESCUE_TIMEOUT_SECONDS,
+)
 from vero.harbor.build.config import (
     _HARBOR_ONLY_FIELDS,
     _AgentWorkspaceFields,
@@ -70,6 +74,7 @@ def test_task_layout_values_are_pinned():
     assert LAYOUT.gateway_port == 8001
     # Derived paths, so a base and its children cannot drift apart.
     assert LAYOUT.session_dir == "/state/admin/session"
+    assert LAYOUT.session_rescue_archive == "/state/admin/session-rescue.tar.gz"
     assert LAYOUT.case_resources_dir == "/state/admin/case-resources"
     assert LAYOUT.token_path == "/state/token/admin.token"
     assert LAYOUT.inference_state == "/state/inference/usage.json"
@@ -1165,6 +1170,51 @@ def test_compiler_isolates_upstream_inference_credentials(tmp_path, monkeypatch)
     assert (output / "environment/gateway/Dockerfile").is_file()
 
 
+def test_compiled_task_rescues_the_session_outside_the_verifier_phase(tmp_path):
+    """A dead outer trial must still yield its candidates and evaluation records.
+
+    Regression for two outer trials that died on 2026-07-31. Harbor's agent phase
+    swallows only AgentTimeoutError and NonZeroAgentExitCodeError
+    (harbor/trial/single_step.py); the run that raised one of those reached the
+    verifier and left an 8.8M session.tar.gz, while the run that raised a Modal
+    grpclib StreamTerminatedError at 71 minutes skipped `_run_verifier` entirely
+    and left nothing, losing a candidate already scored at 0.1224 on 49 cases.
+    Collect hooks and artifact downloads run on both paths (Harbor calls
+    `_collect_artifacts` from `Trial._recover_outputs` too), so the snapshot has
+    to hang off those and not off tests/test.sh.
+    """
+
+    output = compile_harbor_task(
+        _config(tmp_path),
+        tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+
+    task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+
+    (hook,) = task["verifier"]["collect"]
+    assert hook["service"] == LAYOUT.sidecar_host
+    # Token-free and finalize-free: a collect hook runs during teardown, so it
+    # must not need the admin token or spend the finalization budget.
+    assert hook["command"] == "vero harbor archive-session"
+    assert "--token-file" not in hook["command"]
+    assert hook["timeout_sec"] == SESSION_RESCUE_TIMEOUT_SECONDS
+
+    (artifact,) = task["artifacts"]
+    # Collected from the sidecar's own filesystem, which the optimizer in `main`
+    # cannot write to.
+    assert artifact["service"] == LAYOUT.sidecar_host
+    assert artifact["source"] == LAYOUT.session_rescue_archive
+    assert artifact["destination"] == SESSION_RESCUE_DESTINATION
+    # A sibling of the session dir, never a child, or the verifier's own export
+    # would archive a copy of this one.
+    assert not artifact["source"].startswith(LAYOUT.session_dir + "/")
+
+    # tests/test.sh still owns the authoritative, post-finalization export. The
+    # rescue snapshot is additive, not a replacement.
+    assert "vero harbor export-session" in (output / "tests/test.sh").read_text()
+
+
 def test_compiler_uses_published_version_outside_a_source_checkout(
     tmp_path,
     monkeypatch,
@@ -1440,3 +1490,58 @@ def test_model_alias_tolerates_keys_a_given_launch_never_requests():
     ).model_dump(mode="json")["model_aliases"] == {
         "gpt-producer": "vendor_x/gpt-producer"
     }
+
+
+def test_harbor_itself_routes_the_rescue_hook_into_the_sidecar_collection_pass(
+    tmp_path,
+):
+    """The rescue only fires if Harbor's own parser files it under a sidecar.
+
+    The two preceding tests assert what we emit. This asserts what Harbor makes
+    of it, which is where the change can silently become a no-op:
+    `Trial._collect_artifacts_phased` starts the sidecar pass with
+    `if not sidecars: return`, so a hook that parses but lands under `main`, or
+    fails to parse into `verifier.collect` at all, would leave the failure path
+    behaving exactly as it did before while every emitted-config assertion still
+    passed.
+
+    Validating through Harbor's real `TaskConfig` rather than the raw TOML is
+    the point: it is the same model the runtime builds a trial from, so a field
+    Harbor renames or stops honouring surfaces here instead of in a dead run.
+    """
+    harbor_task_config = pytest.importorskip(
+        "harbor.models.task.config"
+    ).TaskConfig
+
+    output = compile_harbor_task(
+        _config(tmp_path),
+        tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+    raw = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    # The shared fixture's name carries quotes that Harbor's package-name rule
+    # rejects; irrelevant to collection, so normalise it rather than weaken the
+    # fixture other tests depend on.
+    raw["task"]["name"] = "org/optimize-program"
+
+    config = harbor_task_config.model_validate(raw)
+
+    sidecar_hooks = [
+        hook for hook in config.verifier.collect if hook.service != "main"
+    ]
+    assert sidecar_hooks, (
+        "no sidecar collect hook survived Harbor's parser, so the sidecar "
+        "collection pass short-circuits and a dead trial exports nothing"
+    )
+    (hook,) = sidecar_hooks
+    assert hook.service == LAYOUT.sidecar_host
+    assert hook.command == "vero harbor archive-session"
+    assert hook.timeout_sec == SESSION_RESCUE_TIMEOUT_SECONDS
+
+    sidecar_artifacts = [
+        artifact for artifact in config.artifacts if artifact.service != "main"
+    ]
+    assert sidecar_artifacts, "the rescue archive would never leave the sandbox"
+    (artifact,) = sidecar_artifacts
+    assert artifact.source == LAYOUT.session_rescue_archive
+    assert artifact.destination == SESSION_RESCUE_DESTINATION
