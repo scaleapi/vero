@@ -24,6 +24,25 @@ from vero.sidecar.verifier import VerificationSelection, VerificationTarget
 logger = logging.getLogger(__name__)
 
 
+def _fsync_path(path: Path) -> None:
+    """Flush a file or a directory entry, tolerating filesystems that refuse to.
+
+    Used on both halves of the archive publish: the archive itself, so its bytes
+    are on disk, and its parent directory, so the rename that made the final
+    name visible is on disk too.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 class HarborSessionManifest(StrictModel):
     """Trusted metadata needed to interpret an exported Harbor session."""
 
@@ -182,7 +201,19 @@ def create_harbor_session_archive(
                     "session/vero-export-skipped.json",
                     (json.dumps({"skipped": skipped}, indent=2) + "\n").encode("utf-8"),
                 )
+        # This archive is the only durable copy of a finished run, so getting the
+        # bytes as far as the page cache is not enough: a host that dies right
+        # after the export can publish the final name over an empty or truncated
+        # file, which is exactly the "the search work was unrecoverable" outcome
+        # the export exists to prevent. Flush the archive itself before the
+        # rename, then flush the parent directory after it so the rename that
+        # made the name visible is durable too. Both flushes swallow OSError for
+        # the same reason harbor/cli.py's _fsync_directory does: a filesystem
+        # that refuses the syscall would otherwise turn every export into a 500
+        # and lose the archive outright, which is worse than weaker durability.
+        _fsync_path(temporary)
         os.replace(temporary, output)
+        _fsync_path(output.parent)
     finally:
         temporary.unlink(missing_ok=True)
     if skipped:

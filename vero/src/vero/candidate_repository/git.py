@@ -137,6 +137,28 @@ class GitCandidateRepository(CandidateRepository[GitWorkspace]):
                 raise CandidateRepositoryError(
                     result.stderr or "failed to initialize candidate repository"
                 )
+
+        # A writer killed mid-transaction (the run that died in finalization was
+        # SIGKILLed while capturing a candidate) leaves a stale
+        # refs/vero/.../<name>.lock behind, and every later update-ref on that
+        # ref dies with "Unable to create ...: File exists" on a lock nobody
+        # holds, which is unrecoverable without a human deleting the file.
+        # Sweeping is only safe here and nowhere else: create() runs once while
+        # the session repository is being opened, before this process has any
+        # writer of its own, so a lock present at this instant is left over from
+        # a dead process. The same sweep on the capture path would be much worse
+        # than the bug, because it could delete the lock a concurrent writer is
+        # actively holding and let two ref updates clobber each other. For the
+        # same reason it stays inside refs/vero/candidates/, and not the whole of
+        # refs/vero/: the repository's own refs and packed-refs.lock are vero's to
+        # leave alone, and refs/vero/export/ and refs/vero/incoming/ are transient
+        # refs held by `vero session export` and its import counterpart, which run
+        # outside the session lock and so can genuinely be holding a live lock at
+        # the moment another process opens the repository.
+        candidate_refs = repository_path / "refs" / "vero" / "candidates"
+        for stale_lock in sorted(candidate_refs.rglob("*.lock")):
+            stale_lock.unlink(missing_ok=True)
+
         records_path.mkdir(parents=True, exist_ok=True)
         instance = cls(
             root=root,

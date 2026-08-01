@@ -3,17 +3,31 @@ set -eu
 
 if [ ! -d {{ layout.target_git }} ]; then
   cp -a {{ layout.seed_repo }}/. {{ layout.target_repo }}/
-fi
 {% if overlay_present %}
-# Inject baked-in workspace overlay (agent definitions, skills, config, ...).
-cp -a {{ layout.overlay }}/. {{ layout.target_repo }}/
+  # Inject baked-in workspace overlay (agent definitions, skills, config, ...).
+  # Inside the first-boot guard deliberately: this script is the main service's
+  # command, so Docker runs it again whenever it restarts a crashed container,
+  # and by then the workspace volume already holds the optimizer's own work.
+  # Re-copying the baked overlay over that silently reverted whatever it had
+  # changed under these paths.
+  cp -a {{ layout.overlay }}/. {{ layout.target_repo }}/
 {% endif %}
+fi
 
 find {{ layout.target_repo }} -path {{ layout.target_evals }} -prune -o -exec chown agent:agent {} +
 git config --system --add safe.directory {{ layout.target_repo }}
-printf '%s\n' '/.evals/' >> {{ layout.target_git_exclude }}
+# The same restart re-ran these appends, so every boot added another copy of the
+# same ignore lines and .git/info/exclude grew without bound for the life of a
+# run. grep -qxF asks for the exact line; on the very first boot it fails with a
+# missing-file error (hence the redirect of stderr) and the append below creates
+# the file, exactly as it did before.
+if ! grep -qxF '/.evals/' {{ layout.target_git_exclude }} 2>/dev/null; then
+  printf '%s\n' '/.evals/' >> {{ layout.target_git_exclude }}
+fi
 {% for path in overlay_excludes %}
-printf '%s\n' '/{{ path }}/' >> {{ layout.target_git_exclude }}
+if ! grep -qxF '/{{ path }}/' {{ layout.target_git_exclude }} 2>/dev/null; then
+  printf '%s\n' '/{{ path }}/' >> {{ layout.target_git_exclude }}
+fi
 {% endfor %}
 {% if inference_gateway %}
 # Codex otherwise treats the built-in OpenAI provider as WebSocket-capable.

@@ -6,8 +6,11 @@ import base64
 import hashlib
 import importlib.resources
 import json
+import logging
 import mimetypes
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,28 +22,47 @@ from vero.runtime.session import SessionManifest
 from vero.sidecar.session import HarborSessionManifest
 from vero.sidecar.verifier import VerificationResult
 
+logger = logging.getLogger(__name__)
+
 _MAX_EMBEDDED_ARTIFACT_BYTES = 5_000_000
 _MAX_EMBEDDED_ARTIFACTS_BYTES = 50_000_000
 _MAX_DIFF_CHARACTERS = 500_000
 
 
-def _read_events(path: Path) -> list[dict[str, Any]]:
+def _read_events(path: Path) -> tuple[list[dict[str, Any]], int]:
+    """Read the session event log, tolerating a torn tail.
+
+    A run that is SIGKILLed mid-append leaves a half-written last line in
+    events.jsonl, and report generation is what session export calls, so raising
+    on that one torn line used to throw away the entire export including the
+    winning candidate. Skip whatever cannot be parsed instead, log it so the loss
+    is visible, and return the count alongside the events so the report can say
+    how many records went missing. Decoding replaces invalid bytes rather than
+    raising for the same reason: a SIGKILL in the middle of a multi-byte
+    character must cost one event, not the whole session.
+    """
     if not path.is_file():
-        return []
+        return [], 0
     events: list[dict[str, Any]] = []
+    skipped = 0
     for line_number, line in enumerate(
-        path.read_text(encoding="utf-8").splitlines(), 1
+        path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
     ):
         if not line.strip():
             continue
         try:
             event = RuntimeEvent.model_validate_json(line)
         except Exception as error:
-            raise ValueError(
-                f"invalid runtime event on line {line_number}: {error}"
-            ) from error
+            skipped += 1
+            logger.warning(
+                "Skipping corrupt runtime event on line %d of %s: %s",
+                line_number,
+                path,
+                error,
+            )
+            continue
         events.append(event.model_dump(mode="json"))
-    return events
+    return events, skipped
 
 
 def _git_diff(
@@ -329,7 +351,7 @@ async def _build_report_data(
         item["artifacts"] = artifacts
         evaluation_data.append(item)
 
-    events = _read_events(session_dir / "events.jsonl")
+    events, skipped_event_lines = _read_events(session_dir / "events.jsonl")
     return {
         "schema_version": 1,
         "generated_from": str(session_dir),
@@ -337,6 +359,10 @@ async def _build_report_data(
         "candidates": candidate_data,
         "evaluations": evaluation_data,
         "events": events,
+        # Carry the torn-line count into the payload so a report built from a
+        # SIGKILLed session admits that its timeline has holes instead of quietly
+        # presenting a truncated history as complete.
+        "skipped_event_lines": skipped_event_lines,
         "traces": traces,
     }
 
@@ -524,6 +550,36 @@ async def generate_experiment_report(
     )
     html = template.replace("__VERO_REPORT_DATA__", _safe_json(data))
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(html, encoding="utf-8")
+    # Writing the document in place truncated experiment.html first, so a death
+    # part-way through the write left a half-written report that a browser renders
+    # as a blank page while looking, to every later reader, like the export
+    # succeeded. Stage the whole document in a sibling temporary file and rename it
+    # over the destination, so the destination only ever holds a complete report
+    # and a previous good report survives a failed regeneration.
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        handle = os.fdopen(descriptor, "w", encoding="utf-8")
+    except BaseException:
+        # The only window where the raw descriptor is still ours to close: after
+        # os.fdopen succeeds the file object owns it and the with-block below
+        # closes it exactly once, so closing it again from a shared failure path
+        # would be a double close, and a second close can land on an unrelated
+        # descriptor that has since been handed the same number.
+        os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        raise
+    try:
+        with handle:
+            handle.write(html)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
     return destination
 

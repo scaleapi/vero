@@ -432,6 +432,14 @@ class HarborBackend:
         cache = Path(configured_cache)
         if not (cache / "index.json").is_file():
             cache.parent.mkdir(parents=True, exist_ok=True)
+            # Deliberately still an mkdtemp and not a deterministic sibling. A
+            # stable staging path would let a retry reclaim the tree a killed
+            # attempt abandoned, which is the idempotent thing to want, but it
+            # also means two processes over one configured cache path would
+            # rmtree each other's staging tree mid-materialization. mkdtemp is
+            # what keeps them apart, and losing a case-resource tree under
+            # another process's feet is a worse failure than leaving a stale
+            # `.<partition>.XXXXXXXX` directory behind to be swept later.
             temporary = Path(
                 tempfile.mkdtemp(
                     dir=cache.parent,
@@ -923,7 +931,24 @@ class HarborBackend:
                         text = payload.decode("utf-8")
                         sanitized = sanitize_text(text, self._secrets())
                         if sanitized != text:
-                            resolved.write_text(sanitized, encoding="utf-8")
+                            # Write a sibling and rename over the trial file. The
+                            # in-place write truncated the record first, so a crash
+                            # (or a full disk) part way through left a trial that
+                            # was neither the original nor the redacted version,
+                            # and the original was already unrecoverable. The
+                            # rename is atomic, so whoever reads the record next
+                            # sees exactly one of the two.
+                            redacting = resolved.with_name(
+                                f".{resolved.name}.vero-redacting"
+                            )
+                            redacting.write_text(sanitized, encoding="utf-8")
+                            # Carry the record's own mode over, which the in-place
+                            # write kept for free. The agent context copies these
+                            # files in and only ever strips write bits from them,
+                            # so a redacted trial left at this process's umask
+                            # could become one the optimizer cannot read.
+                            shutil.copymode(resolved, redacting)
+                            os.replace(redacting, resolved)
                 except (OSError, UnicodeDecodeError):
                     pass
                 media_type = mimetypes.guess_type(resolved.name)[0]
@@ -1532,16 +1557,51 @@ class HarborBackend:
                             "provisioning; check that every ancestor directory is "
                             "traversable by the dropped user"
                         )
-                result = await context.workspace.sandbox.run(
-                    command,
-                    cwd=context.workspace.project_path,
-                    timeout=request.limits.timeout_seconds,
-                    env=self._environment(
-                        context.evaluation_id, finalization=context.finalization
-                    ),
-                    run_as=self.config.harness_user,
-                )
-                await staging.download("jobs", attempt_jobs_dir)
+                sub_run_completed = False
+                try:
+                    result = await context.workspace.sandbox.run(
+                        command,
+                        cwd=context.workspace.project_path,
+                        timeout=request.limits.timeout_seconds,
+                        env=self._environment(
+                            context.evaluation_id, finalization=context.finalization
+                        ),
+                        run_as=self.config.harness_user,
+                    )
+                    sub_run_completed = True
+                finally:
+                    # Salvage whatever trials the sub-run did finish before it
+                    # died. This download used to sit after the run, so anything
+                    # that raised (a sandbox that went away, or the cancellation
+                    # quiesce_agent_evaluations delivers at finalization) skipped
+                    # it and the staging area's teardown a few lines below deleted
+                    # the only copy of the completed trials: exactly the evidence
+                    # needed to diagnose the failure, and exactly the work a
+                    # resume would want to reuse. Shielded so a cancelled task
+                    # still gets them off the sandbox. The cost is that a failed
+                    # sub-run now pays one extra copy off the sandbox.
+                    try:
+                        await asyncio.shield(staging.download("jobs", attempt_jobs_dir))
+                    except BaseException:
+                        if sub_run_completed:
+                            # Nothing is unwinding, so this is the same download
+                            # failure that always propagated from here.
+                            raise
+                        # A salvage that fails on its own must never replace the
+                        # sub-run's own failure: a dead sandbox fails this copy
+                        # too, and that error is the symptom, not the cause the
+                        # caller needs to see. BaseException and not Exception
+                        # because the failure being unwound is very often a
+                        # cancellation, and a second cancellation delivered while
+                        # this await is parked would otherwise raise CancelledError
+                        # out of the `finally` and take the sub-run's own error
+                        # with it. Swallowing it here does not lose the cancel:
+                        # the task stays in its cancelling state and the next
+                        # await in the caller sees it again.
+                        logger.warning(
+                            "unable to salvage Harbor trials from a failed sub-run",
+                            exc_info=True,
+                        )
             stdout = self.sanitize_error(result.stdout)
             stderr = self.sanitize_error(result.stderr)
             attempts.append((result, stdout, stderr))

@@ -78,6 +78,16 @@ INFERENCE_GATEWAY_URL = LAYOUT.gateway_url
 # harbor/deployment.py's own default.
 DEFAULT_EVALUATION_DRAIN_SECONDS = 600.0
 
+# Author and committer date of the baseline commit. Pinned rather than left to
+# the wall clock because that commit's sha is an identity, not a timestamp: it
+# is written into the Harbor session manifest as selection.baseline_version, and
+# the sidecar refuses to come up against a preserved session whose manifest
+# disagrees. With the date unpinned, recompiling a byte-identical baseline tree
+# produced a different sha every time, so a recompile could never be brought up
+# against durable state and hours of search work had nothing to resume from.
+# Nobody reads this date; the value only has to be constant.
+BASELINE_COMMIT_DATE = "2000-01-01T00:00:00+00:00"
+
 
 def _backend_id(partition: str) -> str:
     return f"harbor-{partition}"
@@ -182,6 +192,19 @@ def _prepare_baseline_repo(
             check=True,
             capture_output=True,
             text=True,
+            # The identity is pinned above so the commit does not depend on the
+            # host's git config; the two dates are pinned here for the same
+            # reason, and they matter more. Git folds both into the commit
+            # object, so leaving them to `now` (or to whatever the caller
+            # happened to export) made the returned sha differ on every compile
+            # of identical content. That sha is selection.baseline_version in
+            # the session manifest, an identity used to match a resumed run
+            # against its preserved session, not a timestamp anyone reads.
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": BASELINE_COMMIT_DATE,
+                "GIT_COMMITTER_DATE": BASELINE_COMMIT_DATE,
+            },
         )
         return result.stdout.strip()
 
@@ -520,6 +543,46 @@ def _render(template: str, destination: Path, **context) -> None:
     )
 
 
+def _previous_gateway_tokens(output: Path) -> tuple[str, str, str] | None:
+    """The producer, evaluation and finalization tokens of the compile already
+    sitting in this output directory, or None when they cannot all be recovered.
+
+    Re-minting the three tokens on every compile is what made a recompile
+    un-resumable: the two evaluation tokens are part of the Harbor backend
+    config, that config is hashed into the backend provenance the session
+    manifest pins, so fresh tokens mean a fresh digest and the sidecar refuses to
+    come up against the preserved session even though nothing about the
+    evaluation changed. The tradeoff of reusing them is that a token then
+    outlives the single compile that minted it on this host; that is bounded by
+    the per-run scoped volume the compiled tree lives in, which dies with the
+    run. All three or none: reusing a subset changes the digest anyway.
+    """
+    launch = output / "environment/gateway/launch.json"
+    serve = output / "environment/sidecar/serve.json"
+    if not launch.is_file() or not serve.is_file():
+        return None
+    try:
+        producer = json.loads(launch.read_text(encoding="utf-8"))["producer_api_key"]
+        # Every harbor backend in a compile carries the same pair, so the first
+        # one is enough. A command-backend compile never writes them at all, and
+        # that build simply re-mints: there is nothing on disk to match.
+        backend = next(
+            iter(json.loads(serve.read_text(encoding="utf-8"))["backends"].values())
+        )
+        tokens = (
+            producer,
+            backend["inference_gateway_token"],
+            backend["inference_gateway_finalization_token"],
+        )
+    except (AttributeError, KeyError, StopIteration, TypeError, ValueError):
+        # A half-written or differently shaped previous compile is not an error
+        # here, it just means this compile mints its own tokens.
+        return None
+    if not all(isinstance(token, str) and token for token in tokens):
+        return None
+    return tokens[0], tokens[1], tokens[2]
+
+
 def compile_harbor_task(
     config: HarborBuildConfig,
     output_dir: Path | str,
@@ -539,8 +602,19 @@ def compile_harbor_task(
         task_source_path = Path(config.task_source)
         if task_source_path.exists():
             protected.append(task_source_path.resolve())
+    # Everything is written into a sibling .partial directory and swapped into
+    # place at the very end (see the rename below), so a compile that dies
+    # halfway can no longer leave a half-built tree in `output` that the next
+    # step reads as complete.
+    staging = output.parent / f"{output.name}.partial"
     for path in protected:
         if output == path or output.is_relative_to(path) or path.is_relative_to(output):
+            raise ValueError(
+                f"output directory {output} overlaps protected source {path}"
+            )
+        # The staging directory is wiped before use, so a protected source living
+        # inside it has to be rejected here for the same reason.
+        if staging == path or path.is_relative_to(staging):
             raise ValueError(
                 f"output directory {output} overlaps protected source {path}"
             )
@@ -578,9 +652,12 @@ def compile_harbor_task(
             raise ValueError(
                 "declared task credentials are missing: " + ", ".join(missing)
             )
-    if output.exists():
-        shutil.rmtree(output)
-    environment_dir = output / "environment"
+    # A leftover .partial is the corpse of an earlier failed compile, not state
+    # anyone resumes from, so it is cleared rather than reused. `output` itself is
+    # left alone until the swap.
+    if staging.exists():
+        shutil.rmtree(staging)
+    environment_dir = staging / "environment"
     sidecar_dir = environment_dir / "sidecar"
     gateway_dir = environment_dir / "gateway"
     environment_dir.mkdir(parents=True)
@@ -646,15 +723,31 @@ def compile_harbor_task(
             Path(config.task_source),
             sidecar_dir / "task-source",
         )
-    producer_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
+    # Reuse the previous compile's tokens when recompiling into an output
+    # directory that already holds them, because minting new ones moves the
+    # backend config digest the session manifest pins and so locks a recompile
+    # out of its own preserved session. Read from `output`, which is still the
+    # last complete compile at this point: this one is being built in `staging`
+    # and does not land until the swap at the end.
+    previous_tokens = (
+        _previous_gateway_tokens(output)
+        if config.inference_gateway is not None
+        else None
     )
-    evaluation_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
-    )
-    finalization_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
-    )
+    if config.inference_gateway is None:
+        producer_inference_token = None
+        evaluation_inference_token = None
+        finalization_inference_token = None
+    elif previous_tokens is not None:
+        (
+            producer_inference_token,
+            evaluation_inference_token,
+            finalization_inference_token,
+        ) = previous_tokens
+    else:
+        producer_inference_token = generate_inference_token()
+        evaluation_inference_token = generate_inference_token()
+        finalization_inference_token = generate_inference_token()
     deployment = _deployment_config(
         config,
         baseline_version=baseline,
@@ -808,8 +901,8 @@ def compile_harbor_task(
         "overlay_present": overlay_present,
         "overlay_excludes": overlay_excludes,
     }
-    _render("task.toml.j2", output / "task.toml", **context)
-    _render("instruction.md.j2", output / "instruction.md", **context)
+    _render("task.toml.j2", staging / "task.toml", **context)
+    _render("instruction.md.j2", staging / "instruction.md", **context)
     _render("Dockerfile.main.j2", environment_dir / "Dockerfile", **context)
     _render(
         "Dockerfile.sidecar.j2",
@@ -828,13 +921,22 @@ def compile_harbor_task(
         **context,
     )
     _render("seed.sh.j2", environment_dir / "main/seed.sh", **context)
-    _render("test.sh.j2", output / "tests/test.sh", **context)
-    _render("solve.sh.j2", output / "solution/solve.sh", **context)
+    _render("test.sh.j2", staging / "tests/test.sh", **context)
+    _render("solve.sh.j2", staging / "solution/solve.sh", **context)
     for script in (
         environment_dir / "main/seed.sh",
-        output / "tests/test.sh",
-        output / "solution/solve.sh",
+        staging / "tests/test.sh",
+        staging / "solution/solve.sh",
     ):
         script.chmod(0o755)
+    # The tree is complete, so swap it in. Only here is the previous compile
+    # dropped, which is the whole point: until this line a crash leaves the last
+    # known-good tree in place instead of a plausible-looking ruin. The cost is
+    # peak disk, both compiles exist side by side for the duration of the rename,
+    # so a build that bakes a large task source or vero checkout needs room for
+    # two of them.
+    if output.exists():
+        shutil.rmtree(output)
+    staging.rename(output)
     logger.info("Compiled Harbor task at %s from baseline %s", output, baseline)
     return output

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -207,10 +208,20 @@ class WandbEventSink:
             evaluation_id = str(payload["evaluation_id"])
             if evaluation_id in self.logged_evaluations:
                 return
-            self.run.log(payload, step=self.next_step)
-            self.logged_evaluations.add(evaluation_id)
+            # Persist the step before spending it. The old order logged at
+            # `next_step` and only then wrote state, so a process killed inside
+            # that window came back believing the step was still free and handed
+            # W&B a step it had already used: the two points collide on one x
+            # value and the history is unreadable exactly where the crash was.
+            # This is deliberately at-most-once now -- a crash between the write
+            # and the log loses this telemetry point instead of duplicating one,
+            # and for a live-watch series a missing point is much the cheaper
+            # failure than a colliding one.
+            step = self.next_step
             self.next_step += 1
+            self.logged_evaluations.add(evaluation_id)
             self._save_state()
+            self.run.log(payload, step=step)
             return
         if event.kind == "session_completed":
             self.run.summary.update(event.payload)
@@ -268,6 +279,14 @@ class SidecarWandbSink:
         self.log_traces = log_traces
         self.artifacts = ArtifactStore(session_dir / "artifacts")
         self.state_path = "wandb/state.json"
+        # The telemetry poller calls log_inference_usage/ship_request_logs from a
+        # worker thread (`asyncio.to_thread`) while the evaluation listener calls
+        # __call__ on the loop thread, so the two genuinely interleave rather
+        # than merely looking like they might. Every mutate-then-save body below
+        # runs under this lock: without it one caller can read `next_step`, be
+        # descheduled, and let the other spend the same step, or a save can
+        # serialize a half-updated view and drop the other caller's mutation.
+        self._lock = threading.Lock()
         stored_run_id = None
         if self.artifacts.path(self.state_path).exists():
             state = self.artifacts.read_json(self.state_path)
@@ -275,11 +294,17 @@ class SidecarWandbSink:
             self.next_step = int(state.get("next_step", len(self.logged_evaluations)))
             stored_run_id = state.get("run_id")
             self._shipped_request_logs = dict(state.get("request_log_files", {}))
+            # The gateway usage ledger is the dedupe key for inference telemetry,
+            # and holding it only in memory meant a sidecar restart forgot which
+            # counters it had already sent: the resumed run re-logged an
+            # identical point at a fresh step and could not say what cumulative
+            # usage it had reported. It resumes from state.json like the rest.
+            self._last_inference_usage = dict(state.get("inference_usage", {}))
         else:
             self.logged_evaluations: set[str] = set()
             self.next_step = 0
             self._shipped_request_logs: dict[str, int] = {}
-        self._last_inference_usage: dict[str, Any] = {}
+            self._last_inference_usage: dict[str, Any] = {}
         # Cumulative evaluation outcomes, keyed "<partition>/<principal>".
         # `diagnostics` below is a last-value field, so it can only ever answer
         # "has at least one evaluation been terminated", never "how many" -- and
@@ -324,6 +349,7 @@ class SidecarWandbSink:
                 "next_step": self.next_step,
                 "run_id": self.run_id,
                 "request_log_files": self._shipped_request_logs,
+                "inference_usage": self._last_inference_usage,
             },
         )
 
@@ -446,12 +472,20 @@ class SidecarWandbSink:
                 value = usage.get(key)
                 if isinstance(value, (int, float)):
                     payload[f"inference/{name}/{key}"] = value
-        if not payload or payload == self._last_inference_usage:
-            return
-        self.run.log(payload, step=self.next_step)
-        self.next_step += 1
-        self._last_inference_usage = payload
-        self._save_state()
+        # The poller thread shares `next_step` and state.json with the evaluation
+        # listener on the loop thread, so the mutate-then-save body is serialized.
+        with self._lock:
+            if not payload or payload == self._last_inference_usage:
+                return
+            # Persist the step before spending it, as in __call__: at-most-once,
+            # so a crash between the write and the log drops this usage point
+            # rather than leaving a resumed process to reuse a step W&B has
+            # already been given.
+            step = self.next_step
+            self.next_step += 1
+            self._last_inference_usage = payload
+            self._save_state()
+            self.run.log(payload, step=step)
 
     def ship_request_logs(self, directory: Path, *, final: bool = False) -> None:
         """Upload the gateway's rotated request-log files as one W&B artifact.
@@ -466,29 +500,52 @@ class SidecarWandbSink:
         if not files:
             return
         snapshot = {path.name: path.stat().st_size for path in files}
-        if snapshot == self._shipped_request_logs:
-            return
+        # Same shared-state lock as the other mutate-then-save bodies, but held
+        # only around the bookkeeping and never across the upload. log_artifact
+        # is a file transfer, and __call__ waits on this same lock from the
+        # sidecar's event loop, so spanning the upload would let a slow W&B
+        # transfer stall the thing that answers the agent's requests. Leaving the
+        # upload outside keeps the order at-least-once: a crash between shipping
+        # and saving re-ships next poll, and W&B folds byte-identical content
+        # into one artifact version, so a duplicate costs nothing while a lost
+        # request log cannot be recovered.
+        with self._lock:
+            if snapshot == self._shipped_request_logs:
+                return
         artifact = self._wandb.Artifact(
             name="inference-requests", type="inference_request_log"
         )
         for path in files:
             artifact.add_file(str(path), name=path.name)
         self.run.log_artifact(artifact)
-        self._shipped_request_logs = snapshot
-        self._save_state()
+        with self._lock:
+            self._shipped_request_logs = snapshot
+            self._save_state()
 
     def __call__(self, record: EvaluationRecord) -> None:
-        if record.id in self.logged_evaluations:
-            return
-        self.run.log(self._payload(record), step=self.next_step)
-        if self.log_traces:
-            try:
-                self._log_trace(record)
-            except Exception:  # tracing must never drop the metric log
-                pass
-        self.logged_evaluations.add(record.id)
-        self.next_step += 1
-        self._save_state()
+        # Runs on the loop thread while the telemetry poller mutates the same
+        # counters from its worker thread, so hold the lock across the whole body.
+        with self._lock:
+            if record.id in self.logged_evaluations:
+                return
+            payload = self._payload(record)
+            # Persist the step before spending it. Logging first and saving
+            # afterwards meant a kill inside that window brought the sidecar back
+            # thinking the step was unused, and it then re-sent this evaluation on
+            # a step W&B already holds a point for, so the two collide. Written
+            # this way the window is deliberately at-most-once: a crash here
+            # loses this evaluation's point rather than duplicating one, and a
+            # gap in the series is the cheaper of the two failures.
+            step = self.next_step
+            self.next_step += 1
+            self.logged_evaluations.add(record.id)
+            self._save_state()
+            self.run.log(payload, step=step)
+            if self.log_traces:
+                try:
+                    self._log_trace(record)
+                except Exception:  # tracing must never drop the metric log
+                    pass
 
     def finish(
         self,

@@ -192,6 +192,10 @@ class CanonicalVerifier:
     def submission_path(self) -> Path:
         return self.admin_volume / "submission.json"
 
+    @property
+    def baseline_path(self) -> Path:
+        return self.admin_volume / "baseline.json"
+
     def _try_load_submission(self) -> Candidate | None:
         if not self.submission_path.exists():
             return None
@@ -492,6 +496,17 @@ class CanonicalVerifier:
                 target_values.append(None if error is not None else reward)
             targets[target.reward_key] = _aggregate(target_values)
         result["targets"] = targets
+        # Persist the aggregate before returning it. The HTTP response used to be
+        # the only copy, so a dropped connection threw away every replicate and
+        # the whole measurement had to be paid for again, which on a held-out
+        # partition is the most expensive scoring a run does. This is a record of
+        # what was measured, not a cache: nothing reads it back to skip work, so
+        # a re-measurement still runs and simply overwrites it.
+        await asyncio.to_thread(
+            _atomic_write_json,
+            self.baseline_path,
+            result,
+        )
         return result
 
     async def _finalize(self) -> VerificationResult:
