@@ -1450,3 +1450,58 @@ def test_unresolvable_path_task_source_names_the_missing_data(tmp_path):
     with pytest.raises(ValidationError, match="explicit version"):
         case("unpinned", task_source="gaia/gaia")
     case("pinned", task_source="gaia/gaia@sha256:abc123")
+
+
+def test_harbor_itself_routes_the_rescue_hook_into_the_sidecar_collection_pass(
+    tmp_path,
+):
+    """The rescue only fires if Harbor's own parser files it under a sidecar.
+
+    The two preceding tests assert what we emit. This asserts what Harbor makes
+    of it, which is where the change can silently become a no-op:
+    `Trial._collect_artifacts_phased` starts the sidecar pass with
+    `if not sidecars: return`, so a hook that parses but lands under `main`, or
+    fails to parse into `verifier.collect` at all, would leave the failure path
+    behaving exactly as it did before while every emitted-config assertion still
+    passed.
+
+    Validating through Harbor's real `TaskConfig` rather than the raw TOML is
+    the point: it is the same model the runtime builds a trial from, so a field
+    Harbor renames or stops honouring surfaces here instead of in a dead run.
+    """
+    harbor_task_config = pytest.importorskip(
+        "harbor.models.task.config"
+    ).TaskConfig
+
+    output = compile_harbor_task(
+        _config(tmp_path),
+        tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+    raw = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    # The shared fixture's name carries quotes that Harbor's package-name rule
+    # rejects; irrelevant to collection, so normalise it rather than weaken the
+    # fixture other tests depend on.
+    raw["task"]["name"] = "org/optimize-program"
+
+    config = harbor_task_config.model_validate(raw)
+
+    sidecar_hooks = [
+        hook for hook in config.verifier.collect if hook.service != "main"
+    ]
+    assert sidecar_hooks, (
+        "no sidecar collect hook survived Harbor's parser, so the sidecar "
+        "collection pass short-circuits and a dead trial exports nothing"
+    )
+    (hook,) = sidecar_hooks
+    assert hook.service == LAYOUT.sidecar_host
+    assert hook.command == "vero harbor archive-session"
+    assert hook.timeout_sec == SESSION_RESCUE_TIMEOUT_SECONDS
+
+    sidecar_artifacts = [
+        artifact for artifact in config.artifacts if artifact.service != "main"
+    ]
+    assert sidecar_artifacts, "the rescue archive would never leave the sandbox"
+    (artifact,) = sidecar_artifacts
+    assert artifact.source == LAYOUT.session_rescue_archive
+    assert artifact.destination == SESSION_RESCUE_DESTINATION
