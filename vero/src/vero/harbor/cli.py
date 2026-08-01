@@ -238,26 +238,33 @@ OPENCODE_STEP_LIMIT = 1000
 _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 
 # How long a dropped Modal stdio stream keeps trying to reconnect before the
-# trial dies, and how often.
+# trial dies, and how often. These pace a budget that `_stream_patch` first has
+# to make per-outage; read that module's docstring before touching them.
 #
 # Harbor reads a whole agent phase through one Modal stdio stream, and Modal
-# budgets reconnects per *stream*: `stream_stdio_max_retries` is 10 for the life
-# of the stream and is never replenished, because a successful chunk resets only
-# the backoff delay. Shipped as 0.01s with a doubling factor, those ten attempts
-# are spent in 10.23 seconds, so a multi-hour run is protected against ten
-# seconds of network trouble and the next drop is fatal whenever it lands. Two
-# cells died that way on 2026-07-31 and 2026-08-01.
+# budgets reconnects for the LIFE of that stream: `stream_stdio_max_retries` is
+# set once above the read loop and never replenished, because a successful chunk
+# resets only the backoff delay (modal 1.5.3,
+# `_utils/task_command_router_client.py:769` and :801-802). A measured optimizer
+# phase held one stream open for 3h19m, so unrelated blips hours apart draw down
+# the same counter and the drop that kills the trial is rarely the one that
+# earned it. Shipped as 10 attempts at 0.01s doubling, the whole budget is also
+# spent in 10.23 seconds of continuous outage. Two cells died that way on
+# 2026-07-31 and 2026-08-01.
 #
-# A flat delay rather than a doubling one, because the count is not the useful
-# knob: with a factor of 2 the sleeps outgrow the run by roughly the seventeenth
-# attempt, so raising the count alone converts a crash into a hang. Flat keeps
-# every gap short and makes the tolerated outage the simple product below.
+# Raising the count was the first fix and it was the wrong one: any finite
+# lifetime cap is the wrong shape for an hours-long stream, and with a factor of
+# 2 the sleeps outgrow the run by roughly the seventeenth attempt, so a higher
+# count alone converts a crash into a hang. `_stream_patch` now makes the count
+# reset per successful chunk, which is what the delay already did. The flat
+# factor stays: it keeps every gap short and makes the window below a product.
 #
-# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is capped by how much stdout the worker
-# keeps available for a reconnect at a byte offset. Past that the reconnect does
-# not fail cleanly, it resumes past the retained span, so output goes missing
-# instead of the run dying. Waiting longer would therefore be worse than dying,
-# which is what bounds this and not the length of a typical outage.
+# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is therefore how long ONE outage may last
+# before the trial dies. It is capped by how much stdout the worker keeps
+# available for a reconnect at a byte offset. Past that the reconnect does not
+# fail cleanly, it resumes past the retained span, so output goes missing instead
+# of the run dying. Waiting longer would be worse than dying, which is what
+# bounds this and not the length of a typical outage.
 #
 # The retained span is measured in BYTES, not seconds, so the safe window in
 # seconds scales inversely with how chatty the harness is. Probed against live
@@ -267,6 +274,14 @@ _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 # on the rate. Re-measure before raising this, and treat a much noisier harness
 # as a reason to lower it.
 #
+# 120s is kept rather than lowered now that it is spent per outage rather than
+# once per stream, because the bound is bytes retained across a single gap and
+# that bound did not move: what changed is how often the window is available, not
+# how wide one gap may safely be. The alternative to riding out a gap is losing a
+# multi-hour phase to the outer-trial retry, which prices 42 KB of exposure as
+# cheap. Lower this if a harness is chattier than the ~350 B/s measured, since
+# that, not the elapsed seconds, is what overruns the buffer.
+#
 # Note what this value is NOT: evidence that 120s covers real outages. Nothing
 # here measures how long a drop actually lasts. It is the largest window that is
 # safe, and the outer-trial retry remains the backstop past it.
@@ -275,11 +290,14 @@ MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 120
 MODAL_STREAM_RECONNECT_FACTOR = 1.0
 
 # Directory holding the `sitecustomize` that applies the above inside the harbor
-# subprocess. Modal exposes these three only as constructor keywords that
-# `TaskCommandRouterClient._connect` never forwards, and `modal/config.py` has no
-# entry for them, so there is no supported path: not an argument, not an
-# environment variable. PYTHONPATH plus `sitecustomize` is the seam that reaches
-# a dependency's defaults without vendoring it.
+# subprocess, and that makes the budget per-outage. Modal exposes these three
+# only as constructor keywords that `TaskCommandRouterClient._connect` never
+# forwards, and `modal/config.py` has no entry for them, so there is no supported
+# path: not an argument, not an environment variable. PYTHONPATH plus
+# `sitecustomize` is the seam that reaches a dependency's defaults without
+# vendoring it. The per-outage reset is not reachable that way at all, since it
+# lives inside the method body, so that half recompiles modal's own source after
+# checking its shape; the module's docstring is explicit about the cost.
 _STREAM_PATCH_DIRECTORY = Path(__file__).parent / "_stream_patch"
 
 
