@@ -28,7 +28,10 @@ from vero.models import StrictModel
 from vero.runtime.artifacts import ArtifactStore
 from vero.sandbox import LocalSandbox
 from vero.sidecar.serve import SidecarComponents
-from vero.sidecar.session import initialize_harbor_session_manifest
+from vero.sidecar.session import (
+    initialize_harbor_session_manifest,
+    restore_harbor_session_archive,
+)
 from vero.sidecar.sidecar import EvaluationSidecar, SidecarEvaluationPolicy
 from vero.sidecar.transport import GitCandidateTransport
 from vero.sidecar.verifier import (
@@ -123,6 +126,10 @@ class HarborDeploymentConfig(StrictModel):
     agent_repo_path: str
     session_dir: str
     session_id: str = "trial"
+    # A previous run's exported session, baked into the sidecar image, restored
+    # into session_dir on first boot. Absent by default: a relaunch starts clean
+    # unless the operator named an archive on the command line.
+    session_seed_archive: str | None = None
     backends: dict[str, DeploymentBackendConfig]
     access_policies: list[SidecarEvaluationPolicy]
     budgets: list[EvaluationBudget] = Field(default_factory=list)
@@ -176,7 +183,11 @@ class HarborDeploymentConfig(StrictModel):
             raise ValueError("deployment paths must be absolute")
         return value
 
-    @field_validator("inference_usage_path", "inference_request_log_dir")
+    @field_validator(
+        "inference_usage_path",
+        "inference_request_log_dir",
+        "session_seed_archive",
+    )
     @classmethod
     def validate_optional_file_path(cls, value: str | None) -> str | None:
         if value is not None:
@@ -271,6 +282,15 @@ async def build_harbor_components(config: dict) -> SidecarComponents:
     parsed = HarborDeploymentConfig.model_validate(config)
     session_dir = Path(parsed.session_dir)
     session_dir.mkdir(parents=True, exist_ok=True)
+    # Before anything reads the session dir. Every consumer below it -- the
+    # candidate repository, the evaluation database, the budget ledger, the
+    # agent's disclosure ledger -- opens what is on disk and reuses it if it is
+    # there, so seeding here is the whole of the restore: no consumer needs to
+    # know a resume happened. Missing archive is fatal rather than ignored: the
+    # operator asked for a resume, and silently starting a fresh multi-hour run
+    # instead is the failure this exists to prevent.
+    if parsed.session_seed_archive is not None:
+        restore_harbor_session_archive(parsed.session_seed_archive, session_dir)
     # The session dir holds the trusted state — held-out evaluation records and
     # scores, the budget ledger, and every candidate's code. Lock it to the
     # owning (trusted) user so the unprivileged harness that executes candidate

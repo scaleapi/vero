@@ -38,6 +38,10 @@ class TaskLayout:
         harness: The scoring program, for a command backend.
         overlay: Host files baked into the optimizer's workspace.
         serve_config: The trusted deployment config, root-only.
+        session_seed_archive: A previously exported session, baked in so a
+            relaunch can restore it. Root-only for the same reason as
+            serve_config and the case lists: it carries database.json, whose
+            per-case records disclose held-out membership and scores.
         seed_script: Script that seeds the target repo on first boot.
         inference_config: The gateway's scope config.
         agent_volume: The optimizer's context directory, written by the sidecar.
@@ -63,6 +67,7 @@ class TaskLayout:
     harness: str = "/opt/harness"
     overlay: str = "/opt/overlay"
     serve_config: str = "/opt/serve.json"
+    session_seed_archive: str = "/opt/session-seed.tar.gz"
     seed_script: str = "/opt/seed.sh"
     inference_config: str = "/opt/inference.json"
     agent_volume: str = "/state/agent-context"

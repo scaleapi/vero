@@ -1270,7 +1270,7 @@ def test_run_command_forwards_agent_env_as_harbor_ae(tmp_path, monkeypatch):
     monkeypatch.setattr(
         harbor_build, "load_harbor_build_config", lambda *a, **k: config
     )
-    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda cfg, out: out)
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda cfg, out, **_: out)
 
     result = CliRunner().invoke(
         harbor_cli.harbor,

@@ -646,7 +646,9 @@ def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch
         name = "vero/stub-benchmark"
 
     monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda *a, **k: _Config())
-    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda config, output: output)
+    monkeypatch.setattr(
+        harbor_build, "compile_harbor_task", lambda config, output, **_: output
+    )
     monkeypatch.setattr(harbor_cli.shutil, "which", lambda name: "/usr/bin/uvx")
     monkeypatch.setattr(
         harbor_cli, "_compiled_run_environment", lambda task, overrides: {}
