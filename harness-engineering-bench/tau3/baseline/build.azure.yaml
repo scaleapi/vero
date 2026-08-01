@@ -1,0 +1,216 @@
+name: vero/optimize-tau3-baseline
+description: >-
+  Improve a customer-service agent on canonical tau3-bench tasks while
+  preserving the task-owned MCP protocol and evaluation.
+agent_repo: target
+task_source: sierra-research/tau3-bench@sha256:a57304f682894ac061090769af771a3617664f3ff6e5417d4eadf8e30433e4d9
+task_manifest: ../partitions/manifest.json
+agent_import_path: tau3_agent.agent:Tau3Agent
+harbor_requirement: harbor[modal]==0.20.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 300
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 600
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # NO baseline_reward. The pinned 0.7321 was measured on
+    # fireworks_ai/deepseek-v4-flash with no reasoning_effort at all (the seed's
+    # _is_reasoning_model gate matches gpt-5/o1/o3/o4 only), so a delta against it
+    # would be a model comparison dressed up as an optimization result.
+    # With `score_baseline: false` below this run reports an ABSOLUTE held-out
+    # score and no delta. Pair it with the seed floor measured out of band on the
+    # same config; do not compare it to 0.7321.
+    failure_value: 0.0
+    max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the pinned baseline, which was
+    # itself pooled over 3 rounds. Without this the candidate carries ~sqrt(3) more
+    # standard error than the floor it is judged against.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: tau3
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 3
+rescore_attempts: 1
+
+# gpt-5.4-mini, not deepseek-v4-flash. Takes the target agent off the shared
+# Fireworks per-minute bucket that is the suite's standing blocker, and tau3's own
+# LLM services (TAU2_USER_MODEL / TAU2_NL_ASSERTIONS_MODEL below) already run on
+# this model, so the benchmark now touches Fireworks nowhere. Unprefixed on
+# purpose: the agent sends model_name.removeprefix("openai/"), so an
+# openai/-prefixed name here would be allow-listed in one form and requested in
+# another and the gateway would deny it.
+#
+# Reasoning effort stays at the seed's `medium`. Measured 2026-07-31 on the
+# 150-case held-out set: at xhigh the seed lost 16 cases to "input exceeds the
+# context window" (history is resent every turn and MAX_TURNS is 80), at medium it
+# lost none. `high` is untested.
+model: gpt-5.4-mini
+environment_name: ${inner_env:-modal}
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+extra_harbor_args: ["--ek", "app_name=harness-engineering-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+# NOTE: tau3's optimizer trial reliably dies at ~38-40 min with grpclib
+# StreamTerminatedError ("Connection lost"). Four live experiments (default
+# DinD, --ek modal_vm_runtime=true, --ek modal_sandbox_v2=true, and
+# --max-retries 1) all failed identically, so no `optimizer_harbor_args` value
+# is set here: none of them is a fix, and a config value that claims to be one
+# is worse than nothing. Tracked upstream; see the PR that added this field.
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 1
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Unreachable: worst case is ceil(450/24) x 3600 = 68400s, every
+# finalize trial (150 held-out x n_attempts=3) hitting its own cap. Assumes
+# max_concurrency=24; recompute if that drops.
+timeout_seconds: 79200
+# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
+# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
+# clock the benchmark intends. Harbor times agent setup, environment build and
+# verification on separate clocks with separate multipliers, so none of them
+# eat into this budget and no buffer is warranted.
+case_timeout_seconds: 3600
+task_agent_timeout_seconds: 3600
+max_concurrency: 24  # 8 -> 24; see officeqa for the measured headroom argument
+error_rate_threshold: 0.1
+# Unreachable: worst-case finalize (68400) + worst-case rescore_top_k=3
+# validation rescore (68400). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 158400
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - WANDB_API_KEY
+  - WANDB_BASE_URL  # self-hosted or cloud W&B
+
+wandb:
+  # Pinned rather than left to each launcher's W&B default entity, which is their
+  # personal namespace: unset, the suite's runs split across as many namespaces as
+  # there are people running cells and the grid tooling reports "no runs matching".
+  entity: ${wandb_entity:-egp}
+  project: harness-engineering-bench  # one project for the whole suite
+  group: tau3  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-tau3-azure}  # per-launch label, e.g. --param wandb_run=tau3__claude-sonnet-5
+  tags: [tau3]
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
+  # gateway token usage to individual trials (trusted, vs. content-matching).
+  # Without it the fallback recovers only each conversation's root turn: measured
+  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
+  request_log_attribution: true
+  producer:
+    # Three slots, matching swe-atlas-qna/baseline/build.gpt54mini.yaml. The
+    # gateway compares the requested model as an exact string, and the harnesses
+    # strip the provider prefix, so the prefixed form alone 403s every openai- and
+    # anthropic-routed optimizer on its first call. The third slot is opencode's
+    # auxiliary summarisation model, which goes on the wire as a DATED id.
+    # Measured in the gaia claude-opus-5 x opencode r1 gateway log: 8 of 157
+    # producer calls came back 403 model_denied, including
+    # claude-haiku-4-5-20251001 and a probe sweep of gpt-5-mini / gpt-4o-mini /
+    # o4-mini. Non-fatal there, but tau3 sessions are the longest in the suite and
+    # the officeqa measurement put aux traffic at 58% of producer calls, so the
+    # magnitude is workload-dependent and worth covering.
+    allowed_models:
+      - "${optimizer_model:-openai/gpt-5.4}"
+      - "${optimizer_model_bare:-gpt-5.4}"
+      - "${optimizer_aux_model:-gpt-5.4-nano}"
+    # codex strips the provider prefix, so `--model azure_ai/gpt-5.6-sol` arrives at
+    # the gateway as bare `gpt-5.6-sol` and gets forwarded unchanged. The proxy then
+    # load-balances it across two Azure deployments, and every turn after the first
+    # fails with invalid_encrypted_content because the reasoning payload cannot be
+    # decrypted by the deployment that did not create it. Measured by Varun against
+    # the live proxy (PR #81): bare failed 5 of 5 encrypted-content replays,
+    # azure_ai/-prefixed passed 5 of 5. Aliasing pins the bare name to one
+    # deployment, which is the only place the prefix can be reattached, since the
+    # harness will not carry it. Both gpt-5.6 models are listed because this file
+    # serves the sol and terra contestants.
+    #
+    # Also relevant: the OpenAI contract expired 2026-07-31, so every GPT model now
+    # has to route through Azure regardless of harness.
+    model_aliases:
+      gpt-5.6-sol: azure_ai/gpt-5.6-sol
+      gpt-5.6-terra: azure_ai/gpt-5.6-terra
+    max_concurrency: 8
+  # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
+  # the spend control, so a token cap only needs to stop a runaway. tau3 is the
+  # largest set here, hence the bigger ceiling.
+  evaluation:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 4000000000  # 900 agent case-runs (300 dev + 600 validation)
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  finalization:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 4000000000  # 150 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
+
+# tau3's environment runs its own LLM services — the user-simulator (inside the
+# task container) and the NL-assertions grader (verifier) — which cannot reach the
+# compose-internal inference gateway. Give them the real upstream directly while
+# the candidate agent keeps the metered/allow-listed gateway (VERO_AGENT_INFERENCE_*).
+task_services_use_upstream: true
+# Harness isolation is off for tau3: its task-owned services need the real
+# upstream credential, which uid isolation cannot hide from the harness env.
+# Re-enable once task-service credentials are delivered off the harness env.
+harness_user: null
+# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
+# Claude Code's Bash tool caps a single call at BASH_MAX_TIMEOUT_MS (default
+# 600000=10min), well under one inner eval, which pushed the officeqa optimizer
+# into --detach + background-poll + end-turn -- and a headless --print run is
+# never re-woken, so the search died there. Raise the cap so a whole eval fits in
+# one blocking call. The background-task vars are defence in depth only: they gate
+# *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
+# parameter, which the model can still choose. The instruction forbids that.
+agent_env:
+  # Above this benchmark's widest single eval: a full validation pass is
+  # ceil(150/24) x 3600 = 25200s worst case.
+  BASH_MAX_TIMEOUT_MS: "32400000"
+  BASH_DEFAULT_TIMEOUT_MS: "32400000"  # same as max: an un-timed eval must still block
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)
+  # default to symlinking their entry point into /usr/local/bin, which the
+  # unprivileged optimizer user cannot write: "Failed to install executable
+  # ... Permission denied". npm/nvm-based harnesses (claude-code, opencode)
+  # are unaffected, so this only bites when the harness changes.
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+task_environment:
+  TAU2_USER_MODEL: openai/gpt-5.4-mini-2026-03-17
+  TAU2_NL_ASSERTIONS_MODEL: openai/gpt-5.4-mini-2026-03-17
