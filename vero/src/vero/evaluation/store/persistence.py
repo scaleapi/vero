@@ -44,17 +44,43 @@ def _atomic_write_json(path: Path, value: Any) -> None:
     )
     temporary_path = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle = os.fdopen(descriptor, "w", encoding="utf-8")
+    except BaseException:
+        # This is the only window where we still own the raw descriptor: once
+        # os.fdopen succeeds the file object owns it and closes it exactly once
+        # when the block below exits, so closing it again from a shared failure
+        # path was a double close. Three writers reach this helper concurrently
+        # through asyncio.to_thread, and on CPython that second close can land
+        # on an unrelated descriptor that has since been handed the same number.
+        os.close(descriptor)
+        temporary_path.unlink(missing_ok=True)
+        raise
+    try:
+        with handle:
             json.dump(value, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
-    except BaseException:
+        # Fsyncing the file only makes its bytes durable; the rename that
+        # publishes them is a change to the parent directory, so a hard power
+        # loss or container kill right here can leave the old contents behind or
+        # no file at all. Every durable artifact vero has commits through this
+        # one helper (the evaluation manifest, the per-case checkpoints,
+        # database.json, budgets.json, the session manifest, and the disclosure
+        # ledger), so fsync the directory as well. Some platforms refuse to open
+        # a directory for fsync, and this is a durability upgrade rather than
+        # part of the write itself, so an OSError from either step is ignored
+        # instead of failing a write that already landed.
         try:
-            os.close(descriptor)
+            directory_descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_descriptor)
+            finally:
+                os.close(directory_descriptor)
         except OSError:
             pass
+    except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
 
@@ -447,8 +473,33 @@ class EvaluationDatabase:
         """Load the index and repair it from canonical completed evaluations."""
 
         existed = database_path.exists()
-        database = cls.load_from_file(database_path) if existed else cls(id=database_id)
+        database: EvaluationDatabase | None = None
+        if existed:
+            try:
+                database = cls.load_from_file(database_path)
+            except Exception as error:
+                # A crash in the middle of a write leaves a truncated index, and
+                # raising here bricked the session for good: every later run of
+                # it died on load even though this file is only a cache of the
+                # per-evaluation manifests that get reconciled in below. Rebuild
+                # from those instead of refusing to start, and log it, since the
+                # operator otherwise has no way to tell that an index they will
+                # find rewritten on disk was ever damaged.
+                logger.warning(
+                    "Rebuilding unreadable evaluation database %s from the "
+                    "per-evaluation manifests: %s",
+                    database_path,
+                    error,
+                )
+                # Treat the damaged file as absent so the repaired index is
+                # written back even when no new evaluation appeared on disk.
+                existed = False
+        if database is None:
+            database = cls(id=database_id)
         if database.id != database_id:
+            # A readable index naming a different session is a real "wrong
+            # session" signal (a copied or crossed session directory), never a
+            # torn write, so it stays a hard error rather than a rebuild.
             raise ValueError(
                 f"evaluation database belongs to {database.id!r}, not {database_id!r}"
             )

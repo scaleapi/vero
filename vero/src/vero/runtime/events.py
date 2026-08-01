@@ -6,6 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -113,8 +114,17 @@ class JsonlEventSink:
 
     async def __call__(self, event: RuntimeEvent) -> None:
         line = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+        record = f"{line}\n".encode()
         async with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as handle:
-                handle.write(line)
-                handle.write("\n")
+            # The record and its newline go out as one write to a binary append
+            # handle, not as two text writes: a large event whose payload flushed
+            # without its trailing newline fused with the next record and corrupted
+            # two events instead of one. The fsync then costs real latency on every
+            # event, and we pay it deliberately, because previously the tail of the
+            # log only survived to the last close and this file is the sole forensic
+            # record when the process vanishes without a traceback.
+            with self.path.open("ab") as handle:
+                handle.write(record)
+                handle.flush()
+                os.fsync(handle.fileno())

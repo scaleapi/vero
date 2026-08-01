@@ -31,9 +31,11 @@ from vero.evaluation import (
     EvaluationRequest,
     EvaluationRequestError,
     EvaluationSet,
+    EvaluationStore,
     EvaluationSummary,
     EvaluationTerminatedError,
     ObjectiveSpec,
+    RunningEvaluationManifest,
     project_evaluation,
 )
 from vero.evaluation.engine import EvaluationEngine
@@ -286,9 +288,62 @@ class EvaluationSidecar:
                 )
             self._policies[policy.key] = policy
 
+    def _running_evaluations(self) -> dict[str, RunningEvaluationManifest]:
+        """Load the manifests of evaluations left mid-flight by an earlier start.
+
+        ``EvaluationDatabase.load_reconciled`` deliberately skips every
+        non-complete manifest, so one of these directories is the only surviving
+        record that its evaluation was ever started.
+        """
+
+        manifests: dict[str, RunningEvaluationManifest] = {}
+        evaluations_dir = self.engine.evaluator.evaluations_dir
+        if not evaluations_dir.is_dir():
+            return manifests
+        for result_dir in sorted(evaluations_dir.iterdir()):
+            try:
+                manifest = RunningEvaluationManifest.model_validate_json(
+                    (result_dir / EvaluationStore.manifest_basename).read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except (OSError, ValueError):
+                continue  # completed, corrupt, or not an evaluation directory
+            manifests[manifest.id] = manifest
+        return manifests
+
+    def _interrupted_evaluation_id(
+        self,
+        job: SidecarEvaluationJob,
+        running: dict[str, RunningEvaluationManifest],
+    ) -> str | None:
+        """Name the mid-flight evaluation an interrupted job was driving.
+
+        Matched on the identity the job already records (backend, evaluation set,
+        and the candidate version resolved at admission) plus the job's own start
+        time, since the evaluation can only have begun after the job existed. The
+        claimed manifest is removed from ``running`` so one evaluation cannot be
+        credited to two jobs, and an ambiguous match is declined outright: naming
+        the wrong evaluation is worse than naming none, because the reconciler
+        would then chase a budget reservation that belongs to another job.
+        """
+
+        matches = [
+            manifest
+            for manifest in running.values()
+            if manifest.backend_id == job.backend_id
+            and manifest.request.evaluation_set == job.evaluation_set
+            and manifest.request.candidate.version == job.version
+            and manifest.created_at >= job.created_at
+        ]
+        if len(matches) != 1:
+            return None
+        return running.pop(matches[0].id).id
+
     def _load_evaluation_jobs(self) -> None:
         """Restore terminal jobs and mark interrupted in-flight jobs explicitly."""
 
+        running = self._running_evaluations()
         for path in sorted(self._evaluation_jobs_dir.glob("*.json")):
             try:
                 job = SidecarEvaluationJob.model_validate_json(
@@ -303,6 +358,16 @@ class EvaluationSidecar:
                 job = job.model_copy(
                     update={
                         "status": EvaluationJobStatus.FAILED,
+                        # A job only learns its evaluation_id when the evaluation
+                        # returns, so an interrupted one recorded none at all and
+                        # the evaluation it was driving became unfindable: the
+                        # budget it reserved could never be reconciled against it,
+                        # and the cases it had already checkpointed belonged to
+                        # nothing. Carry the id over from the manifest the
+                        # evaluator left behind, which is the only durable link
+                        # between the orphaned job and its evaluation.
+                        "evaluation_id": job.evaluation_id
+                        or self._interrupted_evaluation_id(job, running),
                         "error": "evaluation job was interrupted by a sidecar restart",
                         "completed_at": datetime.now(UTC),
                     }

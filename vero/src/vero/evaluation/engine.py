@@ -439,6 +439,41 @@ class EvaluationEngine:
                     # original, as BudgetStore.refund already does.
                     raise cancellation from refund_error
             raise
+        except Exception as unexpected:
+            # The same last line of defence, for the failure side. The evaluator
+            # converts everything the *backend* raises into the two typed errors
+            # above, but not everything it does itself: an OSError from the
+            # result-directory mkdir or the running-manifest write it performs
+            # before its own try block, or from a shielded _persist_failure
+            # inside its handlers, unwinds as a bare exception none of the
+            # handlers above match. The reservation then stays charged with no
+            # evaluation to show for it, so the budget is short by that amount
+            # for the rest of the run and every later evaluation is silently
+            # starved -- over a long search that is the difference between
+            # finishing and running out of budget mid-way.
+            #
+            # Only the refund is recoverable here: a bare exception carries no
+            # evaluation id, so there is no record to load, exactly as with the
+            # raw cancellation above. Refunding a cost the run may never have
+            # spent is bounded by the clamp in BudgetLedger.refund, which never
+            # restores more than the budget's own total.
+            if charged:
+                try:
+                    await asyncio.shield(
+                        self.budget_ledger.refund(
+                            backend_id,
+                            request.evaluation_set,
+                            cost,
+                            principal,
+                        )
+                    )
+                except Exception as refund_error:
+                    # Same guard as the handlers above, for the same reason:
+                    # chain the refund's own failure and re-raise the original so
+                    # the caller still sees what actually stopped the evaluation,
+                    # as BudgetStore.refund already does.
+                    raise unexpected from refund_error
+            raise
         # Shielded for the same reason as the two handlers above, and one more:
         # the budget was charged for an evaluation that has now actually run, so
         # a cancellation landing inside _record would leave the ledger counting
@@ -485,7 +520,7 @@ class EvaluationEngine:
                         )
                     )
                 except Exception as refund_error:
-                    # Same guard as the three handlers above, for the same
+                    # Same guard as the four handlers above, for the same
                     # reason: chain the refund's own failure and re-raise the
                     # original, as BudgetStore.refund already does.
                     raise failure from refund_error

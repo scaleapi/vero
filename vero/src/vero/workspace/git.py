@@ -12,6 +12,13 @@ from vero.workspace.base import Workspace
 
 logger = logging.getLogger(__name__)
 
+# Commit dates for the automated saves below are pinned to the epoch so that
+# committing the same staged tree on the same parent with the same message
+# always yields the same sha. Left on the wall clock, a resumed run recommitted
+# byte-identical content and got a brand new sha, so it could not recognise the
+# candidate its own previous attempt had already built and paid to evaluate.
+_PINNED_COMMIT_DATE = "1970-01-01T00:00:00+00:00"
+
 
 def _basename(path: str) -> str:
     """Extract the last component of a path."""
@@ -69,11 +76,36 @@ class GitWorkspace(Workspace):
 
     # ── Git helper ──────────────────────────────────────────────────
 
-    async def _git(self, *args: str) -> str:
+    async def _git(self, *args: str, env: dict[str, str] | None = None) -> str:
         """Run a git command via sandbox.run(), returning stdout. Raises on non-zero exit."""
+        command = ["git", "-c", f"safe.directory={self._root}", *args]
+        if env:
+            # Extra variables go through the `env` binary rather than
+            # sandbox.run(env=...) because the two Sandbox implementations
+            # disagree about what that parameter means: LocalSandbox hands the
+            # dict straight to the subprocess and therefore *replaces* the whole
+            # environment (losing PATH, HOME and the ambient git configuration),
+            # while DockerSandbox adds the entries on top of the container's.
+            # Prefixing the command keeps "add these variables" meaning the same
+            # thing in every sandbox.
+            command = [
+                "env",
+                *(f"{name}={value}" for name, value in env.items()),
+                *command,
+            ]
         result = await self._sandbox.run(
-            ["git", "-c", f"safe.directory={self._root}", *args],
+            command,
             cwd=self._root,
+            # The sandbox's 30 second default is far too short for git over a
+            # large candidate tree: a `git add` of a big working copy while the
+            # machine was loaded with concurrent trials ran past it, the timeout
+            # killed git mid-write, and the .git/index.lock it left behind
+            # destroyed that round's candidate with an error that pointed
+            # nowhere near the real cause. The tradeoff of 120 seconds is that a
+            # git process which is genuinely hung now takes four times as long
+            # to fail, which we accept because losing a candidate is worse than
+            # waiting.
+            timeout=120,
         )
         if result.returncode != 0:
             raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr}")
@@ -168,7 +200,16 @@ class GitWorkspace(Workspace):
             else:
                 await self._git("add", self._project_path)
 
-            # Commit (skip hooks for automated commits)
+            # Commit (skip hooks for automated commits). Both dates have to be
+            # pinned, not just the author date: the committer date is part of
+            # the commit object too, so leaving it on the wall clock keeps the
+            # sha unstable. Note this invalidates existing session directories
+            # exactly once, because candidates saved before this change carry
+            # wall-clock shas that will never be reproduced again. Candidate
+            # ordering does not move: the optimizer stamps Candidate.created_at
+            # from datetime.now(UTC) separately, and both the repository listing
+            # and the objective tie-break sort on that field, never on a commit
+            # date.
             await self._git(
                 "-c",
                 "user.name=vero",
@@ -178,6 +219,10 @@ class GitWorkspace(Workspace):
                 "-m",
                 message,
                 "--no-verify",
+                env={
+                    "GIT_AUTHOR_DATE": _PINNED_COMMIT_DATE,
+                    "GIT_COMMITTER_DATE": _PINNED_COMMIT_DATE,
+                },
             )
 
             return await self.current_version()

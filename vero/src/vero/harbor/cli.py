@@ -69,6 +69,29 @@ def _request(
         ) from error
 
 
+def _fsync_directory(path: Path) -> None:
+    """Flush a directory entry so a preceding ``os.replace`` is itself durable.
+
+    Fsyncing the temporary file only promises its *contents* survive a crash;
+    the rename that publishes it lives in the parent directory, so a host that
+    dies right after the replace can come back with the file missing entirely.
+    These files are the record of a run that took hours, so the extra syscall is
+    free by comparison. Directory fsync is not supported everywhere, and losing
+    an export over a filesystem that refuses it would be strictly worse than
+    the weaker durability, so OSError is swallowed.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -83,6 +106,7 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             file.flush()
             os.fsync(file.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -122,6 +146,7 @@ def _download(
             file.flush()
             os.fsync(file.fileno())
         os.replace(temporary, destination)
+        _fsync_directory(destination.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1108,19 +1133,23 @@ def finalize_command(token_file, output):
         "/finalize",
         headers={"Authorization": f"Bearer {token}"},
     )
+    # Both files below go through _atomic_write_bytes rather than write_text
+    # because they are the *only* record of the held-out result: a crash partway
+    # through a plain write leaves a truncated reward.json that Harbor still
+    # reads, and once the sidecar is gone there is nothing left to re-derive it
+    # from. Same bytes as before, just published by rename instead of in place.
     destination = Path(output)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     # reward.json keeps only the reward map Harbor consumes.
-    destination.write_text(
-        json.dumps(result["rewards"], indent=2) + "\n",
-        encoding="utf-8",
+    _atomic_write_bytes(
+        destination,
+        (json.dumps(result["rewards"], indent=2) + "\n").encode("utf-8"),
     )
     # Persist the full verification result (the shipped flag, verifier errors,
     # baseline rewards) alongside it, so "did anything ship, and if not why" is
     # answerable without re-running — reward.json alone drops those signals.
-    (destination.parent / "finalization.json").write_text(
-        json.dumps(result, indent=2) + "\n",
-        encoding="utf-8",
+    _atomic_write_bytes(
+        destination.parent / "finalization.json",
+        (json.dumps(result, indent=2) + "\n").encode("utf-8"),
     )
     click.echo(json.dumps(result, indent=2))
 
@@ -1221,17 +1250,43 @@ def export_session_command(
 
     token = read_admin_token(token_file)
     headers = {"Authorization": f"Bearer {token}"}
-    finalization = _request("POST", "/finalize", headers=headers)
-    status = _request("GET", "/status")
     output = Path(output).expanduser().resolve()
     report_output = Path(report_output).expanduser().resolve()
     status_output = Path(status_output).expanduser().resolve()
     finalization_output = Path(finalization_output).expanduser().resolve()
+    # This POST stays, even though it is the second finalize of the run: the
+    # generated verifier script runs `vero harbor finalize` immediately before
+    # this command, so reusing that file would save a call. It is not worth what
+    # it costs. --finalization-output defaults under /logs, and in the topology
+    # these benchmarks actually run (harness_user unset, so candidate harness
+    # code shares the sidecar uid) /logs is writable by the thing being scored,
+    # so a candidate could plant its own held-out result and have it flow into
+    # the archived record, the status file and the report. reward.json could not
+    # be forged that way, because finalize_command writes it from its own POST,
+    # but a forged archive is still a forged number. The right home for a
+    # reusable finalization record is the admin volume, next to the baseline.json
+    # written by measure_baseline, which is where the trusted copy already lives;
+    # that change belongs with the finalize-caching work, not here.
+    finalization = _request("POST", "/finalize", headers=headers)
+    status = _request("GET", "/status")
     with tempfile.TemporaryDirectory(prefix="vero-harbor-session-") as directory:
         temporary = Path(directory)
-        downloaded = temporary / "sidecar-session.tar.gz"
-        _download("/session/export", downloaded, headers=headers)
-        session = extract_harbor_session_archive(downloaded, temporary / "extracted")
+        # Download straight to --output instead of parking the archive in the
+        # temporary directory until the very end. Extraction, trace redaction
+        # and report generation all sit between the download and the augmented
+        # rewrite, and any one of them failing used to take the archive down
+        # with the temporary directory, losing the only durable copy of the
+        # winning candidate. --output therefore briefly holds the un-augmented
+        # sidecar archive: that is the deliberate tradeoff, a raw archive with
+        # candidates/repository.git and database.json in it beats no archive.
+        # Both writes are atomic (_download and create_harbor_session_archive
+        # each rename into place), so a reader never sees a partial file.
+        output.parent.mkdir(parents=True, exist_ok=True)
+        # Drop any checksum left by an earlier export before the archive under
+        # it changes, so a companion file never describes different bytes.
+        output.with_name(f"{output.name}.sha256").unlink(missing_ok=True)
+        _download("/session/export", output, headers=headers)
+        session = extract_harbor_session_archive(output, temporary / "extracted")
         encoded_finalization = (
             json.dumps(finalization, ensure_ascii=False, indent=2) + "\n"
         ).encode("utf-8")
@@ -1270,13 +1325,18 @@ def export_session_command(
         asyncio.run(generate_experiment_report(session, generated_report))
         create_harbor_session_archive(session, output)
         digest = file_sha256(output)
-        _atomic_write_bytes(report_output, generated_report.read_bytes())
-        _atomic_write_bytes(status_output, encoded_status)
-        _atomic_write_bytes(finalization_output, encoded_finalization)
+        # Persist the checksum first, before the report and status writes. Each
+        # of those can fail on its own (a full /logs, an unreadable report), and
+        # a digest we computed but never wrote down leaves an archive nobody can
+        # validate afterwards, which is the one thing the companion file exists
+        # to prevent.
         _atomic_write_bytes(
             output.with_name(f"{output.name}.sha256"),
             f"{digest}  {output.name}\n".encode("ascii"),
         )
+        _atomic_write_bytes(report_output, generated_report.read_bytes())
+        _atomic_write_bytes(status_output, encoded_status)
+        _atomic_write_bytes(finalization_output, encoded_finalization)
     click.echo(
         json.dumps(
             {

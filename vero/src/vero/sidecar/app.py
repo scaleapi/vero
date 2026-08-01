@@ -7,6 +7,7 @@ import contextlib
 import logging
 import shutil
 import tempfile
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
@@ -48,6 +49,36 @@ class SubmitRequest(StrictModel):
 
 class ScoreBaselineRequest(StrictModel):
     replicates: int = 1
+
+
+_SESSION_EXPORT_PREFIX = "vero-harbor-export-"
+
+
+def _sweep_stale_session_exports() -> None:
+    """Remove export scratch directories left behind by earlier exports.
+
+    Each export stages its archive in a fresh ``mkdtemp`` directory and removes
+    it in the response's background task. That task never runs when the export
+    crashes or the sidecar is killed mid-stream, and a sidecar lives for the whole
+    run, so the leftovers accumulate until the volume fills and every later export
+    fails on ENOSPC with the session still unexported. Scoped to this exact prefix
+    inside the temporary root the exports are created in, so nothing else on the
+    volume can be caught by it.
+    """
+
+    # An hour is far longer than any export takes to stream, and generous on
+    # purpose: keeping a dead directory an extra hour costs some disk, sweeping a
+    # live one costs the export that is still writing into it.
+    cutoff = time.time() - 3600.0
+    for stale in Path(tempfile.gettempdir()).glob(f"{_SESSION_EXPORT_PREFIX}*"):
+        try:
+            if stale.is_symlink() or not stale.is_dir():
+                continue
+            if stale.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(stale, ignore_errors=True)
 
 
 def _error(status_code: int, message: str, *, detail: bool = False):
@@ -203,7 +234,11 @@ def create_app(
         authorization: Annotated[str | None, Header()] = None,
     ):
         require_admin(authorization)
-        directory = Path(tempfile.mkdtemp(prefix="vero-harbor-export-"))
+        # Off the event loop like the archive build below: removing a stale
+        # export's tree is unbounded filesystem work and must not stall the
+        # agent's own requests.
+        await asyncio.to_thread(_sweep_stale_session_exports)
+        directory = Path(tempfile.mkdtemp(prefix=_SESSION_EXPORT_PREFIX))
         archive = directory / "session.tar.gz"
         try:
             await asyncio.to_thread(

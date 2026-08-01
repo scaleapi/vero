@@ -1066,8 +1066,56 @@ def create_inference_gateway_app(
                 finally:
                     await asyncio.shield(finish())
 
+            # Step the generator once before handing it over, because a generator
+            # that has never run is a reservation nobody owns. StreamingResponse
+            # races stream_response against listen_for_disconnect inside one anyio
+            # task group, so a client that has already gone away cancels the scope
+            # while stream_response is still awaiting its first send(), and the
+            # body iterator is never stepped at all: the generator body never
+            # runs, its finally never runs, and store.complete() is never called.
+            # A never-started async generator is invisible to asyncio's asyncgen
+            # finalization too, so nothing else cleans up behind it. Each such
+            # disconnect silently burned one concurrency permit until reserve()
+            # waited on the semaphore forever, with no timeout and no traceback:
+            # just a gateway that stopped answering, which is how two runs died.
+            # One anext() leaves the generator suspended inside its try, so the
+            # permit belongs to a started generator whose finally does run when it
+            # is closed. Cost: the response headers now wait on the first SSE
+            # event, so time to first byte grows by one event.
+            stream = chunks()
+            head: list[bytes] = []
+            replay: BaseException | None = None
+            try:
+                head.append(await anext(stream))
+            except StopAsyncIteration:
+                # An upstream that ended without a single event: the generator has
+                # already run its finally, so the reservation is already settled
+                # and the body below is simply empty.
+                pass
+            except asyncio.CancelledError:
+                # The request itself is being torn down, so there is no client
+                # left to hand a partial stream to. finish() has already run.
+                raise
+            except BaseException as error:
+                # A first chunk that fails has to keep failing *inside* the
+                # response rather than out of this handler: raising here would
+                # turn the truncated 200 that client SDKs retry as a connection
+                # error into a 500 that none of them retry, which would quietly
+                # change which trials fail. finish() has already run in the
+                # generator's finally, so all this still owes the client is the
+                # same broken stream it saw before.
+                replay = error
+
+            async def primed() -> AsyncIterator[bytes]:
+                for chunk in head:
+                    yield chunk
+                if replay is not None:
+                    raise replay
+                async for chunk in stream:
+                    yield chunk
+
             return StreamingResponse(
-                chunks(),
+                primed(),
                 status_code=upstream.status_code,
                 headers=response_headers,
                 media_type="text/event-stream",

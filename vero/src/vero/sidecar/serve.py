@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
-from vero.sidecar.auth import generate_admin_token, write_admin_token
+from vero.sidecar.auth import (
+    generate_admin_token,
+    read_admin_token,
+    write_admin_token,
+)
 from vero.sidecar.sidecar import EvaluationSidecar
 from vero.sidecar.verifier import CanonicalVerifier
 
@@ -74,8 +78,22 @@ async def build_app(
         factory_path=factory_path,
         config_path=config_path,
     )
-    token = generate_admin_token()
-    write_admin_token(admin_token_path, token)
+    # Reuse the admin token already on the volume instead of minting a fresh one
+    # on every start. Minting unconditionally meant that a sidecar restart inside
+    # a run silently invalidated the token the outer agent was already holding:
+    # its next admin call 401'd and the run was dead, even though the session
+    # directory, the evaluation database and the budget ledger had all survived
+    # the restart intact. Reuse does not widen exposure, the token file is 0400
+    # inside a 0700 directory (see write_admin_token) and the volume is per-run,
+    # so the only readers are the ones that could already read it before.
+    token_path = Path(admin_token_path)
+    try:
+        token = read_admin_token(token_path)
+    except (OSError, ValueError):
+        # No token yet (first start), or one that cannot be read back as a token:
+        # either way the holder has nothing usable, so mint and persist one.
+        token = generate_admin_token()
+        write_admin_token(token_path, token)
     return create_app(
         sidecar=components.sidecar,
         verifier=components.verifier,

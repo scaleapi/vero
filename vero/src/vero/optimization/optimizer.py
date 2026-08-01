@@ -120,22 +120,37 @@ class _ScopedEvaluationGateway(CandidateEvaluationGateway):
                 if await self.workspace.is_dirty()
                 else await self.workspace.current_version()
             )
-            self._count += 1
-            candidate = Candidate(
-                id=f"{self.proposal.id}:trial:{self._count}",
-                version=version,
-                parent_id=self._last_candidate_id,
-                created_at=datetime.now(UTC),
-                description=description,
-                metadata={
-                    **self.proposal.metadata,
-                    "producer_id": self.proposal.producer_id,
-                    "proposal_id": self.proposal.id,
-                    "round": self.round_number,
-                    "trial": self._count,
-                },
-            )
-            await self.optimizer._capture_candidate(candidate, self.workspace)
+            # A producer re-evaluates an unchanged checkpoint routinely: a retry
+            # after a flaky harness, or a second look at a partition it already
+            # scored. Minting a fresh trial candidate each time filled the durable
+            # archive with distinct ids over byte-identical content, so a resume
+            # could not tell they were the same work. When the workspace has not
+            # moved off the last trial candidate's version, reuse that candidate;
+            # it is already captured and already the head of both the trial list
+            # and the parent chain, so leaving captured False keeps neither from
+            # gaining a duplicate entry. Only the identity is deduplicated: the
+            # evaluation below still runs, so no measurement is skipped.
+            last_trial = self._trial_candidates[-1] if self._trial_candidates else None
+            if last_trial is not None and last_trial.version == version:
+                candidate = last_trial
+                captured = False
+            else:
+                self._count += 1
+                candidate = Candidate(
+                    id=f"{self.proposal.id}:trial:{self._count}",
+                    version=version,
+                    parent_id=self._last_candidate_id,
+                    created_at=datetime.now(UTC),
+                    description=description,
+                    metadata={
+                        **self.proposal.metadata,
+                        "producer_id": self.proposal.producer_id,
+                        "proposal_id": self.proposal.id,
+                        "round": self.round_number,
+                        "trial": self._count,
+                    },
+                )
+                await self.optimizer._capture_candidate(candidate, self.workspace)
         request = self.optimizer._request(candidate, requested_set)
         try:
             result = await self.optimizer.engine.evaluate(
