@@ -253,10 +253,23 @@ _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 # attempt, so raising the count alone converts a crash into a hang. Flat keeps
 # every gap short and makes the tolerated outage the simple product below.
 #
-# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is bounded by how long the worker keeps
-# stdout available for a reconnect at a byte offset: past that, a reconnect
-# resumes with a hole rather than failing, which is worse than dying. Measured
-# rather than assumed; see tests and the probe recorded in the PR.
+# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is capped by how much stdout the worker
+# keeps available for a reconnect at a byte offset. Past that the reconnect does
+# not fail cleanly, it resumes past the retained span, so output goes missing
+# instead of the run dying. Waiting longer would therefore be worse than dying,
+# which is what bounds this and not the length of a typical outage.
+#
+# The retained span is measured in BYTES, not seconds, so the safe window in
+# seconds scales inversely with how chatty the harness is. Probed against live
+# sandboxes: 6 KB over 150s and 240 KB over 120s both reconnected contiguously,
+# 3 MB over 30s came back empty. A measured opencode optimizer transcript runs
+# ~350 B/s, so 120s is ~42 KB, inside the verified range with roughly 6x margin
+# on the rate. Re-measure before raising this, and treat a much noisier harness
+# as a reason to lower it.
+#
+# Note what this value is NOT: evidence that 120s covers real outages. Nothing
+# here measures how long a drop actually lasts. It is the largest window that is
+# safe, and the outer-trial retry remains the backstop past it.
 MODAL_STREAM_RECONNECT_DELAY_SECONDS = 2.0
 MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 120
 MODAL_STREAM_RECONNECT_FACTOR = 1.0
