@@ -168,3 +168,48 @@ def test_build_params_override_run_time_knobs_without_rebuild():
     # The rest of the measurement substrate is untemplated and stays fixed.
     assert overridden.model == default.model
     assert overridden.task_source == default.task_source
+
+
+def test_terminal_bench_azure_variant_differs_only_by_the_model_alias():
+    """build.azure.yaml must be build.yaml plus one alias, and nothing else.
+
+    The variant exists only because codex cannot put a provider-qualified model
+    id on the wire, so the gateway has to pin `gpt-5.6-sol` to a single Azure
+    deployment on its behalf. Everything else -- budgets, timeouts, partitions,
+    the pinned baseline -- has to stay identical, or the cell that uses this file
+    stops being comparable to the nine that use build.yaml.
+
+    There is no include/extends mechanism for these YAMLs, so the variant is a
+    183-line copy. That is a drift hazard with no natural alarm: divergence in a
+    timeout or a budget would change results and fail nothing. This test is the
+    alarm. If you deliberately change build.yaml, mirror it here and the test
+    passes again; if you forget, it does not.
+    """
+    baseline = BENCHMARK_ROOT / "terminal-bench" / "baseline"
+    shared = yaml.safe_load((baseline / "build.yaml").read_text(encoding="utf-8"))
+    variant = yaml.safe_load((baseline / "build.azure.yaml").read_text(encoding="utf-8"))
+
+    alias = variant["inference_gateway"]["producer"].pop("model_aliases")
+    assert alias == {"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"}
+    # Compared after popping the alias: the two documents must now be equal.
+    assert variant == shared, (
+        "build.azure.yaml has drifted from build.yaml beyond the model alias; "
+        "mirror the change or the azure cell is no longer comparable"
+    )
+
+    # And the alias must actually reach the gateway for the cell that needs it,
+    # while staying inert for a cell whose optimizer is something else.
+    sol = load_harbor_build_config(
+        baseline / "build.azure.yaml", params={"optimizer_model": "gpt-5.6-sol"}
+    )
+    other = load_harbor_build_config(
+        baseline / "build.azure.yaml", params={"optimizer_model": "claude-opus-5"}
+    )
+    assert sol.inference_gateway.producer.allowed_models == ["gpt-5.6-sol"]
+    assert sol.inference_gateway.producer.model_aliases == {
+        "gpt-5.6-sol": "azure_ai/gpt-5.6-sol"
+    }
+    # Present but unreachable: the allow-list admits only claude-opus-5, and an
+    # alias can fire only for a model the allow-list already passed.
+    assert other.inference_gateway.producer.allowed_models == ["claude-opus-5"]
+    assert "claude-opus-5" not in other.inference_gateway.producer.model_aliases
