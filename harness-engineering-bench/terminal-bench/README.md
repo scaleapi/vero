@@ -123,7 +123,7 @@ Derived from the split and the declared budgets, at `max_concurrency: 24`:
 | widest single search eval | 24,000s | 36 validation ÷ 24 = 2 waves × slowest validation task (12,000s) |
 | `timeout_seconds` | 43,200 | above worst-case finalize |
 | `verifier_timeout_seconds` | 64,800 | finalize + a `rescore_top_k: 3` validation pass |
-| optimizer `BASH_MAX_TIMEOUT_MS` | 28,800,000 | above the widest single eval, so one evaluation fits in a single blocking foreground call |
+| optimizer tool-call cap | 300 s | set by vero (`HARNESS_TOOL_TIMEOUT_SECONDS`), not here; bounds how long one call may sit silent, while `evals run` returns inside it with a `job_id` to wait on again |
 
 ## The seed agent
 

@@ -124,6 +124,34 @@ def test_upstream_rerouting_benchmarks_keep_their_agent_on_the_gateway(benchmark
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
+def test_no_benchmark_re_raises_the_tool_call_bound(benchmark):
+    """A build's agent_env is applied after vero's, so these keys switch it off.
+
+    Every one of these configs used to raise BASH_MAX_TIMEOUT_MS and
+    BASH_DEFAULT_TIMEOUT_MS to hours, so one evaluation fit in a single blocking
+    Bash call. That was a fix for a real failure (a headless run that detaches
+    and ends its turn is never re-woken) and it bought the opposite one: the
+    hours-long call is an hours-long silence on harbor's stdout stream, the idle
+    stream gets reaped, and the trial dies without a retry.
+
+    Setting them here again would be invisible: harbor keeps the last value for
+    a key and the build's agent_env is forwarded after vero's cap, so the run
+    would look configured while the cap did nothing. Both failures are now
+    handled below the config, by `evals run` returning inside its own bound and
+    by HARNESS_TOOL_TIMEOUT_SECONDS, so a benchmark has no reason to touch them.
+    """
+    from vero.harbor.cli import _TOOL_TIMEOUT_ENVIRONMENT
+
+    governed = {name for names in _TOOL_TIMEOUT_ENVIRONMENT.values() for name in names}
+    declared = governed.intersection(_config(benchmark).agent_env)
+
+    assert not declared, (
+        f"{benchmark} sets {sorted(declared)} in agent_env, which overrides vero's "
+        f"tool-call cap; remove it, or raise HARNESS_TOOL_TIMEOUT_SECONDS instead"
+    )
+
+
+@pytest.mark.parametrize("benchmark", BENCHMARKS)
 def test_target_model_is_the_only_model_the_evaluation_scope_allows(benchmark):
     """The measurement substrate is fixed: one target model, allow-listed.
 
