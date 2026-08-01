@@ -30,13 +30,19 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # NO baseline_reward. The pinned 0.7321 was measured on
+    # Measured 2026-08-01 on THIS config: 3 rounds x 3 attempts of the unmodified
+    # seed through rescore_candidate.py, n=1335 held-out trials, rounds
+    # 0.568 / 0.553 / 0.564, sd 0.0063. Same target model and seed as
+    # build.gpt54mini.yaml -- this config differs only in gateway model_aliases,
+    # which route the optimizer, not the target, so the floor is shared.
+    baseline_reward: 0.5618
+    # Do NOT restore the old 0.7321. That was measured on
     # fireworks_ai/deepseek-v4-flash with no reasoning_effort at all (the seed's
     # _is_reasoning_model gate matches gpt-5/o1/o3/o4 only), so a delta against it
     # would be a model comparison dressed up as an optimization result.
-    # With `score_baseline: false` below this run reports an ABSOLUTE held-out
-    # score and no delta. Pair it with the seed floor measured out of band on the
-    # same config; do not compare it to 0.7321.
+    # `score_baseline: false` below means the run does not re-measure this; it
+    # copies the number into the finalization payload, which is what makes the
+    # gain derivable downstream. Recompute it if the seed or target model changes.
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
