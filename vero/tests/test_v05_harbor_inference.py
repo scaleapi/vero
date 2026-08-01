@@ -1111,3 +1111,78 @@ def test_gateway_learns_a_refusal_once_instead_of_retrying_every_request(tmp_pat
     # straight through. Retrying per request would have cost ten.
     assert attempts == [True, False, False, False, False, False], attempts
     assert attempts.count(True) == 1, "the refusal must be discovered only once"
+
+
+def test_model_alias_rewrites_upstream_after_the_allow_list(tmp_path):
+    """A declared alias changes which deployment serves the request, not what the
+    caller may ask for.
+
+    The distinction is the point. `allowed_models` is what makes "this cell ran
+    gpt-test" a true statement, so the alias is applied only once that check has
+    passed: the caller still cannot reach an unlisted model by naming its alias
+    key, and the log records both names.
+    """
+    observed: list[dict] = []
+
+    def upstream(request: httpx.Request):
+        observed.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "response", "usage": {}})
+
+    config = InferenceGatewayConfig(
+        state_path=str(tmp_path / "usage.json"),
+        request_log=InferenceRequestLogConfig(directory=str(tmp_path / "log")),
+        scopes={
+            "producer": InferenceScopeConfig(
+                token_sha256=token_digest("scoped-token"),
+                allowed_models=["gpt-test", "plain"],
+                model_aliases={"gpt-test": "vendor_x/gpt-test"},
+                max_concurrency=1,
+            )
+        },
+    )
+    app = create_inference_gateway_app(
+        config=config,
+        upstream_api_key="upstream-secret",
+        upstream_base_url="https://provider.example/v1",
+        transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        aliased = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "gpt-test", "input": "hello"},
+        )
+        untouched = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "plain", "input": "hello"},
+        )
+        # The alias TARGET is not itself allow-listed, so naming it directly is
+        # still refused. An alias must not become a second way in.
+        target_direct = client.post(
+            "/scopes/producer/optimizer/v1/responses",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={"model": "vendor_x/gpt-test", "input": "hello"},
+        )
+
+    assert aliased.status_code == 200
+    assert untouched.status_code == 200
+    assert target_direct.status_code == 403
+    assert target_direct.json()["error"]["code"] == "model_denied"
+
+    # Rewritten on the way upstream; the unaliased model passes through as-is.
+    assert [payload["model"] for payload in observed] == [
+        "vendor_x/gpt-test",
+        "plain",
+    ]
+
+    records = [
+        json.loads(line)
+        for path in sorted((tmp_path / "log").glob("requests-*.jsonl"))
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    proxied = [record for record in records if record["status"] == 200]
+    assert [(r["model"], r.get("aliased_from")) for r in proxied] == [
+        ("vendor_x/gpt-test", "gpt-test"),
+        ("plain", None),
+    ]

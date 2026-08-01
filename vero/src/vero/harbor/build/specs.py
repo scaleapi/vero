@@ -126,6 +126,13 @@ class InferenceBudgetSpec(StrictModel):
     Attributes:
         allowed_models: Models this scope may request. A request naming anything
             else is refused with 403 model_denied.
+        model_aliases: Optional rewrite of the requested model, applied *after*
+            the allow-list check on the way upstream. Use it when the model that
+            must serve a request cannot be named by the caller -- codex, for
+            instance, reduces a model id to its last path component, so it can
+            never ask for a provider-qualified deployment. Declared here rather
+            than inferred, so the substitution is auditable in the build config
+            and in the request log.
         max_requests: Cap on proxied requests; unlimited when omitted.
         max_tokens: Cap on cumulative tokens; unlimited when omitted. Checked
             before a request starts, so a single request can overshoot it.
@@ -133,6 +140,7 @@ class InferenceBudgetSpec(StrictModel):
     """
 
     allowed_models: list[str]
+    model_aliases: dict[str, str] = Field(default_factory=dict)
     max_requests: int | None = Field(default=None, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
     max_concurrency: int = Field(default=8, ge=1)
@@ -145,6 +153,30 @@ class InferenceBudgetSpec(StrictModel):
         if len(value) != len(set(value)):
             raise ValueError("allowed_models must be unique")
         return value
+
+    @field_validator("model_aliases")
+    @classmethod
+    def validate_aliases(cls, value: dict[str, str]) -> dict[str, str]:
+        # Self-aliases are dropped rather than rejected, and keys outside
+        # allowed_models are permitted. Both concessions exist because one build
+        # config is shared by every cell of a grid, with allowed_models templated
+        # per launch: a map that pins the right deployment for one optimizer
+        # necessarily carries keys the other launches never request. Rejecting
+        # those would make the field unusable exactly where it is needed.
+        #
+        # Nothing is lost by allowing them. An alias can only fire for a model
+        # the allow-list already admitted, so an unreachable key is inert, and a
+        # self-alias is a no-op. The failure this field could cause -- a request
+        # served by a model other than the one named -- is bounded by the
+        # allow-list and made visible by the `aliased_from` field in the request
+        # log, not by validation here.
+        cleaned = {}
+        for requested, upstream in value.items():
+            if not requested.strip() or not upstream.strip():
+                raise ValueError("model_aliases names must not be empty")
+            if requested != upstream:
+                cleaned[requested] = upstream
+        return cleaned
 
 
 class InferenceGatewaySpec(StrictModel):

@@ -44,6 +44,13 @@ class InferenceScopeConfig(StrictModel):
 
     token_sha256: str
     allowed_models: list[str]
+    # Applied AFTER the allow-list check, on the way upstream. Keeps two
+    # concerns apart: allowed_models says what the caller may ask for, and
+    # therefore what a cell's label means; model_aliases says which upstream
+    # deployment serves it. Rewriting before the check would force the aliased
+    # name into allowed_models, and the allow-list would stop describing the
+    # contestant.
+    model_aliases: dict[str, str] = Field(default_factory=dict)
     max_requests: int | None = Field(default=None, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
     max_concurrency: int = Field(default=8, ge=1)
@@ -858,6 +865,11 @@ def create_inference_gateway_app(
         # Parameters the upstream refused and we retried without. Recorded so a
         # degraded request is auditable rather than a silent behaviour change.
         dropped_params: list[str] = []
+        # Set when scope.model_aliases rewrote the requested model. Same reason:
+        # a substitution the caller cannot see must be visible in the log. Bound
+        # here rather than at the rewrite, because log_request reads it and fires
+        # on the model_denied path before the rewrite is reached.
+        aliased_from: str | None = None
 
         async def log_request(
             *,
@@ -876,6 +888,7 @@ def create_inference_gateway_app(
                 attribution=attribution,
                 endpoint=endpoint,
                 model=value.get("model") if isinstance(value, dict) else None,
+                aliased_from=aliased_from,
                 dropped_params=dropped_params or None,
                 stream=stream,
                 status=status,
@@ -908,6 +921,29 @@ def create_inference_gateway_app(
             return _provider_error(
                 403, "model is not allowed for this scope", "model_denied"
             )
+
+        # Declared model rewrite, applied only now that the allow-list has passed.
+        # Some harnesses cannot put a provider-qualified id on the wire at all --
+        # codex reduces a model id to its last path component -- so a build that
+        # must reach one specific upstream deployment has no client-side way to
+        # ask for it. Aliasing here is the only place that can.
+        #
+        # Why that matters concretely: an unqualified model group is load-balanced
+        # across deployments, and the Responses API's encrypted reasoning content
+        # is decryptable only by the deployment that produced it. Replaying it
+        # against a sibling fails with invalid_encrypted_content on every turn
+        # after the first. Measured 2026-08-01: bare `gpt-5.6-sol` failed 5 of 5
+        # replays, `azure_ai/gpt-5.6-sol` passed 5 of 5.
+        #
+        # Both names are recorded, so the log shows the substitution rather than
+        # quietly reporting only what went upstream.
+        upstream_model = scope.model_aliases.get(model, model)
+        if upstream_model != model:
+            aliased_from = model
+            value["model"] = upstream_model
+            body = json.dumps(value).encode()
+        else:
+            aliased_from = None
         if not attribution or any(
             not (character.isalnum() or character in "_.-") for character in attribution
         ):
@@ -953,7 +989,10 @@ def create_inference_gateway_app(
         # the parameter on nearly every call -- 52 of 66 in a conformance run --
         # so retrying each one would double that traffic against the RPM limit for
         # no new information.
-        refused = app.state.refused_params.get(model, frozenset())
+        # Keyed on the model that will actually serve the request: refusing a
+        # parameter is a property of the upstream deployment, not of the name the
+        # caller used for it.
+        refused = app.state.refused_params.get(upstream_model, frozenset())
         if refused and isinstance(value, dict):
             known = [name for name in refused if name in value]
             if known:
@@ -985,10 +1024,15 @@ def create_inference_gateway_app(
                     # Re-serialize so the request log records what we really sent.
                     body = json.dumps(value).encode()
                     dropped_params.extend(blamed)
-                    # Bounded by allowed_models across scopes, so this cannot grow
-                    # with traffic: an unlisted model is rejected before reaching
-                    # here.
-                    app.state.refused_params[model] = refused.union(blamed)
+                    # Keyed on upstream_model to match the read above: keying the
+                    # write on the requested name would never hit for an aliased
+                    # model, and the cache would re-discover the same refusal on
+                    # every request.
+                    #
+                    # Bounded by allowed_models (and the finite alias map) across
+                    # scopes, so this cannot grow with traffic: an unlisted model
+                    # is rejected before reaching here.
+                    app.state.refused_params[upstream_model] = refused.union(blamed)
                     upstream = await send(body)
         except httpx.HTTPError:
             await asyncio.shield(

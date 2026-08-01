@@ -149,6 +149,22 @@ inference_gateway:
   request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    # THE ONLY BLOCK THAT MAY DIFFER FROM build.yaml, and a test asserts exactly
+    # that. A 183-line duplicate is a drift hazard: if the two files diverge in a
+    # budget, timeout or partition, this cell silently stops being comparable to
+    # the nine that use build.yaml, and nothing would fail to tell us.
+    #
+    # Pin gpt-5.6-sol to one Azure deployment. codex reduces a model id to its
+    # last path component, so a codex cell cannot ask for `azure_ai/gpt-5.6-sol`
+    # itself -- the gateway has to supply it. Without this the request lands on
+    # the unqualified load-balanced group, and the Responses API's encrypted
+    # reasoning content is decryptable only by the deployment that produced it:
+    # every turn after the first fails with invalid_encrypted_content, which
+    # killed this cell on r2, r3 and r4. Measured 2026-08-01 against the live
+    # proxy: bare `gpt-5.6-sol` failed 5 of 5 encrypted-content replays,
+    # `azure_ai/gpt-5.6-sol` passed 5 of 5.
+    model_aliases:
+      gpt-5.6-sol: azure_ai/gpt-5.6-sol
     max_concurrency: 8
   # The case budget is the spend control; these caps only stop a runaway. Sized
   # per CONFIGURATION.md at the same per-case-run rate as the other benchmarks:
