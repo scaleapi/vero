@@ -1400,3 +1400,43 @@ def test_unresolvable_path_task_source_names_the_missing_data(tmp_path):
     with pytest.raises(ValidationError, match="explicit version"):
         case("unpinned", task_source="gaia/gaia")
     case("pinned", task_source="gaia/gaia@sha256:abc123")
+
+
+def test_model_alias_tolerates_keys_a_given_launch_never_requests():
+    """One build config serves every cell of a grid, so the alias map must
+    tolerate keys the current launch cannot request.
+
+    `allowed_models` is templated per launch (``${optimizer_model}``), so a map
+    that pins the right deployment for one optimizer necessarily carries keys the
+    other launches never name. Those entries are inert -- an alias can only fire
+    for a model the allow-list already admitted -- so rejecting them would make
+    the field unusable in exactly the shared-config case it exists for.
+    """
+    spec = InferenceBudgetSpec(
+        allowed_models=["claude-opus-5"],
+        model_aliases={"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"},
+    )
+    assert spec.model_aliases == {"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"}
+
+    # A self-alias is a no-op and is dropped rather than rejected, so a template
+    # that resolves to `{X: X}` when no override is passed still validates.
+    assert (
+        InferenceBudgetSpec(
+            allowed_models=["gpt-producer"],
+            model_aliases={"gpt-producer": "gpt-producer"},
+        ).model_aliases
+        == {}
+    )
+
+    with pytest.raises(ValidationError, match="must not be empty"):
+        InferenceBudgetSpec(
+            allowed_models=["gpt-producer"], model_aliases={"gpt-producer": "  "}
+        )
+
+    # Reaches the gateway via model_dump, which is how the compiler lowers it.
+    assert InferenceBudgetSpec(
+        allowed_models=["gpt-producer"],
+        model_aliases={"gpt-producer": "vendor_x/gpt-producer"},
+    ).model_dump(mode="json")["model_aliases"] == {
+        "gpt-producer": "vendor_x/gpt-producer"
+    }
