@@ -776,6 +776,18 @@ def _preflight_models(config) -> None:
 @click.option("--model", help="Model used by the optimizer agent.")
 @click.option("--environment", default="modal", show_default=True)
 @click.option(
+    "--resume-from",
+    "resume_from",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    help=(
+        "Restore a previous run's exported session into this one, so the "
+        "relaunch keeps its candidates, its scores and its spent budget instead "
+        "of starting over. Takes the artifacts/session-rescue.tar.gz a dead "
+        "trial leaves behind, or the verifier/session.tar.gz a finished one "
+        "does. Opt-in: without it a relaunch is a fresh run."
+    ),
+)
+@click.option(
     "--env-file",
     "env_file",
     type=click.Path(path_type=Path, exists=True, dir_okay=False),
@@ -787,7 +799,9 @@ def _preflight_models(config) -> None:
 )
 @_PARAM_OPTION
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
-def run_command(config_path, agent, model, environment, params, env_file, extra):
+def run_command(
+    config_path, agent, model, environment, resume_from, params, env_file, extra
+):
     """Compile to a temporary directory and invoke `harbor run`."""
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
@@ -813,7 +827,10 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         task = compile_harbor_task(
             config,
             Path(temporary) / "task",
+            session_seed_archive=resume_from,
         )
+        if resume_from is not None:
+            click.echo(f"Resuming from session archive {resume_from}")
         command = [
             uvx,
             "--python",

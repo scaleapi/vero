@@ -270,7 +270,7 @@ def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkey
     )
     observed = {}
 
-    def compile_task(_config, output):
+    def compile_task(_config, output, **_):
         output.mkdir(parents=True)
         return output
 
@@ -330,7 +330,7 @@ def test_harbor_run_env_file_secrets_reach_subprocess_not_command_line(
     )
     observed = {}
 
-    def compile_task(_config, output):
+    def compile_task(_config, output, **_):
         # The build's declared-credential check reads os.environ at compile time,
         # so the env-file must already be applied here (not just at subprocess launch).
         observed["modal_at_compile"] = os.environ.get("MODAL_TOKEN_ID")

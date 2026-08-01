@@ -25,6 +25,7 @@ from vero.gateway.inference import generate_inference_token, token_digest
 from vero.harbor.build.config import HarborBuildConfig
 from vero.harbor.build.specs import WorkspaceOverlaySpec
 from vero.layout import LAYOUT
+from vero.sidecar.session import read_harbor_session_archive_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ SERVE_CONFIG = LAYOUT.serve_config
 AGENT_VOLUME = LAYOUT.agent_volume
 ADMIN_VOLUME = LAYOUT.admin_volume
 SESSION_DIR = LAYOUT.session_dir
+SESSION_SEED_ARCHIVE = LAYOUT.session_seed_archive
 TOKEN_PATH = LAYOUT.token_path
 INFERENCE_STATE = LAYOUT.inference_state
 INFERENCE_REQUEST_LOG_DIR = LAYOUT.inference_request_log_dir
@@ -277,6 +279,7 @@ def _deployment_config(
     local_task_source: bool,
     evaluation_inference_token: str | None,
     finalization_inference_token: str | None,
+    session_seed_archive: bool = False,
 ) -> dict:
     task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
     backends = {}
@@ -459,6 +462,9 @@ def _deployment_config(
         "agent_repo_path": AGENT_REPO,
         "session_dir": SESSION_DIR,
         "session_id": SESSION_ID,
+        "session_seed_archive": (
+            SESSION_SEED_ARCHIVE if session_seed_archive else None
+        ),
         "backends": backends,
         "access_policies": policies,
         "budgets": budgets,
@@ -588,9 +594,29 @@ def compile_harbor_task(
     output_dir: Path | str,
     *,
     vero_root: Path | None = None,
+    session_seed_archive: Path | str | None = None,
 ) -> Path:
-    """Emit a self-contained Harbor task directory from validated config."""
+    """Emit a self-contained Harbor task directory from validated config.
+
+    ``session_seed_archive`` is a previously exported session (the
+    ``session-rescue.tar.gz`` a dead trial leaves in its artifacts, or the
+    ``verifier/session.tar.gz`` a finished one leaves) to restore into the new
+    stack's session directory on first boot. Baking it into the sidecar image is
+    the only transport available: the session directory lives on a compose volume
+    inside a per-trial Modal sandbox, so nothing a relaunch could mount survives,
+    and the archive on the launching host is the only copy that does.
+    """
     output = Path(output_dir).expanduser().resolve()
+    seed_archive = (
+        Path(session_seed_archive).expanduser().resolve()
+        if session_seed_archive is not None
+        else None
+    )
+    if seed_archive is not None:
+        # Fail on the host, now, rather than after an image build and a stack
+        # bring-up inside a sandbox whose logs nobody is tailing. Reads the
+        # manifest only; the bytes are not unpacked here.
+        read_harbor_session_archive_manifest(seed_archive)
     source_root = (vero_root or Path(__file__).parents[4]).resolve()
     use_local_vero = _is_vero_source(source_root)
     if vero_root is not None and not use_local_vero:
@@ -715,6 +741,13 @@ def compile_harbor_task(
             Path(config.command_backend.harness_source),
             sidecar_dir / "harness",
         )
+    if seed_archive is not None:
+        # Into the sidecar's build context, beside the case lists it is as
+        # sensitive as: the archive carries database.json, whose per-case records
+        # name held-out tasks and their scores. The Dockerfile chmods it 600 on
+        # the way in, matching serve.json.
+        sidecar_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(seed_archive, sidecar_dir / "session-seed.tar.gz")
     local_task_source = (
         config.task_source is not None and Path(config.task_source).exists()
     )
@@ -754,6 +787,7 @@ def compile_harbor_task(
         local_task_source=local_task_source,
         evaluation_inference_token=evaluation_inference_token,
         finalization_inference_token=finalization_inference_token,
+        session_seed_archive=seed_archive is not None,
     )
     (sidecar_dir / "serve.json").write_text(
         json.dumps(deployment, ensure_ascii=False, indent=2) + "\n",
@@ -871,6 +905,9 @@ def compile_harbor_task(
         "sidecar_factory": FACTORY_PATH,
         "producer_base_url": PRODUCER_BASE_URL,
         "command_harness": config.command_backend is not None,
+        "session_seed_archive": (
+            SESSION_SEED_ARCHIVE if seed_archive is not None else None
+        ),
         # The Harbor backend hard-rejects request.seed, so only advertise the
         # flag when the build evaluates through a command backend.
         "seed_supported": config.command_backend is not None,

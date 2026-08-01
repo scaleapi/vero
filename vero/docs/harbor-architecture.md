@@ -102,10 +102,35 @@ against a benchmark's pinned baseline is
 `harness-engineering-bench/scripts/rescore_candidate.py --session <archive>`,
 which lives out of tree because it needs that benchmark's `build.yaml`.
 
-A true *resume* is not available and is not the goal here: the optimizer's
-working tree, its harness process, and its agent context all live in the Modal
-sandbox, which is torn down. What survives is every candidate the optimizer
-committed and every score it measured.
+The optimizer's working tree and its harness process are not recoverable: they
+live in the Modal sandbox, which is torn down. What survives is every candidate
+the optimizer committed and every score it measured.
+
+### Relaunching from what survived
+
+`vero harbor run --resume-from <archive>` takes either archive and bakes it into
+the new stack's sidecar image, and the sidecar restores it into the session
+directory on first boot, before the candidate repository, the evaluation
+database, the budget ledger or the agent's disclosure ledger are opened. Each of
+those reuses what is on disk, so seeding the directory *is* the resume.
+
+Baking it in is not an aesthetic choice. The session directory is a compose
+volume inside a per-trial sandbox, so nothing a relaunch could mount survives
+the trial that wrote it, and the archive sitting on the launching host is the
+only copy left. Two consequences follow. The archive is added to the sidecar
+image, so a large `candidates/repository.git` is paid for in build time and
+image size. And harbor's own `--max-retries` restart (`harbor/trial/queue.py`,
+`_execute_trial_with_retries`) does **not** benefit: it `rmtree`s the trial
+directory and calls `Trial.create` again against a fresh sandbox, within one
+`vero harbor run` process that has long since compiled its task, so no archive
+from the failed attempt exists yet, let alone one baked into an image. Resuming
+is a second `vero harbor run`, by hand, after the first has exited.
+
+What comes back is what the archive holds: the candidate commits, the evaluation
+records and their scores, and the spent agent budget. What does not is the
+optimizer's own reasoning. It restarts with an empty context and re-reads its
+prior evaluations from the restored `.evals` directory, so it is informed, not
+mid-thought.
 
 ## The evaluation core
 

@@ -103,6 +103,19 @@ direction = "maximize"
 [optimizer]
 kind = "claude"
 instruction = "Improve the program without changing its intended behavior"
+
+# [session]
+# Uncommented, `id` turns every later `vero run` over this file into a relaunch
+# of one logical run: the session directory becomes $VERO_HOME/sessions/<id>
+# instead of a fresh uuid4 per invocation, and the candidates, scores and budget
+# already on disk are picked up rather than remade. Commented out because the
+# resume is not free: a relaunch skips the baseline evaluation whenever a
+# manifest exists, so if the first attempt died *during* its baseline it hands
+# the rerun that attempt's unusable baseline record (no objective, no cases) and
+# every later comparison is against it, until `vero session clear`. Opt in per
+# run, with an id that names the run, and clear the session when the identity of
+# what you are optimizing changes.
+# id = "my-run-2026-08-01"
 '''
 
 

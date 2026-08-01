@@ -16,6 +16,9 @@ RUN uv pip install --system "{{ harbor_requirement }}"
 COPY agent-baseline {{ layout.trusted_repo }}
 COPY sidecar/cases {{ layout.cases }}
 COPY sidecar/serve.json {{ layout.serve_config }}
+{% if session_seed_archive %}
+COPY sidecar/session-seed.tar.gz {{ session_seed_archive }}
+{% endif %}
 {% if local_task_source %}
 COPY sidecar/task-source {{ layout.task_source }}
 {% endif %}
@@ -49,5 +52,11 @@ RUN mkdir -p /home/harness/.cache \
 # {{ layout.task_source }}, which harbor must read to grade host-side, remain readable
 # and are addressed by the deeper in-container isolation work.)
 RUN chmod 700 {{ layout.cases }} && chmod 600 {{ layout.serve_config }}
+{% if session_seed_archive %}
+{# The restored session's database.json carries held-out case membership and
+   per-case scores, the same secret the case lists above hold, so the seed
+   archive is locked to root on the same grounds. #}
+RUN chmod 600 {{ session_seed_archive }}
+{% endif %}
 
 WORKDIR /opt

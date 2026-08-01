@@ -7,6 +7,7 @@ import io
 import json
 import logging
 import os
+import shutil
 import tarfile
 import tempfile
 from collections import deque
@@ -227,6 +228,32 @@ def create_harbor_session_archive(
     return output
 
 
+def _validated_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    """Every member of a session archive, or a refusal naming the first bad one.
+
+    Factored out so the read-only inspection below applies exactly the rules the
+    extractor applies. Duplicating them would let the two drift, and the drift
+    that matters is the one where a launch-time check passes an archive the
+    sidecar then refuses an hour into the run, inside a sandbox nobody is
+    watching.
+    """
+
+    members = archive.getmembers()
+    for member in members:
+        path = PurePosixPath(member.name)
+        if (
+            path.is_absolute()
+            or not path.parts
+            or path.parts[0] != "session"
+            or ".." in path.parts
+            or member.issym()
+            or member.islnk()
+            or member.isdev()
+        ):
+            raise ValueError(f"unsafe Harbor session archive member: {member.name}")
+    return members
+
+
 def extract_harbor_session_archive(
     archive_path: Path | str,
     destination: Path | str,
@@ -237,25 +264,78 @@ def extract_harbor_session_archive(
     destination = Path(destination).expanduser().resolve()
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive_path, "r:gz") as archive:
-        members = archive.getmembers()
-        for member in members:
-            path = PurePosixPath(member.name)
-            if (
-                path.is_absolute()
-                or not path.parts
-                or path.parts[0] != "session"
-                or ".." in path.parts
-                or member.issym()
-                or member.islnk()
-                or member.isdev()
-            ):
-                raise ValueError(f"unsafe Harbor session archive member: {member.name}")
+        members = _validated_members(archive)
         archive.extractall(destination, members=members, filter="data")
     session = destination / "session"
     HarborSessionManifest.model_validate_json(
         (session / "harbor-session.json").read_text(encoding="utf-8")
     )
     return session
+
+
+def read_harbor_session_archive_manifest(
+    archive_path: Path | str,
+) -> HarborSessionManifest:
+    """Read a session archive's identity without unpacking it.
+
+    Exists so `vero harbor run --resume-from` can reject a wrong or corrupt
+    archive on the host, in the second before the compile, rather than baking it
+    into a sidecar image and discovering it inside a Modal sandbox after the
+    image build, the stack bring-up and the seed have already been paid for.
+    """
+
+    with tarfile.open(Path(archive_path).expanduser().resolve(), "r:gz") as archive:
+        _validated_members(archive)
+        try:
+            manifest = archive.extractfile("session/harbor-session.json")
+        except KeyError:
+            manifest = None
+        if manifest is None:
+            raise ValueError("Harbor session archive has no session manifest")
+        return HarborSessionManifest.model_validate_json(manifest.read())
+
+
+def restore_harbor_session_archive(
+    archive_path: Path | str,
+    session_dir: Path | str,
+) -> bool:
+    """Seed an empty session directory from a previous run's export.
+
+    Returns whether anything was restored. A session that already carries its
+    manifest is left untouched, because the two callers are indistinguishable
+    from here: a *relaunch* boots against a fresh volume and has to be seeded,
+    while a sidecar *restart* inside a live run boots against the volume it has
+    been writing all along, and overwriting that with the state of an older run
+    would undo everything since. Refusing on the manifest and not on emptiness
+    is deliberate: a first boot that died between mkdir and the manifest write
+    leaves a non-empty directory that still holds nothing worth keeping.
+
+    Staged into a sibling directory and moved in entry by entry, so a restore
+    killed half way leaves the session dir either untouched or with whole files,
+    never with a truncated database.json that reads as a complete one.
+    """
+
+    session_dir = Path(session_dir).expanduser().resolve()
+    if (session_dir / "harbor-session.json").is_file():
+        return False
+    session_dir.mkdir(parents=True, exist_ok=True)
+    staging = Path(
+        tempfile.mkdtemp(dir=session_dir.parent, prefix=f".{session_dir.name}-restore-")
+    )
+    try:
+        source = extract_harbor_session_archive(archive_path, staging)
+        for entry in sorted(source.iterdir()):
+            target = session_dir / entry.name
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            elif target.exists() or target.is_symlink():
+                target.unlink()
+            shutil.move(str(entry), str(target))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    _fsync_path(session_dir)
+    logger.info("Restored Harbor session into %s from %s", session_dir, archive_path)
+    return True
 
 
 def file_sha256(path: Path | str) -> str:
