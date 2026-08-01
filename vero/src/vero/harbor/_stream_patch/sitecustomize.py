@@ -320,6 +320,26 @@ def _apply() -> None:
             )
             return
 
+    # Parseable is not the same as safe. A factor above 1.0 makes each sleep grow
+    # from the one before, so a raised retry count stops being a wider window and
+    # becomes an unbounded one: at the shipped factor of 2, the sixtieth sleep is
+    # 2 * 2**59 seconds. That does not fail closed. It converts the crash this
+    # module exists to prevent into a hang, which is strictly harder to diagnose
+    # because the run neither finishes nor reports an error.
+    #
+    # Rejected rather than clamped. The whole premise here is that a long-lived
+    # stream needs PACING, and a flat delay is the only shape whose worst case is
+    # readable off the two numbers. Silently rewriting a caller's explicit choice
+    # would leave the log agreeing with a setting that is not in force.
+    factor = applied.get("stream_stdio_retry_delay_factor")
+    if factor is not None and factor > 1.0:
+        _warn(
+            f"{_FACTOR_ENV}={factor} grows every sleep from the last, so the "
+            "budget is unbounded rather than paced; leaving ALL reconnect "
+            "settings at modal's defaults. Use 1.0 for a flat delay."
+        )
+        return
+
     defaults.update(applied)
 
     # After the knobs, and deliberately not gated on each other. If the rewrite

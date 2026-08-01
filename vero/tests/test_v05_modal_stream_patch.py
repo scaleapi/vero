@@ -438,3 +438,43 @@ def test_one_bad_value_leaves_every_setting_at_modal_defaults() -> None:
     assert defaults["stream_stdio_retry_delay_secs"] == 0.01
     assert defaults["stream_stdio_retry_delay_factor"] == 2
     assert "leaving ALL reconnect settings" in stderr
+
+
+def test_a_growing_factor_is_refused_rather_than_accepted() -> None:
+    """Parseable is not safe: a factor above 1.0 makes the budget unbounded.
+
+    Greptile flagged this on PR #79. With modal's shipped factor of 2 and a
+    raised count, the sixtieth sleep is 2 * 2**59 seconds, so the "wider window"
+    is really no window at all. It does not fail closed either: the run neither
+    finishes nor errors, which is harder to diagnose than the crash this module
+    prevents. Refused as a set, so no half-applied policy survives.
+    """
+
+    stdout, stderr = _run_patch(
+        {
+            "VERO_MODAL_STREAM_RETRY_DELAY_SECS": "2.0",
+            "VERO_MODAL_STREAM_RETRY_FACTOR": "2",
+            "VERO_MODAL_STREAM_MAX_RETRIES": "60",
+        },
+        FAKE_MODAL,
+    )
+    defaults = eval(stdout.strip().splitlines()[-1])
+    assert defaults["stream_stdio_max_retries"] == 10
+    assert defaults["stream_stdio_retry_delay_secs"] == 0.01
+    assert defaults["stream_stdio_retry_delay_factor"] == 2
+    assert "unbounded rather than paced" in stderr
+    assert "Use 1.0 for a flat delay" in stderr
+
+
+def test_a_flat_factor_is_still_accepted() -> None:
+    """The guard must not reject the value the module actually ships."""
+
+    stdout, _ = _run_patch(
+        {
+            "VERO_MODAL_STREAM_RETRY_DELAY_SECS": "2.0",
+            "VERO_MODAL_STREAM_RETRY_FACTOR": "1.0",
+            "VERO_MODAL_STREAM_MAX_RETRIES": "60",
+        },
+        FAKE_MODAL,
+    )
+    assert eval(stdout.strip().splitlines()[-1])["stream_stdio_max_retries"] == 60
