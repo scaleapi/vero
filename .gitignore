@@ -15,3 +15,6 @@ wheels/
 secrets.env
 *.secrets.env
 !*.example
+
+# Codex CLI local state, including the worktrees it checks out for its own runs.
+.codex/
