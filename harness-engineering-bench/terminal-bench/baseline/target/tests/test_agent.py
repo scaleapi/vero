@@ -99,7 +99,7 @@ class TestOutputTruncation:
 
 
 class TestGatewayCredentials:
-    """The target must reach the metered gateway, never the upstream directly."""
+    """The target must find the gateway on either pair of variables."""
 
     @staticmethod
     def _construct(tmp_path: Any) -> TerminalBenchAgent:
@@ -108,20 +108,37 @@ class TestGatewayCredentials:
     def test_missing_credentials_raise(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.delenv("VERO_AGENT_INFERENCE_API_KEY", raising=False)
-        monkeypatch.delenv("VERO_AGENT_INFERENCE_BASE_URL", raising=False)
-        monkeypatch.setenv("OPENAI_API_KEY", "upstream-key")
-        monkeypatch.setenv("OPENAI_BASE_URL", "https://upstream.example/v1")
-        with pytest.raises(RuntimeError, match="VERO_AGENT_INFERENCE"):
+        for name in (
+            "VERO_AGENT_INFERENCE_API_KEY",
+            "VERO_AGENT_INFERENCE_BASE_URL",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+        ):
+            monkeypatch.delenv(name, raising=False)
+        with pytest.raises(RuntimeError, match="scoped API key"):
             self._construct(tmp_path)
 
-    def test_credentials_are_used_when_present(
+    def test_openai_variables_are_used_when_vero_ones_are_absent(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
     ) -> None:
-        monkeypatch.setenv("VERO_AGENT_INFERENCE_API_KEY", "scoped-token")
-        monkeypatch.setenv("VERO_AGENT_INFERENCE_BASE_URL", "https://gw.example/v1")
+        monkeypatch.delenv("VERO_AGENT_INFERENCE_API_KEY", raising=False)
+        monkeypatch.delenv("VERO_AGENT_INFERENCE_BASE_URL", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "scoped-token")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://gw.example/v1")
         agent = self._construct(tmp_path)
         assert "gw.example" in str(agent._client.base_url)
+
+    def test_dedicated_variables_win_over_openai_ones(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+    ) -> None:
+        """OPENAI_* may be the unmetered upstream; precedence keeps us off it."""
+        monkeypatch.setenv("VERO_AGENT_INFERENCE_API_KEY", "scoped-token")
+        monkeypatch.setenv("VERO_AGENT_INFERENCE_BASE_URL", "https://gw.example/v1")
+        monkeypatch.setenv("OPENAI_API_KEY", "upstream-key")
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://upstream.example/v1")
+        agent = self._construct(tmp_path)
+        assert "gw.example" in str(agent._client.base_url)
+        assert agent._client.api_key == "scoped-token"
 
 
 class TestRunLoop:
