@@ -52,14 +52,24 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    Then wait for it in **bounded** steps rather than one open-ended call:
 
    ```bash
-   job=$(evals run --detach ... | grep -o '"job_id": *"[^"]*"' | cut -d'"' -f4)
-   until evals wait "$job" --timeout 300 | tee /dev/stderr | grep -q '"status": *"complete"'; do :; done
+   evals run --detach --backend ... --evaluation-set ... --partition ...
+   # -> prints a job_id
+   evals wait JOB_ID --timeout 300
+   # -> returns within 5 minutes whether or not the job is done; call it again
+   #    while it is still running
    ```
 
-   `evals wait --timeout N` prints the current status and exits 0 when N seconds
-   pass, so you simply call it again; it is idempotent by design. Plain
-   `evals wait JOB_ID` with no `--timeout` blocks until the job finishes, and
-   `evals status JOB_ID` reports elapsed time.
+   `evals wait --timeout N` returns when the job reaches a terminal state OR
+   after N seconds, whichever comes first, and exits 0 either way, so calling it
+   again is always safe. A job is terminal when `evals status JOB_ID` reports
+   `complete`, `failed` or `cancelled`. **Check the status; do not loop on the
+   text of the wait output.** On success `evals wait` prints the evaluation
+   *result*, not the job record, so a loop that waits for the word "complete" in
+   that output never terminates, and on a `failed` or `cancelled` job every
+   further wait returns instantly, turning the same loop into a busy spin that
+   burns the rest of your run. Plain `evals wait JOB_ID` with no `--timeout`
+   blocks until the job finishes, which is fine for a short evaluation and is
+   the thing to avoid for a long one.
 
    **Why bounded, and not one long block.** Your process is read through a
    single long-lived stdout stream, and a harness only flushes a command's
