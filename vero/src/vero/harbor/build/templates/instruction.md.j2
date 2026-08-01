@@ -25,11 +25,11 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
      --partition {{ selection_partition }}
    ```
 
-   An evaluation can take many minutes. For a **short** one, let the call block
-   and read the result it returns. For anything longer than a few minutes, use
-   the bounded wait loop below instead: a single call that blocks in silence for
-   half an hour can get your run killed. Iterate cheaply on a subset first
-   (`--start 0 --stop N`, or repeated `--case-id ID`).
+   An evaluation can take many minutes. `evals run` waits for it and prints the
+   result. If it is still running after {{ wait_timeout_seconds | int }}s the
+   command returns the job record instead, carrying a `job_id`; the evaluation
+   keeps running and `evals wait JOB_ID` resumes the wait. Iterate cheaply on a
+   subset first (`--start 0 --stop N`, or repeated `--case-id ID`).
    {% if seed_supported %}
    Pass `--seed N` to reproduce a noisy comparison exactly.
    {% else %}
@@ -47,50 +47,19 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    and `evals diff OLD NEW`. Do not re-run an evaluation to see a number you
    truncated — look it up.
 
-   Add `--detach` to run several evaluations at once, and to keep any long one
-   from going silent: it returns a `job_id` immediately instead of blocking.
-   Then wait for it in **bounded** steps rather than one open-ended call:
-
-   ```bash
-   evals run --detach --backend ... --evaluation-set ... --partition ...
-   # -> prints a job_id
-   evals wait JOB_ID --timeout 300
-   # -> returns within 5 minutes whether or not the job is done; call it again
-   #    while it is still running
-   ```
-
-   `evals wait --timeout N` returns when the job reaches a terminal state OR
-   after N seconds, whichever comes first, and exits 0 either way, so calling it
-   again is always safe. A job is terminal when `evals status JOB_ID` reports
-   `complete`, `failed` or `cancelled`. **Check the status; do not loop on the
-   text of the wait output.** On success `evals wait` prints the evaluation
-   *result*, not the job record, so a loop that waits for the word "complete" in
-   that output never terminates, and on a `failed` or `cancelled` job every
-   further wait returns instantly, turning the same loop into a busy spin that
-   burns the rest of your run. Plain `evals wait JOB_ID` with no `--timeout`
-   blocks until the job finishes, which is fine for a short evaluation and is
-   the thing to avoid for a long one.
-
-   **Why bounded, and not one long block.** Your process is read through a
-   single long-lived stdout stream, and a harness only flushes a command's
-   output when that command *returns*. A wait that blocks for half an hour
-   therefore emits nothing for half an hour, and a stream idle that long can be
-   torn down by the network path even though the machine, the connection and the
-   sandbox are all healthy. When that happens the run dies with
-   `StreamTerminatedError` / "Connection lost", the outer trial is not retried,
-   and the whole optimization is lost. Observed 2026-07-31: a cell
-   died at 71 minutes, 9m57s into a silent wait, having already earned a 0.1224
-   validation score. A `--timeout 300` loop caps that silence at five minutes
-   and costs nothing, because each return is just one more line of output.
+   Add `--detach` **only** to run several evaluations at once: it returns a
+   `job_id` immediately without waiting. `evals wait JOB_ID` then waits for one
+   on the same bound, and `evals status JOB_ID` reports its state and elapsed
+   time without waiting at all. A job is finished when its status is `complete`,
+   `failed` or `cancelled`; any other status means it is still running, so wait
+   on it again.
 
    **Run every `evals` call in the foreground.** You are a single-shot headless
    run: nothing exists to deliver a notification or wake you later. If you put a
    long call in a background task, schedule a wake-up, or say you will "report
    back when it finishes", the run simply ends there and whatever you have not
-   submitted is lost. The bounded wait loop above is still foreground: it blocks
-   the whole time, it just returns and re-enters every few minutes instead of
-   sitting silent, so it satisfies this rule rather than bending it. A call that
-   blocks for a few minutes is working correctly — let it block. To wait on two
+   submitted is lost. A call that waits for minutes and hands back a
+   still-running job is working correctly: wait on it again. To wait on two
    jobs, wait out the first, then the second. Do not claim an improvement before
    its comparison baseline has been scored on the same cases.
 

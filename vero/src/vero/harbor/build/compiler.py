@@ -15,6 +15,7 @@ import tomllib
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 
+from vero.evals_cli import WAIT_TIMEOUT_SECONDS
 from vero.evaluation import (
     EvaluationBudget,
     EvaluationLimits,
@@ -799,6 +800,9 @@ def compile_harbor_task(
         ],
         "exhaust_budget": config.instruct_exhaust_budget,
         "disclose_budget": config.disclose_budget,
+        # Read from the CLI constant rather than restated here, so the number the
+        # instruction quotes cannot drift from the one `evals run` enforces.
+        "wait_timeout_seconds": WAIT_TIMEOUT_SECONDS,
         "build_timeout": config.build_timeout_seconds,
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))

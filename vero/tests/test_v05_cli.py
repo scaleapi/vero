@@ -416,6 +416,113 @@ def test_opencode_gets_a_step_limit_that_does_not_truncate_the_search(tmp_path):
     assert _opencode_gateway_args("claude-code", "claude-sonnet-5", tmp_path) == []
 
 
+def test_the_harness_is_configured_to_bound_one_tool_call():
+    """A silent tool call is what kills a run, so the bound goes on the harness.
+
+    The optimizer's stdout reaches harbor as one long-lived stream and a harness
+    flushes a command's output only when that command returns, so the length of
+    one tool call *is* the length of the stream's silence. On 2026-07-31 a cell
+    died at 71 minutes, 9m57s into a single silent call, discarding a candidate
+    already scored at 0.1224 on 49 validation cases.
+
+    The first fix for this asked the optimizer, in the instruction, to wait in
+    bounded steps. A prompt enforces nothing: the recipe it shipped had to be
+    corrected twice in review, and a model reconstructing the loop from memory
+    reintroduces the failure. Both harnesses expose the bound as a setting.
+    """
+    from vero.evals_cli import WAIT_TIMEOUT_SECONDS
+    from vero.harbor.cli import HARNESS_TOOL_TIMEOUT_SECONDS, _agent_tool_timeout_args
+
+    milliseconds = str(HARNESS_TOOL_TIMEOUT_SECONDS * 1000)
+
+    # opencode exposes a default only: packages/opencode/src/tool/shell.ts reads
+    # `flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000`, then `params.timeout ??
+    # defaultTimeoutMs` with no clamp. It covers the case that actually killed
+    # the run, where the instruction said to let the call block so the model
+    # never named a timeout of its own.
+    assert _agent_tool_timeout_args("opencode") == [
+        "--ae",
+        f"OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS={milliseconds}",
+    ]
+
+    # claude-code takes a true ceiling as well: a per-call timeout chosen inside
+    # the conversation cannot raise BASH_MAX_TIMEOUT_MS.
+    claude = _agent_tool_timeout_args("claude-code")
+    assert claude[0::2] == ["--ae", "--ae"]
+    assert claude[1::2] == [
+        f"BASH_DEFAULT_TIMEOUT_MS={milliseconds}",
+        f"BASH_MAX_TIMEOUT_MS={milliseconds}",
+    ]
+
+    # A harness whose knob is not verified is left at its own default rather
+    # than handed a variable it silently ignores.
+    assert _agent_tool_timeout_args("codex") == []
+    assert _agent_tool_timeout_args("mini-swe-agent") == []
+
+    # The evals CLI has to return on its own terms first. If the harness killed
+    # the call instead, the model would be handed opencode's "retry with a
+    # larger timeout" message, take the advice, and restore the silence.
+    assert HARNESS_TOOL_TIMEOUT_SECONDS > WAIT_TIMEOUT_SECONDS
+
+
+def test_a_build_can_override_the_tool_call_bound_it_is_given(tmp_path, monkeypatch):
+    """vero's cap is a default, not a seizure of the variable.
+
+    Harbor keeps the last `--ae` value for a key, so ordering decides who wins.
+    A build that legitimately needs a longer single call has to be able to say
+    so through `agent_env`, the same way it declares any other agent variable.
+    """
+    from vero.harbor import build as harbor_build
+    from vero.harbor import cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("name: org/task\n", encoding="utf-8")
+
+    class _Config:
+        harbor_requirement = "harbor[modal]==0.20.0"
+        agent_env = {"OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS": "900000"}
+        optimizer_harbor_args: list[str] = []
+        extra_harbor_args: list[str] = []
+        name = "vero/stub-benchmark"
+
+    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda *a, **k: _Config())
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda config, output: output)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda name: "/usr/bin/uvx")
+    monkeypatch.setattr(harbor_cli, "_compiled_run_environment", lambda task, overrides: {})
+
+    recorded: list[list[str]] = []
+
+    def _record(command, env=None):
+        recorded.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(harbor_cli.subprocess, "run", _record)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "run",
+            "--config",
+            str(config_path),
+            "--agent",
+            "opencode",
+            "--model",
+            "anthropic/claude-sonnet-5",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    command = recorded[0]
+    default = (
+        "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS="
+        f"{harbor_cli.HARNESS_TOOL_TIMEOUT_SECONDS * 1000}"
+    )
+    override = "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS=900000"
+    assert command.index(default) < command.index(override)
+
+
 def test_litellm_harnesses_get_the_gateway_url_under_the_name_they_read(tmp_path):
     """litellm reads <PROVIDER>_API_BASE; the provider SDKs read _BASE_URL.
 

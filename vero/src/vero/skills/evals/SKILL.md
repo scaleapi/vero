@@ -40,20 +40,26 @@ you truncated — it is on disk.
 
 ## Blocking vs detached
 
-By default `evals run` **blocks** until scoring finishes and returns the result
-— one call, nothing to track. Evaluations can take many minutes; that is
-expected, so let it block. This is what you want almost always.
+By default `evals run` **waits** for scoring and returns the result: one call,
+nothing to track. This is what you want almost always. Evaluations can take many
+minutes, and a wait is *bounded*: if the evaluation is still running when the
+bound expires, the command returns the job record (with its `job_id`) instead of
+the result and exits 0. Nothing is lost when that happens, the evaluation keeps
+running in the sidecar, and `evals wait JOB_ID` resumes waiting for it. Waiting
+again is always safe.
 
 Use `--detach` **only** to run several evaluations concurrently: it returns a
-`job_id` immediately instead of blocking. Then `evals wait JOB_ID` blocks until
-that job finishes and prints its result; or poll `evals status JOB_ID`, which
-now also reports `elapsed_seconds` (and `requested_cases` for a subset) so you
-can see it is progressing. To wait on two jobs, wait the first, then the second.
+`job_id` immediately without waiting. Then `evals wait JOB_ID` waits for one on
+the same bound and prints its result; or poll `evals status JOB_ID`, which also
+reports `elapsed_seconds` (and `requested_cases` for a subset) so you can see it
+is progressing. A job is finished when its status is `complete`, `failed` or
+`cancelled`. To wait on two jobs, wait the first, then the second.
 
 Run every `evals` call in the **foreground**. If you are a headless single-shot
 run, nothing can wake you: putting a long call in a background task, scheduling
 a wake-up, or promising to "report back when it finishes" ends the run right
-there. A call that blocks for half an hour is working correctly.
+there. A call that waits for minutes and hands back a still-running job is
+working correctly; wait on it again.
 
 ## Run options worth knowing (`evals run --help` for all)
 
