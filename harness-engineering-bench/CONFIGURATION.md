@@ -171,8 +171,8 @@ benchmark can be checked against the others at a glance.
 
 | | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | terminal-bench | swe-bench-pro |
 |---|---|---|---|---|---|---| --- |
-| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
-| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.068 ±0.026 (agg 0.632) | 0.732 ±0.010 | 0.462 ±0.028 | 0.260 ±0.018 | 0.294 ±0.008 ◈ |
+| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b (alt: gpt-5.4-mini) | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.067 ±0.025 (agg 0.632); alt 0.122 ±0.018 | 0.732 ±0.010 | 0.462 ±0.028 | 0.241 ±0.013 | 0.294 ±0.008 ◈ |
 | split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 17/36/36 | 146/292/293 ◈ |
 | dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 68 | 100 / 146 ◈ |
 | val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 144 | 100 / 292 ◈ |
@@ -341,7 +341,16 @@ capability. See `runs/BASELINES.md`.
 ◆ Held-out baseline of the seed harness on the **test** partition, mean over
 K=3 independent rounds; ± is the stdev across the three round means. Pinned
 into each target's `baseline_reward` with `score_baseline: false`, which avoids
-re-scoring the seed every finalization. The pin is reported in every run's
+re-scoring the seed every finalization. **Failed-trial convention** (adopted
+2026-07-31 after review of PR #75): a trial the *seed* killed scores 0 — an
+optimizer can fix the harness, and finalization zero-fills a candidate's dead
+attempts the same way, so the floor must pay the same tax; a trial the
+*platform* killed is dropped — retries cannot score a trial that never ran, and
+zero-filling infra bakes outage luck into the pin. The classification lives in
+`runs/recompute.py`; unclassified exception types are a hard error there. Under
+this convention only three floors moved (swe-atlas both builds, terminal-bench
+— the two seeds with material defect rates); the deepseek pins' rare failures
+were all platform-side. The pin is reported in every run's
 `finalize.json` under `baseline_rewards`, so the improvement delta is recorded
 alongside the reward rather than joined by hand against this table. (Runs before
 2026-07-28 carry an empty `baseline_rewards`: the verifier read the pin only
@@ -354,6 +363,16 @@ signal — a candidate `reward_key` switch, pending the verifier emitting
 deepseek benchmarks logged zero exceptions over 945 trials, swe-atlas lost
 5/150 to gpt-oss 128k context overflow, and gaia lost 4/198 (infra) after the
 agent's reason/search-only-turn crash was fixed.
+
+swe-atlas also carries a second pinned target build,
+`baseline/build.gpt54mini.yaml`: **gpt-5.4-mini at 0.122 ±0.018** (n=148, K=3:
+0.100 / 0.122 / 0.143, measured 2026-07-31 with the same `--seed` path). The
+two pins are per-build, not interchangeable — each build's delta is against its
+own target's floor, never the other's. 12 of its 150 trials raised the seed's
+"neither an answer nor a tool call" RuntimeError (~8%) and score 0 in the pin
+per the failed-trial convention — seed headroom in the same sense as
+terminal-bench's timeouts; 2 more fell to platform-side failures (one
+RateLimitError, one VerifierTimeoutError) and are excluded.
 
 **Re-pin these whenever a seed agent changes.** The first set went stale because the seed agents moved 4-10 commits afterwards -- one commit touched all five -- and nothing recorded the dependency. Re-measured 2026-07-28 with `scripts/rescore_candidate.py --seed`, which reuses the original path exactly. Only tau3 moved materially (+0.121 against an sd of 0.0099, so a genuine seed improvement); the other four shifted inside their own noise.
 

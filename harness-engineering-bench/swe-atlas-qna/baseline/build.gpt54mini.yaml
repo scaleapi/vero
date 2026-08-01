@@ -31,15 +31,20 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # NO baseline_reward. The pinned 0.0676 was measured on
-    # fireworks_ai/gpt-oss-120b and says nothing about this target; a delta
-    # against it would be a model comparison dressed up as an optimization
-    # result.
-    # With `score_baseline: false` below, this run therefore reports an ABSOLUTE
-    # held-out score and no delta. That is deliberate: the seed floor for this
-    # target is measured out of band by holdout/validate-model.sh, which scores
-    # the unmodified seed on held-out cases for a fraction of a finalization
-    # pass. Pair the two numbers; do not compare this score to 0.0676.
+    # Measured on THIS target model, not inherited: build.yaml's floor was
+    # measured on fireworks_ai/gpt-oss-120b and says nothing about gpt-5.4-mini
+    # -- a delta against it would be a model comparison dressed up as an
+    # optimization result. Pinned via
+    #   rescore_candidate.py --seed --benchmark swe-atlas-qna --model gpt-5.4-mini
+    # (the same path that produced every other pinned baseline).
+    #
+    # Convention: trials the SEED killed score 0 (12 RuntimeError, the seed's
+    # empty-completion fail-fast at ~8% -- harness headroom an optimizer can
+    # fix, and finalization zero-fills a candidate's dead attempts the same
+    # way); trials the PLATFORM killed are dropped (1 RateLimitError,
+    # 1 VerifierTimeoutError -- zero-filling infra bakes outage luck into the
+    # floor). See runs/recompute.py for the classification.
+    baseline_reward: 0.1216  # K=3: 0.100 / 0.122 / 0.143 (sd 0.0175, n=148). See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
     # The held-out eval is noisy: score the selected candidate 3x per case and
@@ -57,7 +62,7 @@ objective:
   direction: maximize
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
-score_baseline: false  # one held-out pass only; seed floor measured out of band
+score_baseline: false  # seed floor pinned above; don't re-score it every run
 rescore_top_k: 3
 rescore_attempts: 1
 

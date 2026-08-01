@@ -36,7 +36,11 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.2600  # K=3: 0.273 / 0.235 / 0.273 (sd 0.0176, n=100). See runs/BASELINES.md
+    # Seed-killed trials score 0 (4 UnicodeDecodeError from the seed's
+    # undecodable-output bug, 4 AgentTimeoutError the verifier could not score;
+    # the other 14 timeouts scored on final container state and were always in
+    # the pin); platform-killed trials are dropped. See runs/recompute.py.
+    baseline_reward: 0.2407  # K=3: 0.250 / 0.222 / 0.250 (sd 0.0131, n=108); was 0.2600 excluding seed-killed trials. See runs/BASELINES.md
     # 36 held-out cases was expected to be noisy -- it is the smallest test set in
     # the suite -- but the measured sd is the second tightest of the six, behind
     # only tau3. Deterministic per-task tests instead of an LLM judge is the
