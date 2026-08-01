@@ -53,7 +53,8 @@ Use `--detach` **only** to run several evaluations concurrently: it returns a
 the same bound and prints its result; or poll `evals status JOB_ID`, which also
 reports `elapsed_seconds` (and `requested_cases` for a subset) so you can see it
 is progressing. A job is finished when its status is `complete`, `failed` or
-`cancelled`. To wait on two jobs, wait the first, then the second.
+`cancelled`; `evals wait` prints the result if it completed and fails with the
+reason if it did not. To wait on two jobs, wait the first, then the second.
 
 Run every `evals` call in the **foreground**. If you are a headless single-shot
 run, nothing can wake you: putting a long call in a background task, scheduling

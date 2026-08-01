@@ -362,3 +362,25 @@ def test_wait_timeout_returns_still_running_and_enriched(monkeypatch):
     payload = json.loads(result.output)
     assert payload["status"] == "running"
     assert payload["requested_cases"] == 3
+
+
+def test_wait_on_a_dead_job_exits_non_zero_like_the_run_it_resumes(monkeypatch):
+    """`evals run` raises on a failed job, so its resumption has to as well.
+
+    Now that a plain `evals run` returns a job_id whenever an evaluation
+    outlives its bound, `evals wait` is where most failures are actually
+    observed. Printing `status: failed` and exiting 0 there would let a shell
+    caller, and an optimizer reading only the exit code, treat a dead
+    evaluation as a finished measurement.
+    """
+    import vero.harbor.cli as harbor_cli
+
+    def fake_request(method, path, **kw):
+        assert not path.endswith("/result"), "a dead job has no result to fetch"
+        return {"job_id": "j", "status": "failed", "error": "backend refused the partition"}
+
+    monkeypatch.setattr(harbor_cli, "_request", fake_request)
+    result = CliRunner().invoke(evals, ["wait", "j"])
+
+    assert result.exit_code != 0
+    assert "backend refused the partition" in result.output

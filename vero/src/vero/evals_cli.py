@@ -429,6 +429,11 @@ def wait_command(job_id, poll_interval, timeout):
     nothing for tens of minutes can get the whole run killed (see
     WAIT_TIMEOUT_SECONDS), and re-entering costs one line of output, so the
     bound is the default rather than something to opt into.
+
+    A job that ended in `failed` or `cancelled` exits non-zero naming the reason,
+    the same as `evals run`. This is the resumption of that command's own wait,
+    so it has to report a dead evaluation the same way; printing the record and
+    exiting 0 would let a shell caller read a failure as a finished measurement.
     """
     request = _sidecar_request()
     terminal = {"complete", "failed", "cancelled"}
@@ -442,10 +447,12 @@ def wait_command(job_id, poll_interval, timeout):
             click.echo(json.dumps(_enrich_job(job), indent=2))
             return
         time.sleep(poll_interval)
-    if status == "complete":
-        click.echo(json.dumps(request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
-    else:
-        click.echo(json.dumps(_enrich_job(job), indent=2))
+    if status != "complete":
+        raise click.ClickException(
+            f"evaluation job {job_id} {status}: "
+            f"{job.get('error') or 'no reason recorded'}"
+        )
+    click.echo(json.dumps(request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
 
 
 @evals.command("list")

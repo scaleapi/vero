@@ -52,7 +52,8 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
    on the same bound, and `evals status JOB_ID` reports its state and elapsed
    time without waiting at all. A job is finished when its status is `complete`,
    `failed` or `cancelled`; any other status means it is still running, so wait
-   on it again.
+   on it again. `evals wait` prints the result if the job completed and fails
+   with the reason if it did not, so you never have to read a status to tell.
 
    **Run every `evals` call in the foreground.** You are a single-shot headless
    run: nothing exists to deliver a notification or wake you later. If you put a
