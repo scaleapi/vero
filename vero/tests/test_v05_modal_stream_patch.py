@@ -202,3 +202,27 @@ def test_module_is_importable_without_side_effects() -> None:
     """`runpy` it directly: no modal, no environment, no exception."""
 
     runpy.run_path(str(PATCH_DIRECTORY / "sitecustomize.py"), run_name="not_main")
+
+
+def test_one_bad_value_leaves_every_setting_at_modal_defaults() -> None:
+    """All or nothing: the three are only meaningful together.
+
+    Committing the valid ones would pair a raised retry count with modal's
+    exponential default, and that does not fail closed. Sleeps double from the
+    delay, so ~60 retries means sleeps longer than the run: the crash this fixes
+    becomes a hang, which is harder to diagnose than what it replaced.
+    """
+
+    stdout, stderr = _run_patch(
+        {
+            "VERO_MODAL_STREAM_RETRY_DELAY_SECS": "2.0",
+            "VERO_MODAL_STREAM_RETRY_FACTOR": "not-a-float",
+            "VERO_MODAL_STREAM_MAX_RETRIES": "60",
+        },
+        FAKE_MODAL,
+    )
+    defaults = eval(stdout.strip().splitlines()[-1])
+    assert defaults["stream_stdio_max_retries"] == 10
+    assert defaults["stream_stdio_retry_delay_secs"] == 0.01
+    assert defaults["stream_stdio_retry_delay_factor"] == 2
+    assert "leaving ALL reconnect settings" in stderr

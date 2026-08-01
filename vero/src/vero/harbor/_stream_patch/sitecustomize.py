@@ -103,17 +103,26 @@ def _apply() -> None:
         _warn(f"modal API changed, absent knobs {missing}; defaults unchanged")
         return
 
+    # Parse every value before writing any, because the three are only meaningful
+    # as a set. Committing the valid ones would pair a raised retry count with
+    # Modal's exponential default, and that combination does not fail closed: the
+    # sleeps double from the delay, so ~60 retries means sleeps longer than the
+    # run. A bad factor would turn the crash this fixes into a hang.
     applied = {}
     for name, env, cast in _SETTINGS:
         raw = os.environ.get(env)
         if raw in (None, ""):
             continue
         try:
-            defaults[name] = cast(raw)
+            applied[name] = cast(raw)
         except ValueError:
-            _warn(f"{env}={raw!r} is not a valid {cast.__name__}; left at default")
-            continue
-        applied[name] = defaults[name]
+            _warn(
+                f"{env}={raw!r} is not a valid {cast.__name__}; "
+                "leaving ALL reconnect settings at modal's defaults"
+            )
+            return
+
+    defaults.update(applied)
 
     if applied:
         delay = applied.get("stream_stdio_retry_delay_secs")
