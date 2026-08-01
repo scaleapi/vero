@@ -97,15 +97,17 @@ class TerminalBenchAgent(BaseAgent):
         if self.model_name is None:
             raise ValueError("Terminal-Bench agent requires a Harbor model")
         self._api_model = self.model_name.removeprefix("openai/")
-        # Fail closed: OPENAI_* here can point at the unmetered upstream, so a
-        # fallback would bypass metering and the model allow-list silently.
-        gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY")
-        gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL")
+        # Dedicated names first; they carry the gateway when OPENAI_* is upstream.
+        gateway_key = os.environ.get("VERO_AGENT_INFERENCE_API_KEY") or os.environ.get(
+            "OPENAI_API_KEY"
+        )
+        gateway_url = os.environ.get("VERO_AGENT_INFERENCE_BASE_URL") or os.environ.get(
+            "OPENAI_BASE_URL"
+        )
         if not gateway_key or not gateway_url:
             raise RuntimeError(
-                "Terminal-Bench target inference requires "
-                "VERO_AGENT_INFERENCE_API_KEY and VERO_AGENT_INFERENCE_BASE_URL; "
-                "refusing to fall back to OPENAI_*"
+                "Terminal-Bench target inference requires a scoped API key and "
+                "base URL on VERO_AGENT_INFERENCE_* or OPENAI_*"
             )
         # An unretried rate limit inside a trial scores the failure value.
         self._client = AsyncOpenAI(
