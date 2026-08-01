@@ -269,24 +269,26 @@ _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 # The retained span is measured in BYTES, not seconds, so the safe window in
 # seconds scales inversely with how chatty the harness is. Probed against live
 # sandboxes: 6 KB over 150s and 240 KB over 120s both reconnected contiguously,
-# 3 MB over 30s came back empty. A measured opencode optimizer transcript runs
-# ~350 B/s, so 120s is ~42 KB, inside the verified range with roughly 6x margin
-# on the rate. Re-measure before raising this, and treat a much noisier harness
-# as a reason to lower it.
+# 3 MB over 30s came back empty. The ceiling is therefore a byte count somewhere
+# above 240 KB, and how many seconds that buys depends entirely on output rate.
 #
-# 120s is kept rather than lowered now that it is spent per outage rather than
-# once per stream, because the bound is bytes retained across a single gap and
-# that bound did not move: what changed is how often the window is available, not
-# how wide one gap may safely be. The alternative to riding out a gap is losing a
-# multi-hour phase to the outer-trial retry, which prices 42 KB of exposure as
-# cheap. Lower this if a harness is chattier than the ~350 B/s measured, since
-# that, not the elapsed seconds, is what overruns the buffer.
+# A measured opencode optimizer transcript runs ~350 B/s, so 600s of outage is
+# ~210 KB, still inside the 240 KB that was verified to reconnect contiguously.
+# That is what sets this value: the widest window that stays within the
+# measured-safe envelope at the measured rate, not a guess at how long drops last.
 #
-# Note what this value is NOT: evidence that 120s covers real outages. Nothing
-# here measures how long a drop actually lasts. It is the largest window that is
-# safe, and the outer-trial retry remains the backstop past it.
+# This was 120s (~42 KB) first, about 6x more conservative than the evidence
+# required. The phase it protects runs for hours, so a two-minute ceiling let one
+# blip end work that had already cost hours and dollars, which is the wrong price
+# for 42 KB of exposure. Widening it does not weaken the byte bound, it stops
+# leaving most of the bound unused.
+#
+# Lower this for a harness chattier than the ~350 B/s measured, and re-measure
+# before raising it further: the rate, not the elapsed seconds, is what overruns
+# the buffer. Nothing here measures how long a real drop lasts, and the
+# outer-trial retry remains the backstop past this window.
 MODAL_STREAM_RECONNECT_DELAY_SECONDS = 2.0
-MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 120
+MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 600
 MODAL_STREAM_RECONNECT_FACTOR = 1.0
 
 # Directory holding the `sitecustomize` that applies the above inside the harbor
