@@ -98,6 +98,16 @@ class TaskLayout:
         return f"{self.admin_volume}/session"
 
     @property
+    def session_rescue_archive(self) -> str:
+        """Pre-finalization session snapshot, taken before artifact collection.
+
+        Deliberately a sibling of ``session_dir`` rather than a child, so the
+        archive the verifier later builds from ``session_dir`` cannot contain a
+        copy of this one.
+        """
+        return f"{self.admin_volume}/session-rescue.tar.gz"
+
+    @property
     def case_resources_dir(self) -> str:
         return f"{self.admin_volume}/case-resources"
 

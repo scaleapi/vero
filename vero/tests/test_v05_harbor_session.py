@@ -6,7 +6,9 @@ import tarfile
 from datetime import UTC, datetime
 
 import pytest
+from click.testing import CliRunner
 
+from vero.cli import main
 from vero.evaluation import (
     BackendProvenance,
     EvaluationSet,
@@ -103,6 +105,67 @@ def test_harbor_session_archive_records_symlinks_as_metadata_without_failing(tmp
     reasons = {entry["path"]: entry["reason"] for entry in skipped["skipped"]}
     assert reasons["session/link_in"] == "symlink"
     assert reasons["session/link_abs"] == "symlink"
+
+
+def test_archive_session_command_snapshots_without_a_token_or_a_live_sidecar(
+    tmp_path,
+):
+    """The rescue path must work from a collect hook during trial teardown.
+
+    That means no admin token and no HTTP: the hook runs while the trial is
+    already unwinding, and on 2026-07-31 the failure that lost a whole run was a
+    lost Modal stream, so any recovery that depends on another round trip is
+    exactly the thing that cannot be relied on. Filesystem only.
+    """
+    session = tmp_path / "state/admin/session"
+    session.mkdir(parents=True)
+    (session / "harbor-session.json").write_text(
+        _manifest().model_dump_json(indent=2) + "\n"
+    )
+    (session / "database.json").write_text('{"id":"trial"}\n')
+    (session / "candidates").mkdir()
+    (session / "candidates" / "repository.json").write_text('{"family":"git"}\n')
+    output = tmp_path / "state/admin/session-rescue.tar.gz"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "archive-session",
+            "--session-dir",
+            str(session),
+            "--output",
+            str(output),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    reported = json.loads(result.output)
+    assert reported["session"] == str(output)
+    assert reported["sha256"] == file_sha256(output)
+
+    # Same format the verifier's own export produces, so the recovery tooling
+    # that reads a session.tar.gz reads this one unchanged.
+    extracted = extract_harbor_session_archive(output, tmp_path / "extracted")
+    assert (extracted / "database.json").read_text() == '{"id":"trial"}\n'
+    assert (extracted / "candidates" / "repository.json").is_file()
+
+
+def test_archive_session_command_reports_a_missing_session(tmp_path):
+    result = CliRunner().invoke(
+        main,
+        [
+            "harbor",
+            "archive-session",
+            "--session-dir",
+            str(tmp_path / "absent"),
+            "--output",
+            str(tmp_path / "session-rescue.tar.gz"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert not (tmp_path / "session-rescue.tar.gz").exists()
 
 
 def test_harbor_session_archive_rejects_traversal(tmp_path):

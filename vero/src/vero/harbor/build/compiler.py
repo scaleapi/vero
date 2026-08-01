@@ -42,6 +42,18 @@ PRODUCER_BASE_URL = LAYOUT.scope_url("producer", LAYOUT.optimizer_attribution)
 # must be here, or the rendered compose emits the key twice.
 GATEWAY_ROUTED_CREDENTIALS = frozenset(LAYOUT.routed_credential_envs)
 
+# The pre-collection session snapshot (see the [[verifier.collect]] block in
+# task.toml.j2). Measured: archiving a real 63M / ~2300-file session took 3.2s,
+# so Harbor's 60s collect-hook default would probably do. It is raised anyway
+# because a long optimization writes a full Harbor trial record per evaluated
+# case, and the whole point of the hook is to hold under the conditions that
+# already destroyed a run. Still bounded, because the hook runs inside the
+# trial's teardown and a hung one would stall artifact collection behind it.
+SESSION_RESCUE_TIMEOUT_SECONDS = 600
+# Flat name at the artifacts root, rather than Harbor's default of mirroring the
+# container path (which would bury it at artifacts/state/admin/).
+SESSION_RESCUE_DESTINATION = "session-rescue.tar.gz"
+
 # Container paths and service identities come from the layout, never from a
 # literal here: the templates read the same object, so the two cannot drift.
 VERO_DIR = LAYOUT.vero
@@ -791,6 +803,8 @@ def compile_harbor_task(
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),
+        "session_rescue_timeout": SESSION_RESCUE_TIMEOUT_SECONDS,
+        "session_rescue_destination": SESSION_RESCUE_DESTINATION,
         "overlay_present": overlay_present,
         "overlay_excludes": overlay_excludes,
     }
