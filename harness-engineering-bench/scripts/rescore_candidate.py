@@ -48,12 +48,21 @@ def log(message: str) -> None:
     print(f"[rescore] {message}", flush=True)
 
 
-def load_build(benchmark: str) -> tuple[dict, Path]:
+def load_build(benchmark: str, config: str = "build.yaml") -> tuple[dict, Path]:
+    """Load a benchmark's build config.
+
+    `config` names the file inside `<benchmark>/baseline/`, defaulting to the
+    canonical `build.yaml`. A benchmark retargeted at a second model keeps that
+    canonical file untouched and adds a variant beside it (see
+    swe-atlas-qna/baseline/build.gpt54mini.yaml), and the variant needs scoring by
+    the same path as the pinned baselines or its number is not comparable to
+    anything.
+    """
     import yaml  # provided by the vero environment
 
-    path = BENCH_ROOT / benchmark / "baseline" / "build.yaml"
+    path = BENCH_ROOT / benchmark / "baseline" / config
     if not path.is_file():
-        sys.exit(f"no build.yaml for benchmark {benchmark!r} at {path}")
+        sys.exit(f"no {config} for benchmark {benchmark!r} at {path}")
     return yaml.safe_load(path.read_text()), path
 
 
@@ -208,6 +217,11 @@ def main() -> int:
         ),
     )
     parser.add_argument("--benchmark", required=True)
+    parser.add_argument(
+        "--config", default="build.yaml",
+        help=("build config inside <benchmark>/baseline/ (default build.yaml). "
+              "Use this to score a retargeted variant, e.g. build.gpt54mini.yaml."),
+    )
     parser.add_argument("--version", help="candidate sha (default: the shipped one)")
     parser.add_argument("--partition", default="test")
     parser.add_argument(
@@ -227,7 +241,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    build, build_path = load_build(args.benchmark)
+    build, build_path = load_build(args.benchmark, args.config)
     outdir = Path(args.output).resolve() if args.output else Path(
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)

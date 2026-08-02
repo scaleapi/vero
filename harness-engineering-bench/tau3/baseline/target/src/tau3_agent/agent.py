@@ -428,9 +428,28 @@ class Tau3Agent(BaseAgent):
 
             text = (message.content or "").strip()
             if not text:
-                raise RuntimeError(
-                    "model returned neither a customer message nor a tool call"
+                # No tool call and no message: the model only reasoned this turn, or
+                # was truncated at the token limit. Nudge and carry on rather than
+                # crashing -- MAX_TURNS plus the end_conversation fallback below
+                # already bound the loop. gaia's agent took the same fix in
+                # 4e90dace ("don't crash on reason/search-only turns"); tau3 never
+                # got it, and it stayed invisible while the target was
+                # deepseek-v4-flash, which does not emit reason-only turns.
+                # Measured 2026-07-31 on the 150-case held-out set with
+                # gpt-5.4-mini at medium effort: this raise killed 17 of 150 cases,
+                # putting the run above the 0.1 error_rate_threshold that aborts an
+                # evaluation outright.
+                self._trace({"turn": turn, "empty_turn": True})
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Continue. Either call a domain tool or use "
+                            "send_message_to_user to reply to the customer."
+                        ),
+                    }
                 )
+                continue
             messages.append({"role": "assistant", "content": text})
             fallback_tool = (
                 "end_conversation" if text == "###STOP###" else "send_message_to_user"
