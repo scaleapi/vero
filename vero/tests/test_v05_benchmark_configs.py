@@ -246,6 +246,21 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
     assert not shell.task_services_use_upstream
 
     # What makes it the shell variant.
+    # The framing lives in a template, not in `description`: the built-in
+    # instruction opens by telling the optimizer to improve the program, which
+    # is the first thing it reads and is false here.
+    assert shell.instruction_template is not None
+    template = Path(shell.instruction_template)
+    assert template.is_file()
+    assert seeded.instruction_template is None, (
+        "the seeded gaia config should keep the built-in instruction"
+    )
+    body = template.read_text(encoding="utf-8")
+    assert '{% extends "instruction.md.j2" %}' in body, (
+        "the shell template must extend the built-in one rather than restate the "
+        "workflow and rules, or it drifts the moment the shared instruction changes"
+    )
+
     agent_repo = Path(shell.agent_repo)
     assert agent_repo.name == "target-shell"
     assert agent_repo.is_dir()

@@ -1,21 +1,12 @@
 name: vero/optimize-gaia-shell
 description: >-
-  Build a GAIA agent, then optimize it. The target is a skeleton: it satisfies the
-  Harbor agent interface, resolves the model, and constructs an OpenAI client, but
-  its run method does not attempt the task -- it writes an empty answer and returns,
-  so it scores zero. There is no working implementation to tune.
-
-
-  Your first job is to make it solve GAIA tasks at all. Your second, and the one the
-  score rewards, is to make it as good as you can. Both matter: an implementation that
-  merely runs is worth little, and time spent polishing before anything works is worth
-  nothing. Get to a scoring agent quickly, measure it, and improve from there.
-
-
-  How to solve the tasks is yours to decide -- the approach, the tools the agent has,
-  how it uses the environment, how many model calls it takes, and when it stops.
-  Preserve the Harbor agent interface and the class import path. The grader reads the
-  exact answer from /app/answer.txt.
+  The program must answer canonical GAIA tasks: general-knowledge questions that
+  may need research, computation, or inspection of attached files. How it does
+  that is yours to decide -- the approach, what the agent can do, how it uses its
+  environment, how many model calls it takes, and when it stops. Preserve the
+  Harbor agent interface and the class import path. The grader reads the exact
+  answer from /app/answer.txt.
+instruction_template: instruction.shell.md.j2
 agent_repo: target-shell
 task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
 task_manifest: ../partitions/manifest.json

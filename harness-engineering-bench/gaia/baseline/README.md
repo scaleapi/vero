@@ -45,6 +45,17 @@ half-built candidate gets a number rather than nothing.
 skeleton writing an empty answer. Confirm it with one baseline round before
 quoting deltas against it.
 
+**The framing lives in a template, not in `description`.** The built-in
+instruction opens with "Improve the program in ...", which is the first thing the
+optimizer reads and is false here. `instruction_template:
+instruction.shell.md.j2` replaces that opening with "Build the program, then
+optimize it". The template `{% extends "instruction.md.j2" %}` and overrides only
+the `framing` block, so the workflow, budget, inspection and rules sections are
+inherited verbatim and cannot drift as the shared instruction evolves -- the
+invariant test asserts both the extends and the byte-identical remainder.
+`description` is left saying only what the program must *do*, which keeps task
+shape and task content in separate places.
+
 **Deliberately not in the target.** The rationale above lives in this README
 because the optimizer mounts `target-shell/` and would read anything placed
 there. Notes about what the seed lacks, or what a good implementation would
