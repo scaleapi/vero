@@ -1,0 +1,28 @@
+{# Framing for a shell-seed task: there is no working program to improve, so the
+   built-in opening ("Improve the program ... ") is wrong here and would be the
+   first thing the optimizer reads. Everything below the framing -- workflow,
+   budget, inspection, rules -- is inherited unchanged, so this variant stays in
+   step with the shared instruction as it evolves. #}
+{% extends "instruction.md.j2" %}
+{% block framing %}
+# Build the program, then optimize it
+
+The program in `{{ layout.target_repo }}` is a skeleton. It satisfies the agent
+interface and runs to completion, but it does not attempt the task: it produces an
+empty answer and scores zero. There is no working implementation to tune.
+
+Write one, then make it score as highly as possible on the hidden final evaluation.
+The trusted evaluation sidecar owns the cases, scoring,
+{% if disclose_budget %}budget, {% endif %}and final candidate selection.
+
+Both halves count. An implementation that merely runs is worth little, and time
+spent refining a design before anything scores is worth nothing. Reach something
+that scores, measure it, and improve from there.
+{% if description %}
+
+## Objective
+
+{{ description }}
+{% endif %}
+
+{% endblock %}

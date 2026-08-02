@@ -1545,3 +1545,85 @@ def test_harbor_itself_routes_the_rescue_hook_into_the_sidecar_collection_pass(
     (artifact,) = sidecar_artifacts
     assert artifact.source == LAYOUT.session_rescue_archive
     assert artifact.destination == SESSION_RESCUE_DESTINATION
+
+
+def test_custom_instruction_template_replaces_only_the_framing(tmp_path):
+    """A build may supply its own instruction template and extend the built-in one.
+
+    `description` is the only per-build lever on the instruction, and it is the
+    wrong one when a task contradicts the shared framing: the shell-seed variants
+    have to *build* a program, while the built-in opening tells them to *improve*
+    one, and that opening is the first thing the optimizer reads.
+
+    The half that matters here is what is NOT overridden. A variant that had to
+    restate the workflow, budget and rules would drift out of step with the
+    shared instruction the moment either changed, so this asserts the inherited
+    remainder is byte-identical to the built-in render.
+    """
+    # _config() creates directories under the root it is given, so each build
+    # gets its own root.
+    default_root = tmp_path / "default-root"
+    default_root.mkdir()
+    default_output = tmp_path / "default"
+    compile_harbor_task(
+        _config(default_root), default_output, vero_root=Path(__file__).parents[1]
+    )
+    default_instruction = (default_output / "instruction.md").read_text(
+        encoding="utf-8"
+    )
+    assert default_instruction.startswith("# Optimize the program")
+
+    template = tmp_path / "instruction.custom.md.j2"
+    template.write_text(
+        '{% extends "instruction.md.j2" %}\n'
+        "{% block framing %}\n"
+        "# Build the program\n"
+        "\n"
+        "The program in `{{ layout.target_repo }}` is a skeleton.\n"
+        "{% if description %}\n"
+        "\n"
+        "## Objective\n"
+        "\n"
+        "{{ description }}\n"
+        "{% endif %}\n"
+        "\n"
+        "{% endblock %}\n",
+        encoding="utf-8",
+    )
+    custom_root = tmp_path / "custom-root"
+    custom_root.mkdir()
+    custom_output = tmp_path / "custom"
+    compile_harbor_task(
+        _config(custom_root, instruction_template=str(template)),
+        custom_output,
+        vero_root=Path(__file__).parents[1],
+    )
+    custom_instruction = (custom_output / "instruction.md").read_text(encoding="utf-8")
+
+    # The framing is replaced, including the line that would otherwise tell a
+    # from-scratch task to improve something that does not exist.
+    assert custom_instruction.startswith("# Build the program")
+    assert "Improve the program in" not in custom_instruction
+    assert f"The program in `{LAYOUT.target_repo}` is a skeleton." in custom_instruction
+    # The description still renders, so the two levers compose.
+    assert "## Objective\n\nImprove the program" in custom_instruction
+
+    # Everything the template did not override is inherited unchanged.
+    marker = "## Workflow"
+    assert custom_instruction[custom_instruction.index(marker) :] == (
+        default_instruction[default_instruction.index(marker) :]
+    )
+
+
+def test_custom_instruction_template_must_exist(tmp_path):
+    """A mistyped path is a build-time error, not a silent fall back to the default.
+
+    Falling back would ship the wrong framing to a shell-seed run and score it as
+    though nothing were wrong.
+    """
+    with pytest.raises(FileNotFoundError, match="instruction_template"):
+        compile_harbor_task(
+            _config(tmp_path, instruction_template=str(tmp_path / "nope.md.j2")),
+            tmp_path / "out",
+            vero_root=Path(__file__).parents[1],
+        )

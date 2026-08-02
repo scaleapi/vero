@@ -496,17 +496,30 @@ def _deployment_config(
     }
 
 
-def _render(template: str, destination: Path, **context) -> None:
+def _render(
+    template: str, destination: Path, search_dir: Path | None = None, **context
+) -> None:
     """Render one template. Every template gets the layout, so no template needs
-    to spell out a container path, service name, or port of its own."""
+    to spell out a container path, service name, or port of its own.
+
+    `search_dir` prepends a directory to the template search path, for a build
+    that supplies its own template.
+    """
     try:
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ImportError as error:
         raise RuntimeError(
             "install scale-vero[harbor] to compile Harbor tasks"
         ) from error
+    # A build may point `instruction_template` at a file of its own. Its
+    # directory is searched first so the named template resolves, and the
+    # built-in directory second so that template can `{% extends %}` or
+    # `{% include %}` the shipped ones instead of restating them.
+    search_path = [str(_TEMPLATES)]
+    if search_dir is not None:
+        search_path.insert(0, str(search_dir))
     environment = Environment(
-        loader=FileSystemLoader(str(_TEMPLATES)),
+        loader=FileSystemLoader(search_path),
         undefined=StrictUndefined,
         keep_trailing_newline=True,
         trim_blocks=True,
@@ -809,7 +822,25 @@ def compile_harbor_task(
         "overlay_excludes": overlay_excludes,
     }
     _render("task.toml.j2", output / "task.toml", **context)
-    _render("instruction.md.j2", output / "instruction.md", **context)
+    # The built-in instruction unless the build supplies its own. A custom
+    # template is loaded by name from its own directory, which is searched ahead
+    # of the built-in one so it can also extend what it replaces.
+    instruction_template = "instruction.md.j2"
+    instruction_search_dir = None
+    if config.instruction_template is not None:
+        custom = Path(config.instruction_template)
+        if not custom.is_file():
+            raise FileNotFoundError(
+                f"instruction_template does not exist: {custom}"
+            )
+        instruction_template = custom.name
+        instruction_search_dir = custom.parent
+    _render(
+        instruction_template,
+        output / "instruction.md",
+        search_dir=instruction_search_dir,
+        **context,
+    )
     _render("Dockerfile.main.j2", environment_dir / "Dockerfile", **context)
     _render(
         "Dockerfile.sidecar.j2",

@@ -57,6 +57,15 @@ class _TaskIdentityFields(StrictModel):
             one cases/<partition>.jsonl per partition.
         task_manifest: Optional path to an existing JSON task manifest. When
             given, every task named in partitions must appear in it.
+        instruction_template: Optional absolute path to a Jinja template that
+            replaces the built-in `instruction.md.j2` for this build. The
+            template's own directory is searched first and the built-in
+            directory second, so a benchmark-specific template can
+            `{% extends "instruction.md.j2" %}` and override only the blocks it
+            needs rather than restating the workflow and rules. Exists because
+            `description` is the wrong lever when a task contradicts the shared
+            framing -- the shell-seed variants are told to *build* a program,
+            while the built-in opening line tells them to *improve* one.
         base_image_main: Base image for the main container.
         base_image_sidecar: Base image for the sidecar container.
     """
@@ -67,6 +76,7 @@ class _TaskIdentityFields(StrictModel):
     harbor_requirement: str
     partitions: dict[str, list[str]]
     task_manifest: str | None = None
+    instruction_template: str | None = None
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
     base_image_sidecar: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
 

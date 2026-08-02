@@ -213,3 +213,71 @@ def test_terminal_bench_azure_variant_differs_only_by_the_model_alias():
     # alias can fire only for a model the allow-list already passed.
     assert other.inference_gateway.producer.allowed_models == ["claude-opus-5"]
     assert "claude-opus-5" not in other.inference_gateway.producer.model_aliases
+
+
+def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell():
+    """build.shell.yaml must differ from build.yaml only in what makes it a shell.
+
+    The point of the variant is to ask what an optimizer does with no working
+    seed. That only means something if everything *else* is held fixed: same
+    cases, same target model, same gateway scoping. If the substrate drifts, the
+    shell run stops being comparable to the seeded gaia run and the comparison
+    it exists to support is gone.
+
+    The second half asserts the seed is actually empty. Nothing else in the
+    suite would notice an implementation quietly reappearing in the skeleton,
+    and a shell that scores above zero is not a shell.
+    """
+    baseline = BENCHMARK_ROOT / "gaia" / "baseline"
+    seeded = load_harbor_build_config(baseline / "build.yaml")
+    shell = load_harbor_build_config(baseline / "build.shell.yaml")
+
+    # Same benchmark: same cases, same partitions, same class to load.
+    assert shell.task_source == seeded.task_source
+    assert shell.agent_import_path == seeded.agent_import_path
+    assert shell.selection_partition == seeded.selection_partition
+
+    # Same measurement substrate: one target model, identically scoped.
+    assert shell.model == seeded.model
+    for scope in ("evaluation", "finalization"):
+        assert getattr(shell.inference_gateway, scope).allowed_models == getattr(
+            seeded.inference_gateway, scope
+        ).allowed_models, f"{scope} scope drifted from the seeded gaia config"
+    assert not shell.task_services_use_upstream
+
+    # What makes it the shell variant.
+    # The framing lives in a template, not in `description`: the built-in
+    # instruction opens by telling the optimizer to improve the program, which
+    # is the first thing it reads and is false here.
+    assert shell.instruction_template is not None
+    template = Path(shell.instruction_template)
+    assert template.is_file()
+    assert seeded.instruction_template is None, (
+        "the seeded gaia config should keep the built-in instruction"
+    )
+    body = template.read_text(encoding="utf-8")
+    assert '{% extends "instruction.md.j2" %}' in body, (
+        "the shell template must extend the built-in one rather than restate the "
+        "workflow and rules, or it drifts the moment the shared instruction changes"
+    )
+
+    agent_repo = Path(shell.agent_repo)
+    assert agent_repo.name == "target-shell"
+    assert agent_repo.is_dir()
+    (target,) = [t for t in shell.targets if t.partition == "test"]
+    assert target.baseline_reward == 0.0, (
+        "the shell seed scores zero by construction; a non-zero floor here means "
+        "either the seed gained an implementation or the pin is stale"
+    )
+
+    # The skeleton must not call a model. It constructs a client -- the plumbing
+    # is deliberately present -- but issuing a request is the implementation,
+    # which is the optimizer's job to write.
+    sources = sorted((agent_repo / "src").rglob("*.py"))
+    assert sources, "shell target has no agent source"
+    text = "\n".join(path.read_text(encoding="utf-8") for path in sources)
+    for call in (".responses.create(", ".chat.completions.create(", ".messages.create("):
+        assert call not in text, (
+            f"the gaia shell seed calls {call} -- it is no longer a shell, and its "
+            f"baseline_reward of 0.0 is no longer true"
+        )

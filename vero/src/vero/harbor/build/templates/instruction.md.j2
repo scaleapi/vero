@@ -1,3 +1,4 @@
+{% block framing %}
 # Optimize the program
 
 Improve the program in `{{ layout.target_repo }}` so it scores as highly as possible on the
@@ -10,6 +11,7 @@ hidden final evaluation. The trusted evaluation sidecar owns the cases, scoring,
 {{ description }}
 
 {% endif %}
+{% endblock %}
 ## Workflow
 
 1. Inspect and edit `{{ layout.target_repo }}`.

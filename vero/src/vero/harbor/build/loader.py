@@ -104,6 +104,11 @@ def _resolve_local_paths(value: dict, base: Path) -> None:
     task_manifest = value.get("task_manifest")
     if isinstance(task_manifest, str) and not Path(task_manifest).is_absolute():
         value["task_manifest"] = str((base / task_manifest).resolve())
+    instruction_template = value.get("instruction_template")
+    if isinstance(instruction_template, str) and not Path(
+        instruction_template
+    ).is_absolute():
+        value["instruction_template"] = str((base / instruction_template).resolve())
     command_backend = value.get("command_backend")
     if isinstance(command_backend, dict):
         harness_source = command_backend.get("harness_source")
