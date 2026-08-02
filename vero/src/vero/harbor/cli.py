@@ -678,6 +678,50 @@ def _probe_model(base_url: str, api_key: str, model: str) -> tuple[int | None, s
     return last
 
 
+def _report_wandb_destination(config) -> None:
+    """Name where results will land, before the run starts spending.
+
+    `wandb.entity` is optional, and omitting it is silent: the client falls back
+    to the launching user's personal default, so a grid launched by more than one
+    person scatters across their accounts and a cross-cell comparison has to be
+    reassembled by hand. Worse, the omission looks like a missing run rather than
+    a misplaced one, and "I cannot find it in W&B" is then diagnosed as a failed
+    run. That happened on 2026-08-01: an atlas cell reported into a personal
+    entity for nearly three hours while being read as having produced nothing.
+
+    Exporting WANDB_ENTITY does not fix it and is the natural thing to try. The
+    sidecar owns the run and receives only WANDB_API_KEY and WANDB_BASE_URL
+    through its passthrough list, so the variable never reaches the process that
+    calls `wandb.init`. The build config's `entity:` is the only thing that
+    decides the destination.
+
+    Printed on every run, not only when unset: knowing where a cell reports is
+    worth one line, and a warning that appears only in the bad case is one the
+    reader has no baseline for.
+    """
+
+    # getattr, not attribute access: this is a diagnostic, and one that raises
+    # would block the run it exists to describe. Reporting nothing is the correct
+    # degradation for a config shape that does not carry W&B settings at all.
+    wandb = getattr(config, "wandb", None)
+    if wandb is None:
+        return
+    name = getattr(wandb, "name", None) or "<default>"
+    project = getattr(wandb, "project", None) or "<default>"
+    if getattr(wandb, "entity", None):
+        click.echo(f"W&B: {wandb.entity}/{project} run={name}")
+        return
+    click.echo(
+        f"W&B: <your personal default>/{project} run={name}\n"
+        "  WARNING: wandb.entity is unset, so this run reports to the launching\n"
+        "  user's personal entity, not a shared org. Exporting WANDB_ENTITY will\n"
+        "  NOT change this: the sidecar passes through only WANDB_API_KEY and\n"
+        "  WANDB_BASE_URL. Set `entity:` under `wandb:` in the build config to\n"
+        "  pin it.",
+        err=True,
+    )
+
+
 def _preflight_models(config) -> None:
     """Refuse to launch when a configured model is not deployed upstream.
 
@@ -784,6 +828,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         resolved.setdefault("optimizer_model", model)
     config = load_harbor_build_config(config_path, params=resolved)
     _preflight_models(config)
+    _report_wandb_destination(config)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(
             config,
