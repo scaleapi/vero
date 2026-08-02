@@ -184,7 +184,8 @@ benchmark can be checked against the others at a glance.
 | declared `[verifier] timeout_sec` | 300 | 300 | 900 | 300 | 300 | 360–12000 ✦ | n/a (registry dataset) |
 | declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 | 600 | n/a (registry dataset) |
 | verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 | 64800 | 28800 |
-| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s | 28800 s | n/a |
+| optimizer tool-call cap ¤ | 300 s | 300 s | 300 s | 300 s | 300 s | 300 s | 300 s |
+| outer-trial retries ¤ | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
 | harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness | harness |
 | task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false (own tests) | false |
 | task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | per-task declared timeouts ✦ | registry dataset; `expose_case_resources: false`; sampled variant ◈ |
@@ -305,14 +306,33 @@ build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for 
   for `max_concurrency: 24` and for `n_attempts: 3` on the held-out target, so
   raising a benchmark to a 3× finalize needs no timeout change.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
-- **Optimizer `agent_env`** (now on all five): inner evals take 15–30 min, but
-  Claude Code caps a single Bash call at `BASH_MAX_TIMEOUT_MS` (default
-  600000=10min), which forces the agent into `--detach` + background-poll +
-  end-turn — and in headless `--print` mode, ending the turn ends the run. Set
-  `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS` above a worst-case full
-  validation eval so the agent can block on one in a single call.
+- **Optimizer `agent_env`** (now on all five): inner evals take 15–30 min, and no
+  benchmark sets a Bash timeout any more. Both ways of sizing one were wrong. The
+  10-minute default forces the agent into `--detach` + background-poll +
+  end-turn, and in headless `--print` mode ending the turn ends the run; run #2
+  died that way. Raising it above a full validation eval, which is what these
+  configs did until 2026-08-01, is not a fix but a different problem: one tool
+  call then sits silent for hours, and harbor reads the optimizer through a
+  single long-lived stdout stream, so nothing distinguishes a working optimizer
+  from a wedged one for that whole window. Both are now handled below the
+  config: `evals run` returns inside its own bound with a `job_id` to wait on
+  again, so no evaluation needs a long call, and vero caps the tool call itself
+  (`HARNESS_TOOL_TIMEOUT_SECONDS`, `vero/harbor/cli.py`).
+
+  The cap does **not** keep that stream alive, and an earlier version of this
+  note claimed it did. Modal's budget for silently reconnecting a dropped stream
+  is per stream and never replenished (10 for its whole life), so a long run
+  exhausts it and the next drop kills the trial regardless of how quiet the
+  stream was; two runs on 2026-08-01 survived repeated 242 s silences and then
+  died during 104 s and 188 s ones. What covers that is `--max-retries 1`, also
+  set by vero (`HARNESS_TRIAL_RETRIES`). **Do not set
+  `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS` (or opencode's
+  `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS`) in a build**: a build's
+  `agent_env` is forwarded after vero's, harbor keeps the last value for a key,
+  and the run would look configured while the cap did nothing.
+  `test_no_benchmark_re_raises_the_tool_call_bound` enforces this.
   `ENABLE_BACKGROUND_TASKS`/`FORCE_AUTO_BACKGROUND_TASKS=0` are defence in depth
-  only — **they gate *automatic* backgrounding and do not remove the Bash tool's
+  only: **they gate *automatic* backgrounding and do not remove the Bash tool's
   `run_in_background` parameter**, which the model can still choose, and run #2
   did. Only the optimizer instruction actually forbids it.
 - **`infrastructure_max_attempts: 3`** applies only to trusted finalization
@@ -455,13 +475,21 @@ newly clipping ~1% of cases whose p99 sat at 608); that is the benchmark's
 intent, and suggestively the gaia agent's own `MAX_TURNS` cap lands right at
 ~608 s, i.e. it was written against the declared 600.
 
-¤ Bash tool cap for the optimizer, set above that benchmark's widest single
-blocking eval — a full validation pass, `ceil(val_cases / 24) × case_timeout`
-worst case. `BASH_DEFAULT_TIMEOUT_MS` is set equal to it so an eval invoked
-without an explicit `timeout` still blocks rather than being truncated: a
-truncated eval is what pushed run #2's optimizer into backgrounding and ended the
-run. The agent additionally wraps its own calls (`timeout 1750`, `timeout 3000`
-observed), so this is a ceiling, not the expected duration.
+¤ Cap on a single optimizer tool call, uniform across benchmarks because it is
+set by vero, not by the build (`HARNESS_TOOL_TIMEOUT_SECONDS`,
+`vero/harbor/cli.py`). It is a bound on *silence*, not on evaluation length: an
+evaluation runs in the sidecar for as long as it needs, while `evals run`
+returns inside a 240 s bound with a `job_id` to wait on again. Until 2026-08-01
+each benchmark instead raised `BASH_MAX_TIMEOUT_MS`/`BASH_DEFAULT_TIMEOUT_MS`
+above its widest single blocking eval so one evaluation fit in one call; see the
+`agent_env` bullet above for why that was replaced.
+
+The retry row is vero-set for the same reason (`HARNESS_TRIAL_RETRIES`) and is
+narrowed to `StreamTerminatedError`/`ConnectionError`: a lost Modal stdio stream
+costs a trial rather than the run, while a deterministic crash still fails once.
+It is an *outer*-trial retry, unrelated to `n_attempts` (§) on the held-out
+target. Each attempt restarts the optimizer from zero, so raising it multiplies
+wall clock and tokens.
 
 ¶ `evaluation` and `finalization` each get this cap independently — they are
 separate scopes with separate tokens and separate ledgers, so the numbers do not

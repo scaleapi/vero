@@ -125,13 +125,19 @@ secrets:
   - WANDB_BASE_URL
 
 harness_user: harness
+# This block used to raise BASH_MAX_TIMEOUT_MS/BASH_DEFAULT_TIMEOUT_MS to 28800000
+# so the optimizer could block on one evaluation in a single foreground call, a
+# headless run that backgrounds a long call never being re-woken. That is still
+# true, and it bought the opposite failure: harbor reads the optimizer through one
+# long-lived stdout stream, a harness flushes a command's output only when the
+# command returns, and the idle stream gets reaped. A swe-atlas-qna cell died that
+# way at 71 minutes on 2026-07-31, 9m57s into one wait.
+# Neither cap belongs here now. `evals run` returns inside its own bound carrying a
+# job_id to wait on again, so a foreground call never has to run for hours, and
+# vero sets the tool-call cap itself (HARNESS_TOOL_TIMEOUT_SECONDS in
+# vero/harbor/cli.py). Setting either variable here would silently switch that off:
+# harbor keeps the last value for a key and this block is applied after vero's.
 agent_env:
-  # Above this benchmark's widest single search eval: a full validation pass is
-  # ceil(36/24) = 2 waves x 12,000s = 24,000s worst case. The optimizer must be
-  # able to block on one evaluation in a single foreground call -- a headless run
-  # that backgrounds a long call is never re-woken and the search dies there.
-  BASH_MAX_TIMEOUT_MS: "28800000"
-  BASH_DEFAULT_TIMEOUT_MS: "28800000"
   ENABLE_BACKGROUND_TASKS: "0"
   FORCE_AUTO_BACKGROUND_TASKS: "0"
   UV_TOOL_BIN_DIR: "/home/agent/.local/bin"

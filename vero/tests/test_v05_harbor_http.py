@@ -530,7 +530,11 @@ def test_harbor_cli_builds_canonical_selection(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert captured["method"] == "POST"
-    assert captured["path"] == "/eval"
+    # Even a plain (non-detached) run starts a job and waits on it, rather than
+    # holding one open-ended `POST /eval` that prints nothing until it returns.
+    # Same evaluation either way: the sidecar drives both entry points through
+    # `_execute_tracked_job`.
+    assert captured["path"] == "/eval/jobs"
     assert captured["payload"]["evaluation_set"]["selection"] == {
         "kind": "ids",
         "ids": ["a", "b"],
@@ -569,6 +573,80 @@ def test_harbor_cli_supports_detached_evaluation_jobs(monkeypatch):
     assert requests[0][:2] == ("POST", "/eval/jobs")
     assert requests[1][:2] == ("GET", "/eval/jobs/job-1")
     assert requests[2][:2] == ("GET", "/eval/jobs/job-1/result")
+
+
+def test_a_plain_run_hands_back_a_waitable_job_when_its_bound_expires(monkeypatch):
+    """The wait ends before the harness would kill it, and loses nothing.
+
+    The optimizer's harness caps one tool call, so `evals run` has to return on
+    its own terms while the evaluation is still running: it prints the job
+    record, enriched with elapsed time so the next call can see progress, and
+    exits 0. `evals wait JOB_ID` resumes. Were the harness to time the call out
+    instead, the model would be told to retry with a larger timeout and would
+    walk straight back into the silence that killed the trial.
+    """
+    from vero.harbor.cli import _await_evaluation_job
+
+    requests = []
+
+    def fake_request(method, path, *, payload=None, headers=None):
+        requests.append((method, path))
+        raise AssertionError("an expired bound must not poll again")
+
+    monkeypatch.setattr("vero.harbor.cli._request", fake_request)
+    running = {
+        "job_id": "job-1",
+        "status": "running",
+        "created_at": "2026-07-31T00:00:00+00:00",
+    }
+
+    awaited = _await_evaluation_job(running, timeout=0)
+
+    assert awaited["job_id"] == "job-1"
+    assert awaited["status"] == "running"
+    assert awaited["elapsed_seconds"] > 0
+    assert requests == []
+
+
+def test_a_finished_job_is_awaited_into_its_result(monkeypatch):
+    """A job that is already terminal costs no extra wait and no poll interval."""
+    from vero.harbor.cli import _await_evaluation_job
+
+    requests = []
+
+    def fake_request(method, path, *, payload=None, headers=None):
+        requests.append((method, path))
+        return {"metrics": {"score": 0.1224}}
+
+    monkeypatch.setattr("vero.harbor.cli._request", fake_request)
+
+    awaited = _await_evaluation_job({"job_id": "job-1", "status": "complete"})
+
+    assert awaited == {"metrics": {"score": 0.1224}}
+    assert requests == [("GET", "/eval/jobs/job-1/result")]
+
+
+def test_a_failed_job_still_fails_the_command_with_the_sidecar_reason(monkeypatch):
+    """Detaching internally must not turn a failed evaluation into a success.
+
+    The blocking `POST /eval` path raised through to a non-zero exit; the job
+    path records the reason on the job record instead, so waiting has to read it
+    back off the record and raise.
+    """
+    from vero.harbor.cli import _await_evaluation_job
+
+    def fake_request(method, path, *, payload=None, headers=None):
+        raise AssertionError("a failed job has no result to fetch")
+
+    monkeypatch.setattr("vero.harbor.cli._request", fake_request)
+
+    with pytest.raises(click.ClickException) as failure:
+        _await_evaluation_job(
+            {"job_id": "job-1", "status": "failed", "error": "backend refused the partition"}
+        )
+
+    assert "job-1" in str(failure.value)
+    assert "backend refused the partition" in str(failure.value)
 
 
 def test_harbor_finalize_cli_writes_only_rewards(tmp_path, monkeypatch):

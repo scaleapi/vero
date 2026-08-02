@@ -11,12 +11,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 import click
 
+from vero.evals_cli import (
+    WAIT_POLL_INTERVAL_SECONDS,
+    WAIT_TIMEOUT_SECONDS,
+    _enrich_job,
+)
 from vero.evaluation import (
     CaseIds,
     CaseRange,
@@ -231,6 +237,81 @@ def _load_env_file(path: Path) -> dict[str, str]:
 # the gateway token cap are the intended limits.
 OPENCODE_STEP_LIMIT = 1000
 
+# The ceiling vero puts on a single optimizer tool call, in seconds.
+#
+# The optimizer's stdout reaches harbor as one long-lived stream, and an agent
+# harness only flushes output when a tool call *returns*, so "how long may one
+# tool call run" is the same question as "how long may that stream go silent".
+# A cell that goes quiet for tens of minutes reports nothing while it is quiet:
+# no progress, no partial trajectory, and no way to tell a working optimizer
+# from a wedged one. This bounds that blind window.
+#
+# It is *not* what keeps the stream alive. Two runs on 2026-08-01 each sat
+# through repeated 242s silences and then died anyway during shorter ones (104s
+# and 188s), which rules out an idle-reap threshold: no single threshold is both
+# above 242 and below 104. See HARNESS_TRIAL_RETRIES for what actually drops the
+# stream and what survives it.
+#
+# Configured on the harness rather than requested in the instruction, because
+# the instruction is advisory and this is not. Telling the optimizer to wait in
+# bounded steps leaves it free to ignore the advice, and free to reconstruct the
+# loop wrongly. Sits above WAIT_TIMEOUT_SECONDS so the evals CLI always returns
+# first on its own terms; the cap is the backstop for everything else the
+# optimizer runs.
+HARNESS_TOOL_TIMEOUT_SECONDS = 300
+
+# How many times harbor may restart a failed outer trial, and on what.
+#
+# Modal reconnects a dropped stdio stream transparently, but the budget for
+# those reconnects is per *stream*, not per drop: `stream_stdio_max_retries` is
+# 10, is decremented for the life of the stream, and is never replenished (only
+# the backoff delay resets on a successful chunk, see
+# modal/_utils/task_command_router_client.py). Harbor reads the whole agent
+# phase through one stream, so an hour-long optimizer run gets 10 reconnects
+# total and the 11th drop is fatal whenever it lands. The backoff sums to about
+# 10s, so one outage longer than that also exhausts the budget in a single
+# burst. Neither is reachable from vero: the limits are constructor keywords on
+# a client vero does not build.
+#
+# What *is* reachable is harbor's own retry. It already treats
+# StreamTerminatedError as retryable (the exception is absent from
+# RetryConfig.exclude_exceptions), but max_retries defaults to 0, so the two
+# 2026-08-01 runs recorded `Trials 0 | Exceptions 1` rather than trying again.
+#
+# One retry, not more: a retry discards the trial directory and restarts the
+# optimizer from zero, so each attempt costs a full run's wall clock and tokens.
+# This is mitigation, not a cure -- if the drops accumulate with stream age then
+# a second attempt re-rolls the same dice -- but it converts the common case of
+# a transient blip from "no result" into "a result, late".
+HARNESS_TRIAL_RETRIES = 1
+
+# Restricted to transport failures a fresh attempt could plausibly fix. Harbor's
+# default is to retry *every* exception not explicitly excluded, which would
+# spend a second full optimizer run on a deterministic crash. ConnectionError is
+# included because Modal raises it from the same reconnect path when the give-up
+# is a timeout or a socket error rather than a terminated stream.
+_RETRYABLE_TRIAL_EXCEPTIONS: tuple[str, ...] = (
+    "ConnectionError",
+    "StreamTerminatedError",
+)
+
+# How each harness spells "bound one tool call". Only knobs verified in the
+# harness's own source or docs are listed: a harness missing here keeps its own
+# default rather than being sent a variable it silently ignores.
+_TOOL_TIMEOUT_ENVIRONMENT: dict[str, tuple[str, ...]] = {
+    # opencode reads a *default* only. `packages/opencode/src/tool/shell.ts`
+    # resolves `flags.bashDefaultTimeoutMs ?? 2 * 60 * 1000` and then
+    # `params.timeout ?? defaultTimeoutMs` with no clamp, so a model that names
+    # its own timeout still escapes the bound. It covers the case that actually
+    # killed the run -- the instruction said to let the call block, so the model
+    # never named one -- and it lowers the default quoted in the tool
+    # description the model reads.
+    "opencode": ("OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS",),
+    # claude-code takes both, and its MAX is a true ceiling: a per-call timeout
+    # from inside the conversation cannot raise it.
+    "claude-code": ("BASH_DEFAULT_TIMEOUT_MS", "BASH_MAX_TIMEOUT_MS"),
+}
+
 # Harnesses that drive the model through litellm rather than a provider SDK.
 # litellm reads the base URL as <PROVIDER>_API_BASE; the SDKs read
 # <PROVIDER>_BASE_URL. vero sets the SDK names, so a litellm-based harness sees no
@@ -373,6 +454,45 @@ def _opencode_gateway_args(agent: str, model: str | None, task: Path) -> list[st
                 # claude-code.
                 payload["provider"] = {provider: {"options": {"baseURL": base_url}}}
     return ["--ak", f"opencode_config={json.dumps(payload, separators=(',', ':'))}"]
+
+
+def _agent_tool_timeout_args(agent: str) -> list[str]:
+    """Bound one optimizer tool call, so no single call can idle the stream.
+
+    The mechanism the previous fix reached for was the instruction: it told the
+    optimizer to wait in bounded steps instead of one open-ended block. That is
+    the right shape and the wrong layer. A prompt cannot enforce anything, the
+    recipe it shipped had to be corrected twice in review, and a model that
+    reconstructs the loop from memory reintroduces the failure. The harnesses
+    already expose the bound as a setting; set it.
+
+    Returns `--ae NAME=VALUE` pairs, which harbor merges into the scoped exec env
+    wrapping the agent's run phase. Values are milliseconds, the unit every
+    harness here uses.
+    """
+
+    milliseconds = int(HARNESS_TOOL_TIMEOUT_SECONDS * 1000)
+    arguments: list[str] = []
+    for name in _TOOL_TIMEOUT_ENVIRONMENT.get(agent, ()):
+        arguments.extend(["--ae", f"{name}={milliseconds}"])
+    return arguments
+
+
+def _trial_retry_args() -> list[str]:
+    """Let harbor restart an outer trial that lost its connection to the sandbox.
+
+    `--retry-include` *replaces* harbor's include set rather than adding to it,
+    so naming these two is what narrows retries to transport failures. A build or
+    caller passing its own `--retry-include` later on the command line widens the
+    set (typer collects repeats), which is the intended direction: a benchmark
+    may know of another exception worth a second attempt, and none of them should
+    have to re-state these.
+    """
+
+    arguments = ["--max-retries", str(HARNESS_TRIAL_RETRIES)]
+    for name in _RETRYABLE_TRIAL_EXCEPTIONS:
+        arguments.extend(["--retry-include", name])
+    return arguments
 
 
 def _outer_app_name_args(
@@ -806,6 +926,10 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         ]
         if model is not None:
             command.extend(["-m", model])
+        # Ahead of the build's own agent env, so a build can raise or drop the
+        # cap by naming the same variable: harbor keeps the last value for a key,
+        # and a vero default must not silently outrank an explicit choice.
+        command.extend(_agent_tool_timeout_args(agent))
         # Forward the build's declared agent env to the optimizer agent's shell.
         # Harbor's `--ae KEY=VALUE` populates the agent's extra_env, which harbor
         # injects into the agent's setup/install exec (scoped_exec_env). Sorted
@@ -816,6 +940,9 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
         command.extend(_kimi_gateway_args(agent, task))
+        # Ahead of both, so a build or a caller can raise, lower or disable the
+        # retry: a later `--max-retries` wins on click's last-value rule.
+        command.extend(_trial_retry_args())
         # Build-declared outer-trial flags first, so a command-line arg can still
         # override them (harbor's `--ek` takes the last value for a key).
         command.extend(config.optimizer_harbor_args)
@@ -885,6 +1012,43 @@ def inference_gateway_command(config_path, host, port):
     from vero.gateway.inference import serve_inference_gateway
 
     serve_inference_gateway(config_path=config_path, host=host, port=port)
+
+
+def _await_evaluation_job(job: dict, timeout: float = WAIT_TIMEOUT_SECONDS) -> dict:
+    """Wait out a started evaluation job, bounded, and return what to print.
+
+    A blocking `POST /eval` is one HTTP call that can take half an hour and
+    prints nothing until it returns, which is precisely the silence that killed
+    an optimization on 2026-07-31. The sidecar drives both entry points through
+    the same tracked job (`Sidecar._execute_tracked_job`), so starting a job and
+    polling it is the same evaluation, the same budget and the same
+    `SidecarEvaluationResult` -- only interruptible.
+
+    Returns the evaluation result once the job completes, or the job record when
+    the bound expires first, in which case the caller re-enters with
+    `evals wait JOB_ID` and the evaluation keeps running in the sidecar
+    regardless. A failed or cancelled job raises, so a bounded run still exits
+    non-zero carrying the sidecar's own reason, exactly as the blocking call did.
+    """
+
+    job_id = job.get("job_id") if isinstance(job, dict) else None
+    if not job_id:
+        return job
+    terminal = {"complete", "failed", "cancelled"}
+    deadline = time.monotonic() + timeout
+    while True:
+        status = job.get("status")
+        if status in terminal:
+            break
+        if time.monotonic() >= deadline:
+            return _enrich_job(job)
+        time.sleep(WAIT_POLL_INTERVAL_SECONDS)
+        job = _request("GET", f"/eval/jobs/{job_id}")
+    if status == "complete":
+        return _request("GET", f"/eval/jobs/{job_id}/result")
+    raise click.ClickException(
+        f"evaluation job {job_id} {status}: {job.get('error') or 'no reason recorded'}"
+    )
 
 
 @harbor.command("eval")
@@ -1018,15 +1182,12 @@ def evaluate_command(
         limits=EvaluationLimits(**limit_values) if limit_values else None,
         seed=seed,
     )
+    payload = body.model_dump(mode="json")
+    if detach:
+        click.echo(json.dumps(_request("POST", "/eval/jobs", payload=payload), indent=2))
+        return
     click.echo(
-        json.dumps(
-            _request(
-                "POST",
-                "/eval/jobs" if detach else "/eval",
-                payload=body.model_dump(mode="json"),
-            ),
-            indent=2,
-        )
+        json.dumps(_await_evaluation_job(_request("POST", "/eval/jobs", payload=payload)), indent=2)
     )
 
 

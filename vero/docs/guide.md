@@ -96,11 +96,15 @@ build.yaml --output task` compiles without running, for inspection.
 > Harbor constructs the agent; a raw `harbor run` would let the agent adapter
 > read the upstream key from its own host process first.
 
-Inside the container the agent evaluates candidates with `evals run
---detach`, then `evals status JOB` / `evals result JOB` / `evals status` (via `VERO_EVAL_URL`).
-Detached evaluations are **durable jobs** — the candidate version is captured
-before the command returns, so ending the agent process can't lose or race a
-running measurement.
+Inside the container the agent evaluates candidates with `evals run` (via
+`VERO_EVAL_URL`), which waits for the result and, if the evaluation outlives
+that wait's bound, hands back a `job_id` for `evals wait JOB`; `--detach`
+returns the id immediately instead, for evaluating concurrently. Either way the
+evaluation is a **durable job**: the candidate version is captured before the
+command returns, so ending the agent process can't lose or race a running
+measurement. The bound matters because vero also caps how long one of the
+optimizer's tool calls may run (`HARNESS_TOOL_TIMEOUT_SECONDS`), so an `evals`
+call has to return on its own terms rather than be killed mid-evaluation.
 
 ### How the boundaries hold
 

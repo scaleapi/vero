@@ -117,19 +117,26 @@ secrets:
 harness_user: harness
 
 # Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
-# Inner evals take 15-30 min; Claude Code's Bash tool caps a single call at
-# BASH_MAX_TIMEOUT_MS (default 600000=10min), which forced the agent into
-# --detach + background-poll + end-turn (it then ended its turn waiting for a
-# notification that never re-wakes a headless --print run). Raise the cap so the
-# agent can block on a whole eval in one Bash call.
+# Inner evals take 15-30 min, and this block used to raise BASH_MAX_TIMEOUT_MS /
+# BASH_DEFAULT_TIMEOUT_MS to hours so one of them fit in a single blocking Bash
+# call: the 10-minute default forced the agent into --detach + background-poll +
+# end-turn, and a headless --print run is never re-woken, so the search died
+# there. A real trade, and it bought the opposite failure. Harbor reads the
+# optimizer through one long-lived stdout stream, and a harness flushes a
+# command's output only when the command returns, so an hours-long call is an
+# hours-long silence and the idle stream gets reaped: a swe-atlas-qna cell died
+# that way at 71 minutes on 2026-07-31, 9m57s into one wait, discarding a
+# candidate already scored 0.1224.
+# Neither cap belongs here now. `evals run` returns inside its own bound carrying
+# a job_id to wait on again, so the optimizer is never forced to detach and end
+# its turn, and vero sets the tool-call cap itself (HARNESS_TOOL_TIMEOUT_SECONDS
+# in vero/harbor/cli.py). Setting either variable here would silently switch that
+# off: harbor keeps the last value for a key and this block is applied after
+# vero's.
 # The background-task vars are kept for defence in depth but do NOT actually
 # disable the Bash tool's run_in_background parameter -- the model can still
 # choose it, and run #2 did. The instruction is what forbids it.
 agent_env:
-  # Above this benchmark's widest single eval: a full validation pass is
-  # ceil(98/24) x 1800 = 9000s worst case.
-  BASH_MAX_TIMEOUT_MS: "10800000"
-  BASH_DEFAULT_TIMEOUT_MS: "10800000"  # same as max: an un-timed eval must still block
   ENABLE_BACKGROUND_TASKS: "0"         # gates auto-backgrounding only (see above)
   FORCE_AUTO_BACKGROUND_TASKS: "0"
   # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)

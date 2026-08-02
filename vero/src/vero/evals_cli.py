@@ -26,6 +26,25 @@ import click
 CONTEXT_DIRECTORY = ".evals"
 _CELL_WIDTH = 48
 
+# How long a blocking `evals run` / `evals wait` waits before returning what it
+# has so far.
+#
+# Not ergonomics: the optimizer's whole process is read through one long-lived
+# stdout stream, and an agent harness only flushes a command's output when that
+# command *returns*. A call that sits silent long enough for the network path to
+# reap that stream kills the trial, and the outer trial is not retried. Observed
+# 2026-07-31: a cell died at 71 minutes, 9m57s into a single silent wait,
+# discarding a candidate that had already scored 0.1224 on 49 validation cases.
+# Returning on a bound is what keeps the stream alive, and each return costs one
+# line of output.
+#
+# Deliberately below HARNESS_TOOL_TIMEOUT_SECONDS (`vero/harbor/cli.py`), the cap
+# vero sets on the optimizer's harness: these commands must return on their own
+# terms, handing back a job id that can be waited on again, rather than be killed
+# by the harness and hand the model a "retry with a larger timeout" message.
+WAIT_TIMEOUT_SECONDS = 240.0
+WAIT_POLL_INTERVAL_SECONDS = 15.0
+
 
 # --------------------------------------------------------------------------
 # Context discovery and shared helpers
@@ -301,10 +320,11 @@ def evals() -> None:
     resources), `candidates/` (prior program versions), and `plan.json`
     (what you may evaluate, and remaining budget).
 
-    Typical loop: `evals plan` -> edit + commit -> `evals run` (blocks and
-    returns the result) -> `evals diff BASELINE CANDIDATE` ->
-    `evals cases ID --sort score` -> `evals trace ID CASE`. Add `--detach` only
-    to run several evaluations at once, then poll `evals status JOB`.
+    Typical loop: `evals plan` -> edit + commit -> `evals run` (waits for the
+    result, or returns a `job_id` to `evals wait` on) -> `evals diff BASELINE
+    CANDIDATE` -> `evals cases ID --sort score` -> `evals trace ID CASE`. Add
+    `--detach` only to run several evaluations at once, then poll
+    `evals status JOB`.
     """
 
 
@@ -384,41 +404,55 @@ def status_command(job_id):
 @click.argument("job_id")
 @click.option(
     "--poll-interval",
-    default=15.0,
+    default=WAIT_POLL_INTERVAL_SECONDS,
     show_default=True,
     type=click.FloatRange(min=1),
     help="Seconds between status polls.",
 )
 @click.option(
     "--timeout",
+    default=WAIT_TIMEOUT_SECONDS,
+    show_default=True,
     type=click.FloatRange(min=0),
-    help="Optional max seconds to wait. On expiry, print the current "
-    "(still-running) status and exit 0 so you can simply call `evals wait` "
-    "again. Default: wait until the job finishes.",
+    help="Max seconds to wait. On expiry, print the current (still-running) "
+    "status and exit 0, so calling `evals wait` again resumes the wait. The "
+    "default is bounded on purpose; raising it risks the run (see the docstring).",
 )
 def wait_command(job_id, poll_interval, timeout):
-    """Block until a detached job finishes, then print its result.
+    """Wait for a detached job, then print its result.
 
     The blocking companion to `evals run --detach`: one call that waits, so you
-    never hand-roll a poll loop. Idempotent — safe to call again if it returns
-    while the job is still running (only happens when --timeout is set).
+    never hand-roll a poll loop. Idempotent, so it is always safe to call again
+    when it returns while the job is still running.
+
+    The wait is *bounded* by default rather than open-ended. A call that returns
+    nothing for tens of minutes can get the whole run killed (see
+    WAIT_TIMEOUT_SECONDS), and re-entering costs one line of output, so the
+    bound is the default rather than something to opt into.
+
+    A job that ended in `failed` or `cancelled` exits non-zero naming the reason,
+    the same as `evals run`. This is the resumption of that command's own wait,
+    so it has to report a dead evaluation the same way; printing the record and
+    exiting 0 would let a shell caller read a failure as a finished measurement.
     """
     request = _sidecar_request()
     terminal = {"complete", "failed", "cancelled"}
-    deadline = None if timeout is None else time.monotonic() + timeout
+    deadline = time.monotonic() + timeout
     while True:
         job = request("GET", f"/eval/jobs/{job_id}")
         status = job.get("status") if isinstance(job, dict) else None
         if status in terminal:
             break
-        if deadline is not None and time.monotonic() >= deadline:
+        if time.monotonic() >= deadline:
             click.echo(json.dumps(_enrich_job(job), indent=2))
             return
         time.sleep(poll_interval)
-    if status == "complete":
-        click.echo(json.dumps(request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
-    else:
-        click.echo(json.dumps(_enrich_job(job), indent=2))
+    if status != "complete":
+        raise click.ClickException(
+            f"evaluation job {job_id} {status}: "
+            f"{job.get('error') or 'no reason recorded'}"
+        )
+    click.echo(json.dumps(request("GET", f"/eval/jobs/{job_id}/result"), indent=2))
 
 
 @evals.command("list")
