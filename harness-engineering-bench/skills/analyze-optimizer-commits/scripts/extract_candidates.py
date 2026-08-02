@@ -44,18 +44,31 @@ def git(repo: Path, *args: str) -> str:
     return out.stdout
 
 
+def _is_contained(member: tarfile.TarInfo, dest: Path) -> bool:
+    """Reject anything tarfile's own `filter="data"` would reject on 3.12+.
+
+    Backported by hand for 3.10/3.11, where `filter=` is a TypeError. These
+    archives are our own verifier's output, not attacker-controlled in the usual
+    run -- but --runs-dir lets a caller point this at an arbitrary directory, so
+    a traversal member (`../../etc/...`) or a symlink pointing outside `dest`
+    must be rejected the same way on every Python version, not just 3.12+.
+    """
+    if member.issym() or member.islnk() or member.isdev():
+        return False
+    target = (dest / member.name).resolve()
+    return target == dest or dest in target.parents
+
+
 def extract_session(tgz: Path, dest: Path) -> Path | None:
     """Pull just the candidate repo and evaluation records out of a session archive."""
     try:
         with tarfile.open(tgz) as tar:
             wanted = [m for m in tar.getmembers()
-                      if "/candidates/repository.git/" in m.name
-                      or m.name.endswith("/evaluation.json")]
+                      if ("/candidates/repository.git/" in m.name
+                          or m.name.endswith("/evaluation.json"))
+                      and _is_contained(m, dest)]
             if not wanted:
                 return None
-            # filter= landed in 3.12 and is a TypeError before that. These
-            # archives are our own verifier's output, so the guard is about
-            # running on the box's 3.10 rather than about untrusted input.
             if sys.version_info >= (3, 12):
                 tar.extractall(dest, members=wanted, filter="data")
             else:
@@ -120,6 +133,28 @@ def read_cell(cell_dir: Path, tmp: Path) -> dict | None:
     if repo is None:
         return row
     scores = per_candidate_scores(dest)
+
+    # `git log --all` walks every commit reachable from every ref. That's only a
+    # correct candidate enumeration if the repo is a single linear lineage --
+    # otherwise it can pull in unrelated history, inflate the count, and shift
+    # every position after it. Checked by hand: `refs/vero/candidates/*` looks
+    # like the principled alternative (one ref per candidate), but it isn't one --
+    # on real sessions it undercounts, missing candidates that were committed and
+    # superseded before ever being submitted for scoring (they still show up here
+    # with an empty `scores` dict, which is itself a finding, not noise to drop).
+    # So: verify the linear-lineage assumption explicitly and fail loudly if it
+    # doesn't hold, rather than switch to a mechanism that silently drops data.
+    if git(repo, "log", "--all", "--merges", "--format=%H").strip():
+        print(f"    ! {cell_dir.name}: candidate repo has merge commits -- "
+              "log --all is not a safe candidate enumeration here, skipping",
+              file=sys.stderr)
+        return row
+    roots = git(repo, "rev-list", "--max-parents=0", "--all").split()
+    if len(roots) != 1:
+        print(f"    ! {cell_dir.name}: candidate repo has {len(roots)} root "
+              "commits (expected 1) -- not a single lineage, skipping",
+              file=sys.stderr)
+        return row
 
     log = [l.split("\t", 2) for l in
            git(repo, "log", "--all", "--format=%H\t%at\t%s").splitlines() if l.strip()]
