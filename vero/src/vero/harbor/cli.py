@@ -237,6 +237,71 @@ OPENCODE_STEP_LIMIT = 1000
 # override and calls the provider's public endpoint instead of the gateway.
 _LITELLM_AGENTS = frozenset({"mini-swe-agent", "swe-agent"})
 
+# How long a dropped Modal stdio stream keeps trying to reconnect before the
+# trial dies, and how often. These pace a budget that `_stream_patch` first has
+# to make per-outage; read that module's docstring before touching them.
+#
+# Harbor reads a whole agent phase through one Modal stdio stream, and Modal
+# budgets reconnects for the LIFE of that stream: `stream_stdio_max_retries` is
+# set once above the read loop and never replenished, because a successful chunk
+# resets only the backoff delay (modal 1.5.3,
+# `_utils/task_command_router_client.py:769` and :801-802). A measured optimizer
+# phase held one stream open for 3h19m, so unrelated blips hours apart draw down
+# the same counter and the drop that kills the trial is rarely the one that
+# earned it. Shipped as 10 attempts at 0.01s doubling, the whole budget is also
+# spent in 10.23 seconds of continuous outage. Two cells died that way on
+# 2026-07-31 and 2026-08-01.
+#
+# Raising the count was the first fix and it was the wrong one: any finite
+# lifetime cap is the wrong shape for an hours-long stream, and with a factor of
+# 2 the sleeps outgrow the run by roughly the seventeenth attempt, so a higher
+# count alone converts a crash into a hang. `_stream_patch` now makes the count
+# reset per successful chunk, which is what the delay already did. The flat
+# factor stays: it keeps every gap short and makes the window below a product.
+#
+# MODAL_STREAM_RECONNECT_WINDOW_SECONDS is therefore how long ONE outage may last
+# before the trial dies. It is capped by how much stdout the worker keeps
+# available for a reconnect at a byte offset. Past that the reconnect does not
+# fail cleanly, it resumes past the retained span, so output goes missing instead
+# of the run dying. Waiting longer would be worse than dying, which is what
+# bounds this and not the length of a typical outage.
+#
+# The retained span is measured in BYTES, not seconds, so the safe window in
+# seconds scales inversely with how chatty the harness is. Probed against live
+# sandboxes: 6 KB over 150s and 240 KB over 120s both reconnected contiguously,
+# 3 MB over 30s came back empty. The ceiling is therefore a byte count somewhere
+# above 240 KB, and how many seconds that buys depends entirely on output rate.
+#
+# A measured opencode optimizer transcript runs ~350 B/s, so 600s of outage is
+# ~210 KB, still inside the 240 KB that was verified to reconnect contiguously.
+# That is what sets this value: the widest window that stays within the
+# measured-safe envelope at the measured rate, not a guess at how long drops last.
+#
+# This was 120s (~42 KB) first, about 6x more conservative than the evidence
+# required. The phase it protects runs for hours, so a two-minute ceiling let one
+# blip end work that had already cost hours and dollars, which is the wrong price
+# for 42 KB of exposure. Widening it does not weaken the byte bound, it stops
+# leaving most of the bound unused.
+#
+# Lower this for a harness chattier than the ~350 B/s measured, and re-measure
+# before raising it further: the rate, not the elapsed seconds, is what overruns
+# the buffer. Nothing here measures how long a real drop lasts, and the
+# outer-trial retry remains the backstop past this window.
+MODAL_STREAM_RECONNECT_DELAY_SECONDS = 2.0
+MODAL_STREAM_RECONNECT_WINDOW_SECONDS = 600
+MODAL_STREAM_RECONNECT_FACTOR = 1.0
+
+# Directory holding the `sitecustomize` that applies the above inside the harbor
+# subprocess, and that makes the budget per-outage. Modal exposes these three
+# only as constructor keywords that `TaskCommandRouterClient._connect` never
+# forwards, and `modal/config.py` has no entry for them, so there is no supported
+# path: not an argument, not an environment variable. PYTHONPATH plus
+# `sitecustomize` is the seam that reaches a dependency's defaults without
+# vendoring it. The per-outage reset is not reachable that way at all, since it
+# lives inside the method body, so that half recompiles modal's own source after
+# checking its shape; the module's docstring is explicit about the cost.
+_STREAM_PATCH_DIRECTORY = Path(__file__).parent / "_stream_patch"
+
 
 def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
     """Give litellm-based harnesses the gateway URL under the name they read.
@@ -464,6 +529,36 @@ def _agent_environment_blanks(task: Path) -> list[str]:
     return arguments
 
 
+def _modal_stream_patch_environment(base: dict[str, str]) -> dict[str, str]:
+    """Put the reconnect-budget `sitecustomize` on the harbor subprocess's path.
+
+    Prepended to any inherited PYTHONPATH rather than replacing it, and the
+    `sitecustomize` chains to whichever module it shadows, so a caller who
+    already relies on one keeps it.
+
+    A caller who sets the three values explicitly keeps them: this fills in the
+    vero defaults and never overrides an explicit choice, which is what makes the
+    window tunable per run without a code change.
+    """
+
+    patched = {"PYTHONPATH": str(_STREAM_PATCH_DIRECTORY)}
+    inherited = base.get("PYTHONPATH")
+    if inherited:
+        patched["PYTHONPATH"] = os.pathsep.join([patched["PYTHONPATH"], inherited])
+
+    retries = int(
+        MODAL_STREAM_RECONNECT_WINDOW_SECONDS / MODAL_STREAM_RECONNECT_DELAY_SECONDS
+    )
+    for name, value in (
+        ("VERO_MODAL_STREAM_RETRY_DELAY_SECS", MODAL_STREAM_RECONNECT_DELAY_SECONDS),
+        ("VERO_MODAL_STREAM_RETRY_FACTOR", MODAL_STREAM_RECONNECT_FACTOR),
+        ("VERO_MODAL_STREAM_MAX_RETRIES", retries),
+    ):
+        if not base.get(name):
+            patched[name] = str(value)
+    return patched
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -476,6 +571,7 @@ def _compiled_run_environment(
     environment = os.environ.copy()
     if overrides:
         environment.update(overrides)
+    environment.update(_modal_stream_patch_environment(environment))
     path = task / "environment/gateway/launch.json"
     if not path.exists():
         return environment
