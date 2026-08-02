@@ -1,4 +1,5 @@
 compiled/
 target/.venv/
 target/.pytest_cache/
-
+target-shell/.venv/
+target-shell/.pytest_cache/
