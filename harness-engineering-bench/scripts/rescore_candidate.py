@@ -213,6 +213,10 @@ HARNESS_EXCEPTIONS = {
     "BadRequestError",             # gpt-oss 128k overflow: context management is harness-owned
     "NonZeroAgentExitCodeError",   # the harness crashed or never installed its binary
     "AgentSetupTimeoutError",      # the harness owns how long its own install takes
+    "AgentAuthenticationError",    # subclasses NonZeroAgentExitCodeError: the CLI reports
+                                   # no login, i.e. the harness did not read a credential
+                                   # surface we set (goose reads OPENAI_HOST, not _BASE_URL)
+    "AdapterParseError",           # dspy's own output parser gave up: harness-owned
 }
 INFRA_EXCEPTIONS = {
     "RateLimitError",
@@ -223,7 +227,15 @@ INFRA_EXCEPTIONS = {
     "SandboxFilesystemNotFoundError",
     "AddTestsDirError",            # harbor could not stage the tests: platform, not agent
     "ConnectionError",
+    "UnknownApiError",             # harbor's ApiError subclass for a provider error it
+                                   # could not classify: upstream, like the two RateLimits
+    "RewardFileNotFoundError",     # the verifier ran and produced no reward file
+    "CancelledError",              # harbor cancelled the trial (job.py CANCELLED_ERROR_TYPE)
 }
+# ValueError is deliberately in NEITHER set. Both instances on disk are harbor's
+# "ContextVar ... was created in a different Context" orchestration bug, which is
+# platform-side, but the name is generic enough that an agent-side ValueError would
+# land here too. A rescore that meets one should stop and be looked at, not guess.
 
 
 def trial_rewards(round_dir: Path) -> list[float]:
@@ -249,8 +261,10 @@ def trial_rewards(round_dir: Path) -> list[float]:
         elif exception in INFRA_EXCEPTIONS:
             continue             # the platform killed it: drop, do not bake in outage luck
         elif exception:
+            message = (data.get("exception_info") or {}).get("exception_message") or ""
             sys.exit(f"unclassified exception {exception!r} in {round_dir}: add it to "
-                     "HARNESS_EXCEPTIONS or INFRA_EXCEPTIONS before quoting a number")
+                     "HARNESS_EXCEPTIONS or INFRA_EXCEPTIONS before quoting a number"
+                     f"\n  {message.splitlines()[0][:200] if message else '(no message)'}")
     return rewards
 
 
