@@ -55,7 +55,7 @@ SHORT = {
 }
 
 
-def fig_prevalence(rows: list[dict], out: Path) -> None:
+def fig_prevalence(rows: list[dict], stem: Path) -> None:
     """Heatmap: share of cells per benchmark that ever made each kind of edit."""
     roles, table = stats.prevalence(rows)
     benches = [b for b in stats.BENCH_ORDER if b in next(iter(table.values()))]
@@ -113,11 +113,11 @@ def fig_prevalence(rows: list[dict], out: Path) -> None:
                               clip_on=False, zorder=5))
         ax.text(-0.345, (r0 + r1) / 2, cat, transform=trans, rotation=90,
                 ha="center", va="center", fontsize=6.4, color=INK)
-    save(fig, str(out / "prevalence"))
+    save(fig, str(stem))
     plt.close(fig)
 
 
-def fig_diversity(rows: list[dict], out: Path) -> None:
+def fig_diversity(rows: list[dict], stem: Path) -> None:
     """Dumbbell: observed repertoire distance against the permutation null."""
     data = stats.jaccard(rows)
     benches = [b for b in stats.BENCH_ORDER if b in data][::-1]
@@ -156,11 +156,11 @@ def fig_diversity(rows: list[dict], out: Path) -> None:
     ]
     ax.legend(handles=handles, loc="upper left", frameon=False,
               fontsize=FS["legend"], handletextpad=0.5, borderaxespad=0.2)
-    save(fig, str(out / "diversity"))
+    save(fig, str(stem))
     plt.close(fig)
 
 
-def fig_rarefaction(rows: list[dict], out: Path) -> None:
+def fig_rarefaction(rows: list[dict], stem: Path) -> None:
     """Line: distinct edit kinds discovered as cells are added."""
     curves = stats.rarefaction(rows)
     benches = [b for b in stats.BENCH_ORDER if b in curves]
@@ -188,11 +188,11 @@ def fig_rarefaction(rows: list[dict], out: Path) -> None:
     ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False,
               fontsize=FS["legend"], handlelength=1.4, handletextpad=0.6,
               labelspacing=0.55)
-    save(fig, str(out / "rarefaction"))
+    save(fig, str(stem))
     plt.close(fig)
 
 
-def fig_knob_direction(rows: list[dict], edits: dict[str, dict], out: Path) -> None:
+def fig_knob_direction(rows: list[dict], edits: dict[str, dict], stem: Path) -> None:
     """Dumbbell: two directional counts per constant — raised against lowered."""
     data = stats.tuning_direction(rows, edits, top=10)
     if not data:
@@ -220,15 +220,32 @@ def fig_knob_direction(rows: list[dict], edits: dict[str, dict], out: Path) -> N
                    mec=PALETTE["tan"], mew=1.5, label="lowered"),
     ], loc="lower right", frameon=False, fontsize=FS["legend"],
         handletextpad=0.5, borderaxespad=0.1)
-    save(fig, str(out / "knob_direction"))
+    save(fig, str(stem))
     plt.close(fig)
+
+
+# One directory per figure, named for its id and holding the spec beside its outputs.
+# A flat directory is tolerable for four figures and unusable for forty: outputs,
+# specs and stale renders interleave alphabetically and nothing travels as a unit.
+FIGURES: list[tuple[str, str]] = [
+    ("figure_01_prevalence", "fig_prevalence"),
+    ("figure_02_diversity", "fig_diversity"),
+    ("figure_03_rarefaction", "fig_rarefaction"),
+    ("figure_04_knob_direction", "fig_knob_direction"),
+]
 
 
 def render_all(rows: list[dict], edits: dict[str, dict], out: Path) -> list[str]:
     apply_scale_style()
-    out.mkdir(parents=True, exist_ok=True)
-    fig_prevalence(rows, out)
-    fig_diversity(rows, out)
-    fig_rarefaction(rows, out)
-    fig_knob_direction(rows, edits, out)
-    return sorted(p.name for p in out.iterdir())
+    written: list[str] = []
+    for fid, func in FIGURES:
+        folder = out / fid
+        folder.mkdir(parents=True, exist_ok=True)
+        stem = folder / fid
+        renderer = globals()[func]
+        if func == "fig_knob_direction":
+            renderer(rows, edits, stem)
+        else:
+            renderer(rows, stem)
+        written.append(f"{fid}/{fid}.{{pdf,png}}")
+    return written

@@ -2,7 +2,7 @@
 id: figure_04_knob_direction
 archetype: dumbbell
 script: vero.interpret.analysis.paper_figures::fig_knob_direction
-outputs: [knob_direction.pdf, knob_direction.png]
+outputs: [figure_04_knob_direction.pdf, figure_04_knob_direction.png]
 status: review
 ---
 

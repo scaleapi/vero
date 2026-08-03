@@ -2,7 +2,7 @@
 id: figure_03_rarefaction
 archetype: line
 script: vero.interpret.analysis.paper_figures::fig_rarefaction
-outputs: [rarefaction.pdf, rarefaction.png]
+outputs: [figure_03_rarefaction.pdf, figure_03_rarefaction.png]
 status: review
 ---
 

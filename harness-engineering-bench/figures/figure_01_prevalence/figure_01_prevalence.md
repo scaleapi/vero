@@ -2,7 +2,7 @@
 id: figure_01_prevalence
 archetype: heatmap
 script: vero.interpret.analysis.paper_figures::fig_prevalence
-outputs: [prevalence.pdf, prevalence.png]
+outputs: [figure_01_prevalence.pdf, figure_01_prevalence.png]
 status: review
 ---
 

@@ -2,7 +2,7 @@
 id: figure_02_diversity
 archetype: dumbbell
 script: vero.interpret.analysis.paper_figures::fig_diversity
-outputs: [diversity.pdf, diversity.png]
+outputs: [figure_02_diversity.pdf, figure_02_diversity.png]
 status: review
 ---
 
