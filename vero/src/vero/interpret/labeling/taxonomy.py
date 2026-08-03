@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 
-TAXONOMY_VERSION = "1"
+TAXONOMY_VERSION = "2"
 
 
 class Role(StrEnum):
@@ -129,3 +129,54 @@ def direction_of(before: str | None, after: str | None) -> Direction:
     if not (b and a):
         return Direction.NA
     return Direction.UP if float(a.group()) > float(b.group()) else Direction.DOWN
+
+
+# Rubrics. Passing bare enum names left the model to infer sixteen role meanings from
+# the names alone, which is the likeliest source of the 16% rule/model disagreement
+# and of `add` swamping `reword`. These go into the JSON schema so the definition
+# travels with the field rather than sitting in a system prompt the model may skim.
+ROLE_RUBRIC: dict[str, str] = {
+    Role.PROMPT: "System/instruction text sent to the model: task guidance, worked "
+                 "examples, output-format rules. Prose the model reads, not code.",
+    Role.CONTROL_LOOP: "The agent's main turn loop: how many steps run, when to stop, "
+                       "what happens between turns, dispatch of tool calls.",
+    Role.TOOL_SURFACE: "The tool DECLARATIONS shown to the model — names, JSON schemas, "
+                       "descriptions. Not the code that implements them.",
+    Role.TOOL_IMPL: "The implementation behind a tool: shell execution, file reading, "
+                    "search calls, document opening.",
+    Role.SUBMISSION: "Producing and parsing the final answer: writing the answer file, "
+                     "stripping markers, detecting refusals, forcing an answer.",
+    Role.MODEL_CLIENT: "How a completion is requested: client construction, sampling "
+                       "parameters, per-request timeouts, SDK retries.",
+    Role.BUDGET_TURNS: "A limit counted in turns or steps.",
+    Role.BUDGET_OUTPUT: "A limit on how much tool output is kept or shown.",
+    Role.BUDGET_WALLCLOCK: "A limit counted in seconds: deadlines, elapsed-time checks.",
+    Role.CONTEXT_MGMT: "Managing conversation history: compaction, pruning, summarising.",
+    Role.RETRIEVAL: "Search or index behaviour: query construction, result count, "
+                    "ranking, snippet sizing.",
+    Role.ENV_SETUP: "Preparing the container before work starts: installing packages, "
+                    "writing fixtures. NOT ignoring build artifacts.",
+    Role.INITIALIZATION: "Constructor and wiring: state set up once when the agent is "
+                         "created.",
+    Role.TESTS: "The candidate's own test suite.",
+    Role.METADATA: "Bookkeeping with no effect on behaviour: version strings, names.",
+    Role.OTHER: "None of the above, or genuinely unclear from this diff alone.",
+}
+
+ACTION_RUBRIC: dict[str, str] = {
+    Action.FIX: "Repairs something broken: a crash, a type error, a parse that returned "
+                "the wrong thing. There must be a defect, not merely a weakness.",
+    Action.ADD: "Introduces a capability or code path that did not exist. Prefer "
+                "`reword` if existing prose was rewritten and `tune` if a value moved.",
+    Action.REMOVE: "Deletes a capability or code path.",
+    Action.TUNE: "Changes a value or threshold, leaving structure intact.",
+    Action.RESTRUCTURE: "Reorganises code without intending to change behaviour: "
+                        "extracting a helper, renaming, moving logic.",
+    Action.REWORD: "Rewrites instruction or description TEXT while keeping its intent. "
+                   "Use this for prompt edits that sharpen or re-phrase guidance — "
+                   "most prompt changes are rewords, not additions.",
+    Action.REVERT: "Undoes an edit the same optimizer made earlier in this cell. Only "
+                   "when the history shown says so.",
+    Action.COSMETIC: "Cannot change behaviour: comments, formatting, .gitignore, "
+                     "ignoring compiled artifacts, dead code.",
+}

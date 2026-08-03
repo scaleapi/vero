@@ -96,10 +96,16 @@ def edits(src, cache_dir, out) -> None:
                 continue
             repo = CandidateRepo(repo_dir)
             n = 0
-            for cand in traj.candidates:
-                for edit in decompose(repo, traj.ref.key, cand):
+            seed_sha = next((c.sha for c in traj.candidates if c.is_seed), None)
+            # Accumulated in candidate order so prior_touches means "before this one".
+            seen_symbols: set[tuple[str, str]] = set()
+            for cand in sorted(traj.candidates, key=lambda c: c.position):
+                produced = decompose(repo, traj.ref.key, cand, seed_sha=seed_sha,
+                                     prior_symbols=seen_symbols)
+                for edit in produced:
                     fh.write(edit.model_dump_json() + "\n")
                     n += 1
+                seen_symbols |= {(e.path, e.symbol) for e in produced}
             total += n
             click.echo(f"  {traj.ref.key}: {n} edits")
     click.echo(f"wrote {out}  ({total} edits)")
@@ -130,6 +136,7 @@ def label(edits_file, trajectories, model, concurrency, limit, cache_dir, out) -
                 subjects[cand.sha] = cand.subject
 
     rows = [Edit.model_validate_json(l) for l in Path(edits_file).read_text().splitlines()]
+    per_candidate = Counter(e.candidate_sha for e in rows)
     if limit:
         rows = rows[:limit]
     click.echo(f"labelling {len(rows)} edits with {model or 'default model'}")
@@ -146,7 +153,8 @@ def label(edits_file, trajectories, model, concurrency, limit, cache_dir, out) -
         labeler = Labeler(llm, Cache(Path(cache_dir), "labels"))
         try:
             return await labeler.label_all(
-                [(e, subjects.get(e.candidate_sha, "")) for e in rows],
+                [(e, subjects.get(e.candidate_sha, ""), per_candidate[e.candidate_sha])
+                 for e in rows],
                 progress=lambda i, n: click.echo(f"  {i}/{n}"),
             ), labeler
         finally:

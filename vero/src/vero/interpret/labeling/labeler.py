@@ -20,6 +20,8 @@ from typing import Iterable
 from vero.interpret.cache import Cache, key_of
 from vero.interpret.labeling.client import AsyncLLM, LLMError
 from vero.interpret.labeling.taxonomy import (
+    ACTION_RUBRIC,
+    ROLE_RUBRIC,
     TAXONOMY_VERSION,
     Action,
     Direction,
@@ -30,7 +32,13 @@ from vero.interpret.labeling.taxonomy import (
 )
 from vero.interpret.models import Edit, EditLabel
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
+
+# Diffs were capped at 6000 characters, which truncated 12% of edits mid-hunk to save
+# tokens that were never the constraint: the whole corpus costs a couple of dollars.
+# These bounds exist only so one pathological edit cannot blow a context window.
+MAX_DIFF_CHARS = 40_000
+MAX_SOURCE_CHARS = 12_000
 
 SYSTEM = """You classify individual edits made by an AI agent that was told to improve \
 another agent's harness.
@@ -49,9 +57,22 @@ _SCHEMA = {
     "additionalProperties": False,
     "required": ["action", "role", "provenance", "mechanism", "confidence"],
     "properties": {
-        "action": {"type": "string", "enum": [a.value for a in Action]},
-        "role": {"type": "string", "enum": [r.value for r in Role]},
-        "provenance": {"type": "string", "enum": [p.value for p in Provenance]},
+        "action": {
+            "type": "string",
+            "enum": [a.value for a in Action],
+            "description": "; ".join(f"{k}: {v}" for k, v in ACTION_RUBRIC.items()),
+        },
+        "role": {
+            "type": "string",
+            "enum": [r.value for r in Role],
+            "description": "; ".join(f"{k}: {v}" for k, v in ROLE_RUBRIC.items()),
+        },
+        "provenance": {
+            "type": "string",
+            "enum": [p.value for p in Provenance],
+            "description": "Ignored downstream -- provenance is derived from the seed "
+                           "tree. Answer unknown unless the history line settles it.",
+        },
         "mechanism": {
             "type": "string",
             "description": "One sentence: what this edit actually does.",
@@ -61,16 +82,41 @@ _SCHEMA = {
 }
 
 
-def _user_prompt(edit: Edit, subject: str) -> str:
+def _user_prompt(edit: Edit, subject: str, siblings: int = 0) -> str:
     value = ""
     if edit.before_value is not None or edit.after_value is not None:
         value = f"\nvalue: {edit.before_value} -> {edit.after_value}"
+
+    # History. Without it the model cannot tell a first-time addition from a rewrite of
+    # the optimizer's own work, and it guessed "own" on almost every fix when asked.
+    if not edit.in_seed:
+        history = "this symbol did not exist in the seed — the optimizer created it"
+    elif edit.prior_touches:
+        history = (
+            f"this symbol came from the seed and {edit.prior_touches} earlier "
+            f"candidate(s) in this run already modified it"
+        )
+    else:
+        history = "this symbol is still as the seed wrote it; this is the first change to it"
+
+    # The subject often describes OTHER edits in the same commit, so say how many there
+    # are. Warning that it "may be inaccurate" was not enough on its own.
+    sib = (
+        f"\nnote: this commit touched {siblings} symbols in total, so the subject may "
+        f"describe a different one"
+        if siblings > 1 else ""
+    )
+    context = (
+        f"\n\nthe symbol after the edit, for context:\n{edit.after_source[:MAX_SOURCE_CHARS]}"
+        if edit.after_source else ""
+    )
     return (
         f"file: {edit.path}\n"
         f"symbol: {edit.symbol}  ({edit.symbol_kind.value})\n"
         f"lines: +{edit.added} -{edit.removed}{value}\n"
-        f"commit subject (may be inaccurate): {subject}\n\n"
-        f"diff:\n{edit.diff[:6000]}"
+        f"history: {history}\n"
+        f"commit subject (may be inaccurate): {subject}{sib}\n\n"
+        f"diff:\n{edit.diff[:MAX_DIFF_CHARS]}{context}"
     )
 
 
@@ -86,7 +132,7 @@ class Labeler:
         self.disagreements = 0
         self.failed = 0
 
-    async def label(self, edit: Edit, subject: str = "") -> EditLabel | None:
+    async def label(self, edit: Edit, subject: str = "", siblings: int = 0) -> EditLabel | None:
         key = cache_key(edit, self.llm.settings.model)
         if (cached := self.cache.get_json(key)) is not None:
             return EditLabel.model_validate(cached)
@@ -100,7 +146,9 @@ class Labeler:
             self.hint_authoritative += 1
 
         try:
-            raw = await self.llm.json_call(SYSTEM, _user_prompt(edit, subject), _SCHEMA)
+            raw = await self.llm.json_call(
+                SYSTEM, _user_prompt(edit, subject, siblings), _SCHEMA
+            )
         except LLMError:
             self.failed += 1
             return None
@@ -128,11 +176,11 @@ class Labeler:
 
     async def label_all(
         self,
-        edits: Iterable[tuple[Edit, str]],
+        edits: Iterable[tuple[Edit, str, int]],
         *,
         progress=None,
     ) -> list[EditLabel]:
-        tasks = [asyncio.create_task(self.label(e, s)) for e, s in edits]
+        tasks = [asyncio.create_task(self.label(e, s, n)) for e, s, n in edits]
         out: list[EditLabel] = []
         for i, task in enumerate(asyncio.as_completed(tasks), 1):
             label = await task

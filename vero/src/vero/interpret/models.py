@@ -105,6 +105,9 @@ class Edit(BaseModel):
     before_value: str | None = None    # scalar constants only
     after_value: str | None = None
     diff: str = ""                     # unified diff restricted to this symbol
+    after_source: str | None = None    # the symbol's full text after the edit
+    in_seed: bool = True               # did this symbol exist in the seed at all?
+    prior_touches: int = 0             # earlier candidates in this cell that touched it
 
     @staticmethod
     def make_id(cell_key: str, sha: str, path: str, symbol: str, diff: str) -> str:

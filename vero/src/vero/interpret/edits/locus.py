@@ -111,6 +111,39 @@ def symbol_map(source: str) -> dict[int, tuple[str, SymbolKind]]:
     return mapping
 
 
+def symbol_source(source: str, symbol: str) -> str | None:
+    """Full source text of one qualified symbol, for context and history comparison."""
+    if not source or symbol in ("<module>", "<file>"):
+        return None
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    want = symbol.split(".")
+
+    def find(node: ast.AST, path: list[str]) -> ast.AST | None:
+        if not path:
+            return node
+        for child in ast.iter_child_nodes(node):
+            if getattr(child, "name", None) == path[0]:
+                return find(child, path[1:])
+            if isinstance(child, (ast.Assign, ast.AnnAssign)) and len(path) == 1:
+                targets = (
+                    [child.target] if isinstance(child, ast.AnnAssign) else child.targets
+                )
+                if any(getattr(t, "id", None) == path[0] for t in targets):
+                    return child
+        return None
+
+    found = find(tree, want)
+    if found is None:
+        return None
+    try:
+        return ast.unparse(found)
+    except Exception:
+        return None
+
+
 def scalar_value(source: str, name: str) -> str | None:
     """Literal text of a module-level scalar binding, for before/after capture."""
     try:

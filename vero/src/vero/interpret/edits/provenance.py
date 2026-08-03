@@ -15,44 +15,9 @@ lookups.
 
 from __future__ import annotations
 
-import ast
-
 from vero.interpret.artifacts.harbor.repo import CandidateRepo
+from vero.interpret.edits.locus import symbol_source
 from vero.interpret.labeling.taxonomy import Provenance
-
-
-def _symbol_source(source: str, symbol: str) -> str | None:
-    """Source text of one qualified symbol, or None if absent."""
-    if not source or symbol in ("<module>", "<file>"):
-        return None
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return None
-    want = symbol.split(".")
-
-    def find(node: ast.AST, path: list[str]) -> ast.AST | None:
-        if not path:
-            return node
-        for child in ast.iter_child_nodes(node):
-            name = getattr(child, "name", None)
-            if name == path[0]:
-                return find(child, path[1:])
-            if isinstance(child, (ast.Assign, ast.AnnAssign)) and len(path) == 1:
-                targets = (
-                    [child.target] if isinstance(child, ast.AnnAssign) else child.targets
-                )
-                if any(getattr(t, "id", None) == path[0] for t in targets):
-                    return child
-        return None
-
-    found = find(tree, want)
-    if found is None:
-        return None
-    try:
-        return ast.unparse(found)
-    except Exception:
-        return None
 
 
 def provenance_of(
@@ -75,8 +40,8 @@ def provenance_of(
     if not parent_src:
         return Provenance.UNKNOWN
 
-    seed_sym = _symbol_source(seed_src, symbol)
-    parent_sym = _symbol_source(parent_src, symbol)
+    seed_sym = symbol_source(seed_src, symbol)
+    parent_sym = symbol_source(parent_src, symbol)
     if seed_sym is None or parent_sym is None:
         # Fall back to whole-file comparison: coarser, but still decided by content
         # rather than by guess.
