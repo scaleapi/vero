@@ -13,7 +13,7 @@ import html
 import json
 from collections import Counter
 
-from vero.interpret.analysis import stats
+from vero.interpret.analysis import preamble, stats
 
 CAT_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 CAT_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
@@ -45,6 +45,8 @@ th:first-child,td:first-child{text-align:left} th{color:var(--text-secondary);fo
 border:1px solid var(--grid);border-radius:6px;padding:6px 9px;font-size:12px;max-width:320px;
 box-shadow:0 2px 10px rgba(0,0,0,.16);z-index:50;transition:opacity .08s}
 .hit{cursor:crosshair}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.fig table{width:100%}
 .toggle{float:right;font-size:12px;color:var(--text-secondary);cursor:pointer;border:1px solid var(--grid);
 border-radius:6px;padding:3px 9px;background:var(--surface-2)}
 """
@@ -338,6 +340,10 @@ def render(rows: list[dict], edits: dict[str, dict], meta: dict) -> str:
         f'<h2>{_esc(t)}</h2><p class="note">{_esc(n)}</p><div class="fig">{svg}</div>'
         for t, n, svg in figs
     )
+    # Method, vocabulary and the error inventory come BEFORE the figures: a reader who
+    # is going to use these numbers needs to know how they were made and where they
+    # are wrong first, not in a footnote.
+    body = preamble.render_sections(rows, edits) + body
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>What optimizers modified</title><style>{CSS}</style></head>
