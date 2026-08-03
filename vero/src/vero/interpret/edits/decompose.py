@@ -19,7 +19,9 @@ from vero.interpret.edits import locus
 from vero.interpret.models import Candidate, Edit, SymbolKind
 
 _HUNK_SPLIT = re.compile(r"^(@@ .*?@@.*)$", re.M)
-_SKIP = ("__pycache__", ".gitignore")
+# __pycache__ is compiled noise. .gitignore is NOT skipped: several cells shipped a
+# candidate whose only change was one, and "shipped something inert" is a finding.
+_SKIP = ("__pycache__",)
 
 
 def _per_symbol_diff(diff: str, keep: set[int]) -> str:

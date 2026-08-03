@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from vero.interpret.artifacts.harbor import build as build_harbor
+from vero.interpret.artifacts.harbor.adapter import latest_verifier_dir
 from vero.interpret.artifacts.harbor import session as session_mod
 from vero.interpret.artifacts.harbor.repo import CandidateRepo
 from vero.interpret.cache import Cache
@@ -81,10 +82,11 @@ def edits(src, cache_dir, out) -> None:
     with Path(out).open("w") as fh:
         for line in Path(src).read_text().splitlines():
             traj = Trajectory.model_validate_json(line)
-            archive = next(
-                Path(traj.ref.cell_dir).glob("jobs/*/task__*/verifier/session.tar.gz"), None
-            )
-            if archive is None:
+            verifier = latest_verifier_dir(Path(traj.ref.cell_dir))
+            if verifier is None:
+                continue
+            archive = verifier / "session.tar.gz"
+            if not archive.is_file():
                 continue
             root = session_mod.unpack(archive, cache)
             if root is None:

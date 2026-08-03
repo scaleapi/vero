@@ -29,6 +29,18 @@ from vero.interpret.models import Candidate, CellRef, EvalRecord, Trajectory
 DEFAULT_MAX_ERROR_RATE = 0.1
 
 
+def latest_verifier_dir(cell_dir: Path) -> Path | None:
+    """The verifier directory of the most recent job for this cell.
+
+    A cell re-run in place leaves earlier attempts behind. Every stage must agree on
+    which one is authoritative: picking the first glob match in one stage and the last
+    in another opens a repository that does not contain the other stage's commits, and
+    the diffs come back empty rather than erroring, silently dropping the whole cell.
+    """
+    finals = sorted(cell_dir.glob("jobs/*/task__*/verifier/finalization.json"))
+    return finals[-1].parent if finals else None
+
+
 class HarborAdapter:
     name = "harbor"
 
@@ -68,13 +80,11 @@ class HarborAdapter:
     # -- loading --------------------------------------------------------------
 
     def load(self, ref: CellRef) -> Trajectory:
-        cell_dir = Path(ref.cell_dir)
-        finals = sorted(cell_dir.glob("jobs/*/task__*/verifier/finalization.json"))
-        if not finals:
+        verifier = latest_verifier_dir(Path(ref.cell_dir))
+        if verifier is None:
             return Trajectory(ref=ref)
 
-        # Last job wins: a cell re-run in place leaves the earlier attempt behind.
-        final_path = finals[-1]
+        final_path = verifier / "finalization.json"
         final = json.loads(final_path.read_text())
         metrics = (final.get("reward_metrics") or {}).get("reward", {}) or {}
         shipped_sha = ((final.get("candidate") or {}).get("id") or "")
