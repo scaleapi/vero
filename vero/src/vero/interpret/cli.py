@@ -164,6 +164,31 @@ def label(edits_file, trajectories, model, concurrency, audit_rate, limit,
 
 
 @main.command()
+@click.option("--labels-file", type=click.Path(path_type=Path), default=Path("labels.jsonl"))
+@click.option("--edits-file", type=click.Path(path_type=Path), default=Path("edits.jsonl"))
+@click.option("--out", type=click.Path(path_type=Path), default=Path("analysis"))
+def report(labels_file, edits_file, out) -> None:
+    """Render the figures as one self-contained HTML page."""
+    from vero.interpret.analysis import figures
+
+    edits = {}
+    for line in Path(edits_file).read_text().splitlines():
+        e = json.loads(line)
+        edits[e["id"]] = e
+    rows = [json.loads(l) for l in Path(labels_file).read_text().splitlines()]
+    cells = len({r["cell_key"] for r in rows})
+    meta = {"cells": cells, "edits": len(edits), "labels": len(rows)}
+
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    page = out / "index.html"
+    page.write_text(figures.render(rows, edits, meta))
+    (out / "labels.jsonl").write_text(Path(labels_file).read_text())
+    (out / "edits.jsonl").write_text(Path(edits_file).read_text())
+    click.echo(f"wrote {page}  ({cells} cells, {len(rows)} labels)")
+
+
+@main.command()
 @click.option("--in", "src", type=click.Path(path_type=Path), default=Path("edits.jsonl"))
 @click.option("--top", default=40, help="Symbols to show per benchmark.")
 def symbols(src, top) -> None:
