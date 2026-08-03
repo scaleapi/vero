@@ -38,7 +38,7 @@ from scale_brand_style import (  # noqa: E402
     save,
 )
 
-from vero.interpret.analysis import stats  # noqa: E402
+from vero.interpret.analysis import display, stats  # noqa: E402
 
 # Roles grouped so the heatmap's left colour bar means something. Rows must be
 # contiguous by group, so this ordering is load-bearing, not cosmetic.
@@ -49,10 +49,6 @@ ROLE_GROUPS: list[tuple[str, list[str]]] = [
     ("Plumbing", ["model_client", "initialization", "env_setup"]),
     ("Not the agent", ["tests", "metadata", "other"]),
 ]
-SHORT = {
-    "browsecomp-plus": "browsecomp", "swe-atlas-qna": "swe-atlas",
-    "terminal-bench": "terminal", "gaia-shell": "gaia-shell*", "officeqa": "officeqa",
-}
 
 
 def fig_prevalence(rows: list[dict], stem: Path) -> None:
@@ -94,10 +90,15 @@ def fig_prevalence(rows: list[dict], stem: Path) -> None:
             ax.text(j, i, f"{hit}/{tot}", ha="center", va="center",
                     fontsize=FS["value"], color="white" if M[i, j] > 0.62 else INK)
     ax.set_xticks(range(ncol))
-    ax.set_xticklabels([SHORT[b] for b in benches], fontsize=FS["label"], color=INK)
+    ax.set_xticklabels(
+        [display.benchmark(b, short=True)
+         + ("\u2021" if b in stats.CONSTRUCTED_SEED else "")
+         for b in benches],
+        fontsize=FS["label"], color=INK,
+    )
     ax.xaxis.set_ticks_position("top")
     ax.set_yticks(range(nrow))
-    ax.set_yticklabels(labels, fontsize=FS["label"], color=INK)
+    ax.set_yticklabels([display.role(x) for x in labels], fontsize=FS["label"], color=INK)
     ax.tick_params(length=0)
     for s in ax.spines.values():
         s.set_visible(False)
@@ -138,7 +139,7 @@ def fig_diversity(rows: list[dict], stem: Path) -> None:
         ax.text(d["observed"], i + 0.22, f"{d['observed']:.3f}", ha="center",
                 va="bottom", fontsize=FS["value"], color=INK)
     ax.set_yticks(y)
-    ax.set_yticklabels([SHORT[b] for b in benches], fontsize=FS["label"], color=INK)
+    ax.set_yticklabels([display.benchmark(b, short=True) for b in benches], fontsize=FS["label"], color=INK)
     ax.set_xlabel("mean pairwise Jaccard distance between cells' edit repertoires",
                   fontsize=FS["axis"], color=INK)
     ax.tick_params(length=0)
@@ -174,7 +175,7 @@ def fig_rarefaction(rows: list[dict], stem: Path) -> None:
     for b in sorted(benches, key=lambda k: -curves[k][-1]):
         pts = curves[b]
         ax.plot(np.arange(1, len(pts) + 1), pts, lw=1.6, color=colors[b],
-                label=SHORT[b])
+                label=display.benchmark(b, short=True))
     ax.set_xlabel("cells sampled", fontsize=FS["axis"], color=INK)
     ax.set_ylabel("distinct edit kinds seen", fontsize=FS["axis"], color=INK)
     ax.grid(color=PALETTE["gray_whisper"], lw=0.8)

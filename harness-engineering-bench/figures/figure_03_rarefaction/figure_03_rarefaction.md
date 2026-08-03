@@ -36,11 +36,11 @@ Mean distinct categories after k runs, of 16 available.
 
 | benchmark | k=1 | k=2 | k=5 | k=10 | k=20 |
 |---|---|---|---|---|---|
-| browsecomp-plus | 8.3 | 12.0 | 15.2 | 16.0 | 16.0 |
-| officeqa | 7.7 | 10.6 | 13.9 | 14.9 | 15.0 |
-| swe-atlas-qna | 8.8 | 11.7 | 14.3 | 15.4 | 16.0 |
-| terminal-bench | 7.5 | 10.5 | 13.8 | 14.7 | 15.0 |
-| gaia-shell | 11.4 | 13.9 | 15.2 | 15.8 | 16.0 |
+| BrowseComp-Plus | 8.3 | 12.0 | 15.2 | 16.0 | 16.0 |
+| OfficeQA | 7.7 | 10.6 | 13.9 | 14.9 | 15.0 |
+| SWE-Atlas-QnA | 8.8 | 11.7 | 14.3 | 15.4 | 16.0 |
+| Terminal-Bench | 7.5 | 10.5 | 13.8 | 14.7 | 15.0 |
+| GAIA-Shell | 11.4 | 13.9 | 15.2 | 15.8 | 16.0 |
 
 200 random orderings per benchmark, seed 0.
 
@@ -53,6 +53,10 @@ Mean distinct categories after k runs, of 16 available.
   locator produced half-steps.
 
 ## Provenance
+
+Identifiers are snake_case in the data (`control_loop`, `browsecomp-plus`) and
+title-cased for display via `analysis.display`; the table above uses the display
+names, which are what the figure shows.
 
 ```
 python -c "from vero.interpret.analysis import stats; stats.rarefaction(rows, trials=200, seed=0)"

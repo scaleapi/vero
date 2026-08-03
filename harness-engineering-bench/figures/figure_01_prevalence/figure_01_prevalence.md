@@ -42,24 +42,24 @@ comparisons are unsupportable in this corpus.
 Cells that made ≥1 edit of each kind, out of 20 per benchmark. Rows ordered by mean
 share across benchmarks, which is the order the figure uses.
 
-| role | browsecomp-plus | officeqa | swe-atlas-qna | terminal-bench | gaia-shell* |
+| role | BrowseComp-Plus | OfficeQA | SWE-Atlas-QnA | Terminal-Bench | GAIA-Shell‡ |
 |---|---|---|---|---|---|
-| prompt | 20/20 | 19/20 | 20/20 | 20/20 | 18/20 |
-| control_loop | 17/20 | 19/20 | 18/20 | 17/20 | 20/20 |
-| budget_turns | 15/20 | 17/20 | 16/20 | 18/20 | 11/20 |
-| tool_surface | 15/20 | 7/20 | 15/20 | 10/20 | 18/20 |
-| tool_impl | 16/20 | 7/20 | 11/20 | 10/20 | 18/20 |
-| other | 14/20 | 8/20 | 9/20 | 9/20 | 20/20 |
-| tests | 11/20 | 7/20 | 14/20 | 10/20 | 16/20 |
-| model_client | 11/20 | 14/20 | 10/20 | 8/20 | 11/20 |
-| metadata | 9/20 | 7/20 | 6/20 | 11/20 | 19/20 |
-| submission | 7/20 | 8/20 | 15/20 | 2/20 | 18/20 |
-| budget_output | 5/20 | 13/20 | 11/20 | 7/20 | 7/20 |
-| budget_wallclock | 5/20 | 7/20 | 7/20 | 6/20 | 12/20 |
-| context_mgmt | 7/20 | 7/20 | 6/20 | 10/20 | 7/20 |
-| initialization | 6/20 | 4/20 | 4/20 | 5/20 | 17/20 |
-| env_setup | 7/20 | 5/20 | 3/20 | 7/20 | 13/20 |
-| retrieval | 9/20 | 0/20 | 1/20 | 0/20 | 2/20 |
+| Prompt | 20/20 | 19/20 | 20/20 | 20/20 | 18/20 |
+| Control Loop | 17/20 | 19/20 | 18/20 | 17/20 | 20/20 |
+| Turn Budget | 15/20 | 17/20 | 16/20 | 18/20 | 11/20 |
+| Tool Surface | 15/20 | 7/20 | 15/20 | 10/20 | 18/20 |
+| Tool Implementation | 16/20 | 7/20 | 11/20 | 10/20 | 18/20 |
+| Other | 14/20 | 8/20 | 9/20 | 9/20 | 20/20 |
+| Tests | 11/20 | 7/20 | 14/20 | 10/20 | 16/20 |
+| Model Client | 11/20 | 14/20 | 10/20 | 8/20 | 11/20 |
+| Metadata | 9/20 | 7/20 | 6/20 | 11/20 | 19/20 |
+| Submission | 7/20 | 8/20 | 15/20 | 2/20 | 18/20 |
+| Output Cap | 5/20 | 13/20 | 11/20 | 7/20 | 7/20 |
+| Wall-Clock Budget | 5/20 | 7/20 | 7/20 | 6/20 | 12/20 |
+| Context Management | 7/20 | 7/20 | 6/20 | 10/20 | 7/20 |
+| Initialization | 6/20 | 4/20 | 4/20 | 5/20 | 17/20 |
+| Environment Setup | 7/20 | 5/20 | 3/20 | 7/20 | 13/20 |
+| Retrieval | 9/20 | 0/20 | 1/20 | 0/20 | 2/20 |
 
 ## Style notes
 
@@ -69,6 +69,10 @@ share across benchmarks, which is the order the figure uses.
   rotation; rotated column headers cost more legibility than the abbreviation does.
 
 ## Provenance
+
+Identifiers are snake_case in the data (`control_loop`, `browsecomp-plus`) and
+title-cased for display via `analysis.display`; the table above uses the display
+names, which are what the figure shows.
 
 ```
 vero interpret extract --runs runs/{officeqa,browsecomp-plus,terminal-bench,swe-atlas-qna,gaia-shell} \

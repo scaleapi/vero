@@ -13,7 +13,7 @@ import html
 import json
 from collections import Counter
 
-from vero.interpret.analysis import preamble, stats
+from vero.interpret.analysis import display, preamble, stats
 
 CAT_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
 CAT_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
@@ -95,10 +95,10 @@ def fig_prevalence(rows: list[dict]) -> str:
     for j, b in enumerate(benches):
         x = lw + j * cw + cw / 2
         mark = " ‡" if b in stats.CONSTRUCTED_SEED else ""
-        out.append(f'<text class="axis" x="{x}" y="{top-24}" text-anchor="middle">{_esc(b[:15])}{mark}</text>')
+        out.append(f'<text class="axis" x="{x}" y="{top-24}" text-anchor="middle">{_esc(display.benchmark(b, short=True))}{mark}</text>')
     for i, role in enumerate(roles):
         y = top + i * ch
-        out.append(f'<text class="axis" x="{lw-10}" y="{y+17}" text-anchor="end">{_esc(role)}</text>')
+        out.append(f'<text class="axis" x="{lw-10}" y="{y+17}" text-anchor="end">{_esc(display.role(role))}</text>')
         for j, b in enumerate(benches):
             hit, tot = table[role][b]
             frac = hit / tot if tot else 0
@@ -171,7 +171,7 @@ def fig_jaccard(rows: list[dict]) -> str:
     for i, b in enumerate(benches):
         d = data[b]
         y = 40 + i * rh
-        out.append(f'<text class="axis" x="{lw-10}" y="{y+16}" text-anchor="end">{_esc(b)}</text>')
+        out.append(f'<text class="axis" x="{lw-10}" y="{y+16}" text-anchor="end">{_esc(display.benchmark(b, short=True))}</text>')
         tip_null = f"<b>{_esc(b)}</b><br>null 95%: {d['null_lo']:.3f}–{d['null_hi']:.3f}<br>null mean {d['null_mean']:.3f}"
         out.append(
             f'<rect class="hit" data-tip="{tip_null}" x="{sx(d["null_lo"]):.1f}" y="{y+5}" '
@@ -205,7 +205,7 @@ def fig_action_role(rows: list[dict]) -> str:
     out = [f'<svg viewBox="0 0 {w} {h}" width="100%" role="img">']
     for i, role in enumerate(roles):
         y = 34 + i * rh
-        out.append(f'<text class="axis" x="{lw-10}" y="{y+16}" text-anchor="end">{_esc(role)}</text>')
+        out.append(f'<text class="axis" x="{lw-10}" y="{y+16}" text-anchor="end">{_esc(display.role(role))}</text>')
         x = lw
         total = sum(counts.get((role, a), 0) for a in actions)
         for k, a in enumerate(actions):
@@ -222,7 +222,7 @@ def fig_action_role(rows: list[dict]) -> str:
         out.append(f'<text class="muted" x="{x+8:.1f}" y="{y+18}">{total}</text>')
     out.append("</svg>")
     leg = '<div class="legend">' + "".join(
-        f'<span><i style="background:{CAT_LIGHT[k%8]}"></i>{_esc(a)}</span>'
+        f'<span><i style="background:{CAT_LIGHT[k%8]}"></i>{_esc(display.action(a))}</span>'
         for k, a in enumerate(actions)
     ) + "</div>"
     tbl = _table(["role"] + actions,
@@ -294,7 +294,7 @@ def fig_provenance(rows: list[dict]) -> str:
         out.append(f'<text class="muted" x="{x+8:.1f}" y="{y+19}">{total}</text>')
     out.append("</svg>")
     leg = '<div class="legend">' + "".join(
-        f'<span><i style="background:{cols[k]}"></i>{k} defect</span>' for k in order) + "</div>"
+        f'<span><i style="background:{cols[k]}"></i>{_esc(display.provenance(k))}</span>' for k in order) + "</div>"
     tbl = _table(["benchmark"] + order,
                  [[b] + [data[b].get(k, 0) for k in order] for b in benches], "Table view")
     return "".join(out) + leg + tbl

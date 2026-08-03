@@ -37,11 +37,11 @@ categories from one skewed distribution. 20 runs per benchmark, 190 pairs each.
 
 | benchmark | runs | observed | null 2.5% | null 97.5% | null mean | verdict |
 |---|---|---|---|---|---|---|
-| browsecomp-plus | 20 | 0.561 | 0.630 | 0.667 | 0.651 | converged |
-| officeqa | 20 | 0.564 | 0.663 | 0.709 | 0.687 | converged |
-| swe-atlas-qna | 20 | 0.538 | 0.601 | 0.653 | 0.630 | converged |
-| terminal-bench | 20 | 0.572 | 0.643 | 0.691 | 0.670 | converged |
-| gaia-shell | 20 | 0.341 | 0.399 | 0.446 | 0.425 | converged |
+| BrowseComp-Plus | 20 | 0.561 | 0.630 | 0.667 | 0.651 | converged |
+| OfficeQA | 20 | 0.564 | 0.663 | 0.709 | 0.687 | converged |
+| SWE-Atlas-QnA | 20 | 0.538 | 0.601 | 0.653 | 0.630 | converged |
+| Terminal-Bench | 20 | 0.572 | 0.643 | 0.691 | 0.670 | converged |
+| GAIA-Shell | 20 | 0.341 | 0.399 | 0.446 | 0.425 | converged |
 
 500 permutations per benchmark, seed 0.
 
@@ -56,6 +56,10 @@ categories from one skewed distribution. 20 runs per benchmark, 190 pairs each.
   distort it.
 
 ## Provenance
+
+Identifiers are snake_case in the data (`control_loop`, `browsecomp-plus`) and
+title-cased for display via `analysis.display`; the table above uses the display
+names, which are what the figure shows.
 
 ```
 python -c "from vero.interpret.analysis import stats; stats.jaccard(rows, trials=500, seed=0)"

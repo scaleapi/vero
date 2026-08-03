@@ -56,6 +56,10 @@ Corpus totals across all scalar constants: 137 raised, 78 lowered.
 
 ## Provenance
 
+Identifiers are snake_case in the data (`control_loop`, `browsecomp-plus`) and
+title-cased for display via `analysis.display`; the table above uses the display
+names, which are what the figure shows.
+
 ```
 python -c "from vero.interpret.analysis import stats; stats.tuning_direction(rows, edits, top=10)"
 ```
