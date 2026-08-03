@@ -174,8 +174,39 @@ def harbor_command(
     return command
 
 
+# Convention (2026-07-31, adopted on Greptile's PR #75 catch) -- IDENTICAL to
+# runs/recompute.py, which produced the pinned baselines. A trial the HARNESS killed
+# scores 0: the harness owns its own install, its context management and its step
+# budget, so a reference harness that cannot install or cannot finish must pay for it
+# exactly as a candidate does at finalization, which zero-fills dead attempts. A trial
+# the PLATFORM killed is dropped: a retry cannot score a trial that never ran, and
+# zero-filling infra bakes outage luck into the number.
+#
+# Dropping them instead -- which this script did until 2026-08-02 -- silently inflates
+# every reference score by scoring only the trials that survived. It cost 73 zeroes
+# across the reference grid, worst on swe-atlas x mini-swe-agent (n=122 of 150).
+HARNESS_EXCEPTIONS = {
+    "RuntimeError",                # swe-atlas seed: empty-completion fail-fast
+    "UnicodeDecodeError",          # terminal-bench seed: undecodable command output
+    "AgentTimeoutError",           # wall-clock exhaustion: the step budget is harness-owned
+    "BadRequestError",             # gpt-oss 128k overflow: context management is harness-owned
+    "NonZeroAgentExitCodeError",   # the harness crashed or never installed its binary
+    "AgentSetupTimeoutError",      # the harness owns how long its own install takes
+}
+INFRA_EXCEPTIONS = {
+    "RateLimitError",
+    "ApiRateLimitError",
+    "NetworkConnectionError",
+    "VerifierTimeoutError",
+    "EnvironmentStartTimeoutError",
+    "SandboxFilesystemNotFoundError",
+    "AddTestsDirError",            # harbor could not stage the tests: platform, not agent
+    "ConnectionError",
+}
+
+
 def trial_rewards(round_dir: Path) -> list[float]:
-    """Same extraction as runs/recompute.py, so numbers are comparable."""
+    """Same extraction AND the same failure convention as runs/recompute.py."""
     rewards = []
     for path in glob.glob(f"{round_dir}/**/result.json", recursive=True):
         if "/verifier/" in path:
@@ -189,8 +220,16 @@ def trial_rewards(round_dir: Path) -> list[float]:
         verifier = data.get("verifier_result") or {}
         block = verifier.get("rewards")
         reward = block.get("reward") if isinstance(block, dict) else verifier.get("reward")
+        exception = (data.get("exception_info") or {}).get("exception_type")
         if reward is not None:
             rewards.append(float(reward))
+        elif exception in HARNESS_EXCEPTIONS:
+            rewards.append(0.0)  # the harness killed it: price the defect
+        elif exception in INFRA_EXCEPTIONS:
+            continue             # the platform killed it: drop, do not bake in outage luck
+        elif exception:
+            sys.exit(f"unclassified exception {exception!r} in {round_dir}: add it to "
+                     "HARNESS_EXCEPTIONS or INFRA_EXCEPTIONS before quoting a number")
     return rewards
 
 
