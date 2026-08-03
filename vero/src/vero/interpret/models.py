@@ -111,6 +111,25 @@ class Edit(BaseModel):
         return content_id(cell_key, sha, path, symbol, diff)
 
 
+class EditLabel(BaseModel):
+    """A model-assigned reading of one edit, plus the facets that were derived.
+
+    `hinted` records whether the role came from a deterministic rule rather than the
+    model, so agreement between the two can be measured instead of assumed.
+    """
+
+    edit_id: str
+    action: str
+    role: str
+    provenance: str = "unknown"
+    direction: str = "na"
+    mechanism: str = ""              # one line, the model's own words
+    confidence: float = 0.0
+    hinted: bool = False
+    model: str = ""
+    taxonomy_version: str = ""
+
+
 class Trajectory(BaseModel):
     """Everything known about one cell."""
 
@@ -118,6 +137,7 @@ class Trajectory(BaseModel):
     candidates: list[Candidate] = Field(default_factory=list)
     evaluations: list[EvalRecord] = Field(default_factory=list)
     edits: list[Edit] = Field(default_factory=list)
+    labels: list[EditLabel] = Field(default_factory=list)
     reward: float | None = None
     baseline_reward: float | None = None
     error_rate: float | None = None
