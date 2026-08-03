@@ -139,6 +139,10 @@ def harbor_command(
     attempts: int,
     concurrency: int,
     model: str,
+    agent: str | None = None,
+    setup_timeout_multiplier: float | None = None,
+    agent_env: list[str] | None = None,
+    extra_requirements: list[str] | None = None,
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -159,15 +163,32 @@ def harbor_command(
         "--no-config", "--no-env-file",
         "--project", str(workspace),
         "--with", build.get("harbor_requirement", "harbor[modal]==0.20.0"),
+        # Harbor-native harnesses import their framework in the ORCHESTRATOR, not the
+        # task container, and harbor does not declare those imports: dspy-rlm dies on
+        # ModuleNotFoundError: No module named 'dspy' before the agent ever starts.
+        *[arg for req in (extra_requirements or []) for arg in ("--with", req)],
         "harbor", "run", "--yes",
         *source_args,
-        "--agent-import-path", build["agent_import_path"],
+        # A reference run swaps the seed program for an installed harness
+        # (claude-code, opencode, ...) and changes NOTHING else -- same dataset
+        # ref, same partition, same rounds, same aggregation -- so the number
+        # stays comparable to baseline_reward and to every contestant. The target
+        # model stays pinned, so the harness is the only variable.
+        *(["--agent", agent] if agent
+          else ["--agent-import-path", build["agent_import_path"]]),
         "-e", resolve_param(build.get("environment_name", "modal")),
         "-m", str(model),
         "-n", str(concurrency),
         "--n-attempts", str(attempts),
         "--jobs-dir", str(jobs_dir),
     ]
+    # opencode's install (nvm -> node 22 -> npm -g) is far heavier than the seed's
+    # zero setup and can exceed harbor's default. swe-atlas already gives its
+    # OPTIMIZER agent a 4x multiplier for the same reason.
+    if setup_timeout_multiplier:
+        command += ["--agent-setup-timeout-multiplier", str(setup_timeout_multiplier)]
+    for pair in agent_env or []:
+        command += ["--ae", pair]
     for task in tasks:
         command.extend(["-i", task])
     command.extend(str(a) for a in build.get("extra_harbor_args", []))
@@ -261,12 +282,36 @@ def main() -> int:
                         help="independent rounds, pooled (default 3, as the baselines)")
     parser.add_argument("--attempts", type=int, default=1,
                         help="attempts per case within a round (default 1)")
+    parser.add_argument("--agent",
+                        help="run an INSTALLED harbor harness (claude-code, opencode, "
+                             "...) instead of the seed program, at the benchmark's "
+                             "pinned model. Measures a SOTA reference, not a bound.")
+    parser.add_argument("--harbor-requirement",
+                        help="override build.yaml's harbor_requirement for this run "
+                             "only. Also relaxes the copied workspace's own harbor pin, "
+                             "which build.yaml and target/pyproject.toml must otherwise "
+                             "keep in lockstep (see a70c572) or uv cannot resolve.")
+    parser.add_argument("--setup-timeout-multiplier", type=float,
+                        help="scale harbor's agent-setup timeout (installed harnesses "
+                             "with heavy toolchains need this)")
+    parser.add_argument("--agent-env", action="append", metavar="KEY=VALUE",
+                        default=[],
+                        help="extra env var for the agent (repeatable). goose reads "
+                             "OPENAI_HOST/OPENAI_BASE_PATH rather than OPENAI_BASE_URL, "
+                             "so it needs the proxy pointed at explicitly.")
+    parser.add_argument("--with-requirement", action="append", metavar="SPEC",
+                        default=[], dest="extra_requirements",
+                        help="extra package for the orchestrator uv env (repeatable). "
+                             "Harbor-native harnesses import their framework here and "
+                             "harbor does not declare it -- dspy-rlm needs 'dspy'.")
     parser.add_argument("--concurrency", type=int, default=24)
     parser.add_argument("--output", help="output dir (default: a temp dir)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     build, build_path = load_build(args.benchmark)
+    if args.harbor_requirement:
+        build["harbor_requirement"] = args.harbor_requirement
     outdir = Path(args.output).resolve() if args.output else Path(
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)
@@ -284,6 +329,15 @@ def main() -> int:
             "__pycache__", "*.pyc", ".venv", ".git"))
         version = "seed"
         log(f"seed harness from {origin}")
+        if args.harbor_requirement:
+            pyproject = workspace / "pyproject.toml"
+            if pyproject.is_file():
+                import re as _re
+                text = pyproject.read_text()
+                relaxed = _re.sub(r'"harbor==[^"]+"', '"harbor"', text)
+                if relaxed != text:
+                    pyproject.write_text(relaxed)
+                    log("relaxed the copied workspace's harbor pin so the override resolves")
     else:
         session_dir = open_session(args.session, outdir)
         version = shipped_version(
@@ -323,7 +377,10 @@ def main() -> int:
         command = harbor_command(
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
-            model=args.model or build["model"],
+            model=args.model or build["model"], agent=args.agent,
+            setup_timeout_multiplier=args.setup_timeout_multiplier,
+            agent_env=args.agent_env,
+            extra_requirements=args.extra_requirements,
         )
         if args.dry_run:
             print(" ".join(command))
