@@ -111,14 +111,10 @@ def edits(src, cache_dir, out) -> None:
               default=Path("trajectories.jsonl"))
 @click.option("--model", default=None, help="Defaults to a cheap model.")
 @click.option("--concurrency", default=16)
-@click.option("--audit-rate", default=0.15,
-              help="Fraction of hinted edits also sent to the model, to measure "
-                   "hint/model agreement rather than assume it.")
 @click.option("--limit", default=0, help="Label only the first N edits (a dry run).")
 @click.option("--cache-dir", type=click.Path(path_type=Path), default=DEFAULT_CACHE)
 @click.option("--out", type=click.Path(path_type=Path), default=Path("labels.jsonl"))
-def label(edits_file, trajectories, model, concurrency, audit_rate, limit,
-          cache_dir, out) -> None:
+def label(edits_file, trajectories, model, concurrency, limit, cache_dir, out) -> None:
     """Assign facets to edits. Cached and resumable; re-running costs nothing."""
     import asyncio as _asyncio
 
@@ -147,7 +143,7 @@ def label(edits_file, trajectories, model, concurrency, audit_rate, limit,
 
     async def run():
         llm = AsyncLLM(settings)
-        labeler = Labeler(llm, Cache(Path(cache_dir), "labels"), audit_rate=audit_rate)
+        labeler = Labeler(llm, Cache(Path(cache_dir), "labels"))
         try:
             return await labeler.label_all(
                 [(e, subjects.get(e.candidate_sha, "")) for e in rows],
