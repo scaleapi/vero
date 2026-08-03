@@ -162,33 +162,39 @@ def fig_diversity(rows: list[dict], stem: Path) -> None:
 
 
 def fig_rarefaction(rows: list[dict], stem: Path) -> None:
-    """Line: distinct edit kinds discovered as cells are added."""
-    curves = stats.rarefaction(rows)
-    benches = [b for b in stats.BENCH_ORDER if b in curves]
+    """Small multiples: discovery curve per benchmark, with its ordering spread."""
+    bands = stats.rarefaction_bands(rows)
+    benches = [b for b in stats.BENCH_ORDER if b in bands]
     colors = family_colors(benches)
+    ncol = len(benches)
 
-    fig, ax = plt.subplots(figsize=(TEXT_WIDTH_IN * 0.78, 2.9))
-    fig.subplots_adjust(left=0.105, right=0.755, top=0.96, bottom=0.165)
-    # Direct labels are the house preference but cannot work here: three curves land
-    # on exactly 16 kinds and two on 15, so endpoint labels overlap into mush. A
-    # legend ordered by final value keeps identity next to the visual order instead.
-    for b in sorted(benches, key=lambda k: -curves[k][-1]):
-        pts = curves[b]
-        ax.plot(np.arange(1, len(pts) + 1), pts, lw=1.6, color=colors[b],
-                label=display.benchmark(b, short=True))
-    ax.set_xlabel("cells sampled", fontsize=FS["axis"], color=INK)
-    ax.set_ylabel("distinct edit kinds seen", fontsize=FS["axis"], color=INK)
-    ax.grid(color=PALETTE["gray_whisper"], lw=0.8)
-    ax.set_axisbelow(True)
-    for s in ("top", "right"):
-        ax.spines[s].set_visible(False)
-    for s in ("bottom", "left"):
-        ax.spines[s].set_color(PALETTE["gray_medium"])
-    ax.tick_params(colors=INK_FAINT, labelsize=FS["tick"], length=2)
-    ax.set_xticks([1, 5, 10, 15, 20])   # cells are discrete; 2.5 is not a cell count
-    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), frameon=False,
-              fontsize=FS["legend"], handlelength=1.4, handletextpad=0.6,
-              labelspacing=0.55)
+    fig, axes = plt.subplots(
+        1, ncol, figsize=(TEXT_WIDTH_IN, 2.15), sharey=True, sharex=True
+    )
+    fig.subplots_adjust(left=0.078, right=0.978, top=0.86, bottom=0.235, wspace=0.26)
+    ceiling = max(hi[-1] for _, _, hi in bands.values())
+
+    for ax, b in zip(axes, benches):
+        mean, lo, hi = bands[b]
+        x = np.arange(1, len(mean) + 1)
+        ax.fill_between(x, lo, hi, color=colors[b], alpha=0.22, lw=0, zorder=1)
+        ax.plot(x, mean, lw=1.6, color=colors[b], zorder=3)
+        ax.set_title(display.benchmark(b, short=True), fontsize=FS["label"], color=INK,
+                     pad=5)
+        ax.set_xlim(1, len(mean))
+        ax.set_ylim(0, ceiling + 0.6)
+        ax.set_xticks([1, 10, 20])
+        ax.grid(color=PALETTE["gray_whisper"], lw=0.7)
+        ax.set_axisbelow(True)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        for s in ("bottom", "left"):
+            ax.spines[s].set_color(PALETTE["gray_medium"])
+        ax.tick_params(colors=INK_FAINT, labelsize=FS["tick"], length=2)
+
+    axes[0].set_ylabel("distinct edit kinds seen", fontsize=FS["axis"], color=INK)
+    fig.text(0.535, 0.045, "optimization runs sampled", ha="center",
+             fontsize=FS["axis"], color=INK)
     save(fig, str(stem))
     plt.close(fig)
 

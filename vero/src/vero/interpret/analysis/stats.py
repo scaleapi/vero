@@ -65,6 +65,40 @@ def prevalence(rows: list[dict]) -> tuple[list[str], dict[str, dict[str, tuple[i
     return roles, table
 
 
+def _rarefaction_trials(
+    rows: list[dict], *, trials: int, seed: int
+) -> dict[str, list[list[int]]]:
+    """Per benchmark, `trials` curves of distinct-roles-after-k-cells."""
+    rng = random.Random(seed)
+    roles_by_cell = cell_roles(rows)
+    out: dict[str, list[list[int]]] = {}
+    for bench, cells in benchmark_cells(rows).items():
+        members = sorted(cells)
+        curves: list[list[int]] = []
+        for _ in range(trials):
+            rng.shuffle(members)
+            seen: set[str] = set()
+            curve: list[int] = []
+            for cell in members:
+                seen |= roles_by_cell.get(cell, set())
+                curve.append(len(seen))
+            curves.append(curve)
+        out[bench] = curves
+    return out
+
+
+def _percentile(sorted_vals: list[int], q: float) -> float:
+    """Linear-interpolated percentile; avoids a numpy dependency in this module."""
+    if not sorted_vals:
+        return float("nan")
+    if len(sorted_vals) == 1:
+        return float(sorted_vals[0])
+    pos = q * (len(sorted_vals) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    return sorted_vals[lo] + (sorted_vals[hi] - sorted_vals[lo]) * (pos - lo)
+
+
 def rarefaction(rows: list[dict], *, trials: int = 200, seed: int = 0) -> dict[str, list[float]]:
     """Mean distinct roles discovered after k cells, averaged over orderings.
 
@@ -72,19 +106,33 @@ def rarefaction(rows: list[dict], *, trials: int = 200, seed: int = 0) -> dict[s
     not already tried; one still climbing at k=20 says the repertoire is not
     exhausted by the sample.
     """
-    rng = random.Random(seed)
-    roles_by_cell = cell_roles(rows)
-    out: dict[str, list[float]] = {}
-    for bench, cells in benchmark_cells(rows).items():
-        members = sorted(cells)
-        totals = [0.0] * len(members)
-        for _ in range(trials):
-            rng.shuffle(members)
-            seen: set[str] = set()
-            for i, cell in enumerate(members):
-                seen |= roles_by_cell.get(cell, set())
-                totals[i] += len(seen)
-        out[bench] = [t / trials for t in totals]
+    return {
+        bench: [st.mean(c[i] for c in curves) for i in range(len(curves[0]))]
+        for bench, curves in _rarefaction_trials(rows, trials=trials, seed=seed).items()
+    }
+
+
+def rarefaction_bands(
+    rows: list[dict], *, trials: int = 200, seed: int = 0, lo: float = 0.10, hi: float = 0.90
+) -> dict[str, tuple[list[float], list[float], list[float]]]:
+    """(mean, lo, hi) per benchmark, as percentiles across orderings.
+
+    The band is the spread over which cells happened to come first, which is the
+    honest uncertainty here: it answers what a reader would have seen from a
+    different draw of the same size. Percentiles rather than a standard deviation,
+    because the quantity is a bounded count and its distribution is skewed near the
+    ceiling — a symmetric band would extend past the number of categories available.
+    """
+    out: dict[str, tuple[list[float], list[float], list[float]]] = {}
+    for bench, curves in _rarefaction_trials(rows, trials=trials, seed=seed).items():
+        k = len(curves[0])
+        means, los, his = [], [], []
+        for i in range(k):
+            col = sorted(c[i] for c in curves)
+            means.append(st.mean(col))
+            los.append(_percentile(col, lo))
+            his.append(_percentile(col, hi))
+        out[bench] = (means, los, his)
     return out
 
 
