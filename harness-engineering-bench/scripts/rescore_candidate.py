@@ -139,6 +139,10 @@ def harbor_command(
     attempts: int,
     concurrency: int,
     model: str,
+    agent: str | None = None,
+    setup_timeout_multiplier: float | None = None,
+    agent_env: list[str] | None = None,
+    extra_requirements: list[str] | None = None,
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -159,23 +163,83 @@ def harbor_command(
         "--no-config", "--no-env-file",
         "--project", str(workspace),
         "--with", build.get("harbor_requirement", "harbor[modal]==0.20.0"),
+        # Harbor-native harnesses import their framework in the ORCHESTRATOR, not the
+        # task container, and harbor does not declare those imports: dspy-rlm dies on
+        # ModuleNotFoundError: No module named 'dspy' before the agent ever starts.
+        *[arg for req in (extra_requirements or []) for arg in ("--with", req)],
         "harbor", "run", "--yes",
         *source_args,
-        "--agent-import-path", build["agent_import_path"],
+        # A reference run swaps the seed program for an installed harness
+        # (claude-code, opencode, ...) and changes NOTHING else -- same dataset
+        # ref, same partition, same rounds, same aggregation -- so the number
+        # stays comparable to baseline_reward and to every contestant. The target
+        # model stays pinned, so the harness is the only variable.
+        *(["--agent", agent] if agent
+          else ["--agent-import-path", build["agent_import_path"]]),
         "-e", resolve_param(build.get("environment_name", "modal")),
         "-m", str(model),
         "-n", str(concurrency),
         "--n-attempts", str(attempts),
         "--jobs-dir", str(jobs_dir),
     ]
+    # opencode's install (nvm -> node 22 -> npm -g) is far heavier than the seed's
+    # zero setup and can exceed harbor's default. swe-atlas already gives its
+    # OPTIMIZER agent a 4x multiplier for the same reason.
+    if setup_timeout_multiplier:
+        command += ["--agent-setup-timeout-multiplier", str(setup_timeout_multiplier)]
+    for pair in agent_env or []:
+        command += ["--ae", pair]
     for task in tasks:
         command.extend(["-i", task])
     command.extend(str(a) for a in build.get("extra_harbor_args", []))
     return command
 
 
+# Convention (2026-07-31, adopted on Greptile's PR #75 catch) -- IDENTICAL to
+# runs/recompute.py, which produced the pinned baselines. A trial the HARNESS killed
+# scores 0: the harness owns its own install, its context management and its step
+# budget, so a reference harness that cannot install or cannot finish must pay for it
+# exactly as a candidate does at finalization, which zero-fills dead attempts. A trial
+# the PLATFORM killed is dropped: a retry cannot score a trial that never ran, and
+# zero-filling infra bakes outage luck into the number.
+#
+# Dropping them instead -- which this script did until 2026-08-02 -- silently inflates
+# every reference score by scoring only the trials that survived. It cost 73 zeroes
+# across the reference grid, worst on swe-atlas x mini-swe-agent (n=122 of 150).
+HARNESS_EXCEPTIONS = {
+    "RuntimeError",                # swe-atlas seed: empty-completion fail-fast
+    "UnicodeDecodeError",          # terminal-bench seed: undecodable command output
+    "AgentTimeoutError",           # wall-clock exhaustion: the step budget is harness-owned
+    "BadRequestError",             # gpt-oss 128k overflow: context management is harness-owned
+    "NonZeroAgentExitCodeError",   # the harness crashed or never installed its binary
+    "AgentSetupTimeoutError",      # the harness owns how long its own install takes
+    "AgentAuthenticationError",    # subclasses NonZeroAgentExitCodeError: the CLI reports
+                                   # no login, i.e. the harness did not read a credential
+                                   # surface we set (goose reads OPENAI_HOST, not _BASE_URL)
+    "AdapterParseError",           # dspy's own output parser gave up: harness-owned
+}
+INFRA_EXCEPTIONS = {
+    "RateLimitError",
+    "ApiRateLimitError",
+    "NetworkConnectionError",
+    "VerifierTimeoutError",
+    "EnvironmentStartTimeoutError",
+    "SandboxFilesystemNotFoundError",
+    "AddTestsDirError",            # harbor could not stage the tests: platform, not agent
+    "ConnectionError",
+    "UnknownApiError",             # harbor's ApiError subclass for a provider error it
+                                   # could not classify: upstream, like the two RateLimits
+    "RewardFileNotFoundError",     # the verifier ran and produced no reward file
+    "CancelledError",              # harbor cancelled the trial (job.py CANCELLED_ERROR_TYPE)
+}
+# ValueError is deliberately in NEITHER set. Both instances on disk are harbor's
+# "ContextVar ... was created in a different Context" orchestration bug, which is
+# platform-side, but the name is generic enough that an agent-side ValueError would
+# land here too. A rescore that meets one should stop and be looked at, not guess.
+
+
 def trial_rewards(round_dir: Path) -> list[float]:
-    """Same extraction as runs/recompute.py, so numbers are comparable."""
+    """Same extraction AND the same failure convention as runs/recompute.py."""
     rewards = []
     for path in glob.glob(f"{round_dir}/**/result.json", recursive=True):
         if "/verifier/" in path:
@@ -189,8 +253,18 @@ def trial_rewards(round_dir: Path) -> list[float]:
         verifier = data.get("verifier_result") or {}
         block = verifier.get("rewards")
         reward = block.get("reward") if isinstance(block, dict) else verifier.get("reward")
+        exception = (data.get("exception_info") or {}).get("exception_type")
         if reward is not None:
             rewards.append(float(reward))
+        elif exception in HARNESS_EXCEPTIONS:
+            rewards.append(0.0)  # the harness killed it: price the defect
+        elif exception in INFRA_EXCEPTIONS:
+            continue             # the platform killed it: drop, do not bake in outage luck
+        elif exception:
+            message = (data.get("exception_info") or {}).get("exception_message") or ""
+            sys.exit(f"unclassified exception {exception!r} in {round_dir}: add it to "
+                     "HARNESS_EXCEPTIONS or INFRA_EXCEPTIONS before quoting a number"
+                     f"\n  {message.splitlines()[0][:200] if message else '(no message)'}")
     return rewards
 
 
@@ -222,12 +296,36 @@ def main() -> int:
                         help="independent rounds, pooled (default 3, as the baselines)")
     parser.add_argument("--attempts", type=int, default=1,
                         help="attempts per case within a round (default 1)")
+    parser.add_argument("--agent",
+                        help="run an INSTALLED harbor harness (claude-code, opencode, "
+                             "...) instead of the seed program, at the benchmark's "
+                             "pinned model. Measures a SOTA reference, not a bound.")
+    parser.add_argument("--harbor-requirement",
+                        help="override build.yaml's harbor_requirement for this run "
+                             "only. Also relaxes the copied workspace's own harbor pin, "
+                             "which build.yaml and target/pyproject.toml must otherwise "
+                             "keep in lockstep (see a70c572) or uv cannot resolve.")
+    parser.add_argument("--setup-timeout-multiplier", type=float,
+                        help="scale harbor's agent-setup timeout (installed harnesses "
+                             "with heavy toolchains need this)")
+    parser.add_argument("--agent-env", action="append", metavar="KEY=VALUE",
+                        default=[],
+                        help="extra env var for the agent (repeatable). goose reads "
+                             "OPENAI_HOST/OPENAI_BASE_PATH rather than OPENAI_BASE_URL, "
+                             "so it needs the proxy pointed at explicitly.")
+    parser.add_argument("--with-requirement", action="append", metavar="SPEC",
+                        default=[], dest="extra_requirements",
+                        help="extra package for the orchestrator uv env (repeatable). "
+                             "Harbor-native harnesses import their framework here and "
+                             "harbor does not declare it -- dspy-rlm needs 'dspy'.")
     parser.add_argument("--concurrency", type=int, default=24)
     parser.add_argument("--output", help="output dir (default: a temp dir)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     build, build_path = load_build(args.benchmark)
+    if args.harbor_requirement:
+        build["harbor_requirement"] = args.harbor_requirement
     outdir = Path(args.output).resolve() if args.output else Path(
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)
@@ -245,6 +343,15 @@ def main() -> int:
             "__pycache__", "*.pyc", ".venv", ".git"))
         version = "seed"
         log(f"seed harness from {origin}")
+        if args.harbor_requirement:
+            pyproject = workspace / "pyproject.toml"
+            if pyproject.is_file():
+                import re as _re
+                text = pyproject.read_text()
+                relaxed = _re.sub(r'"harbor==[^"]+"', '"harbor"', text)
+                if relaxed != text:
+                    pyproject.write_text(relaxed)
+                    log("relaxed the copied workspace's harbor pin so the override resolves")
     else:
         session_dir = open_session(args.session, outdir)
         version = shipped_version(
@@ -284,7 +391,10 @@ def main() -> int:
         command = harbor_command(
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
-            model=args.model or build["model"],
+            model=args.model or build["model"], agent=args.agent,
+            setup_timeout_multiplier=args.setup_timeout_multiplier,
+            agent_env=args.agent_env,
+            extra_requirements=args.extra_requirements,
         )
         if args.dry_run:
             print(" ".join(command))

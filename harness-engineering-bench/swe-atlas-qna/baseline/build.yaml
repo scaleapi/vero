@@ -165,6 +165,22 @@ inference_gateway:
       - "${optimizer_model:-openai/gpt-5.4}"
       - "${optimizer_model_bare:-gpt-5.4}"
       - "${optimizer_aux_model:-gpt-5.4-nano}"
+    # Pin the gpt-5.6 optimizers to one upstream deployment. An unqualified model
+    # group is load-balanced across deployments, and Responses-API encrypted
+    # reasoning content is decryptable only by the deployment that produced it, so
+    # replaying it against a sibling fails `invalid_encrypted_content` on every turn
+    # after the first. Measured 2026-08-01 on the bare group: 8 of 8 replays failed,
+    # against 0 of 5 on azure_ai. It killed both gpt-5.6-sol cells here at 2m58s --
+    # opencode AND codex, so this is not a codex-only fault as terminal-bench's
+    # instance suggested.
+    #
+    # Applied AFTER the allow-list check, so allowed_models still governs what the
+    # optimizer may ask for and a cell's label still means what it says. Keys outside
+    # the allow-list are permitted and inert (specs.py validate_aliases), which is why
+    # both models can sit here in a config shared by every cell of the grid.
+    model_aliases:
+      gpt-5.6-sol: azure_ai/gpt-5.6-sol
+      gpt-5.6-terra: azure_ai/gpt-5.6-terra
     max_concurrency: 8
   # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
   # the spend control, so a token cap only needs to stop a runaway.
