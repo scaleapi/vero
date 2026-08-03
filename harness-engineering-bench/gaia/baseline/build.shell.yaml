@@ -160,6 +160,16 @@ inference_gateway:
   request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    # Pin the gpt-5.6 optimizers to one upstream deployment. An unqualified model group
+    # load-balances across deployments, and Responses-API encrypted reasoning is
+    # decryptable only by the deployment that produced it, so every turn after the
+    # first fails `invalid_encrypted_content`. Measured here 2026-08-02 10:12Z: the
+    # gpt-5.6-sol x codex canary died on it. Same fault and same fix as
+    # swe-atlas-qna/baseline/build.yaml. Applied AFTER the allow-list check, so
+    # allowed_models still governs what the optimizer may ask for.
+    model_aliases:
+      gpt-5.6-sol: azure_ai/gpt-5.6-sol
+      gpt-5.6-terra: azure_ai/gpt-5.6-terra
     max_concurrency: 8
   # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
   # the spend control, so a token cap only needs to stop a runaway.
