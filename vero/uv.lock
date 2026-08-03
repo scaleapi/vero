@@ -1830,6 +1830,9 @@ harbor = [
     { name = "pyyaml" },
     { name = "uvicorn" },
 ]
+interpret = [
+    { name = "openai" },
+]
 optimize = [
     { name = "async-lru" },
     { name = "beautifulsoup4" },
@@ -1864,6 +1867,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'optimize'", specifier = ">=0.28.1" },
     { name = "jinja2", marker = "extra == 'harbor'", specifier = ">=3.1.6" },
     { name = "lxml", marker = "extra == 'optimize'", specifier = ">=6.0.2" },
+    { name = "openai", marker = "extra == 'interpret'", specifier = ">=1.0" },
     { name = "openai-agents", extras = ["litellm"], marker = "extra == 'optimize'", specifier = ">=0.18.3,<0.19" },
     { name = "orjson", marker = "extra == 'optimize'", specifier = ">=3.10" },
     { name = "pydantic", specifier = ">=2.11.7" },
@@ -1874,7 +1878,7 @@ requires-dist = [
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.19.10" },
     { name = "wcmatch", specifier = ">=10.1" },
 ]
-provides-extras = ["harbor", "claude", "optimize", "wandb"]
+provides-extras = ["harbor", "claude", "interpret", "optimize", "wandb"]
 
 [package.metadata.requires-dev]
 dev = [

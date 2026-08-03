@@ -1,13 +1,8 @@
-"""
-Scale 2.0 *brand* style for CliniCARE-Bench data figures (Nature-legible).
+"""House plot style: muted palette on white, sans throughout, print-legible.
 
-Distinct from the vendored ``scale_plot_style.py`` (serif, vivid). This module
-follows brand.scale.com: Host Grotesk (sans) headings/body, Geist Mono for
-numeric labels, and the muted Scale accent palette. Figures are designed at the
-paper's true text width (~6.86in) so point sizes render 1:1 at final size and
-stay >=7pt, per Nature figure guidelines.
-
-    from scale_brand_style import apply_scale_style, PALETTE, title_block, source_note
+Palette, typography and rcParams for publication figures. Fonts are bundled under
+``fonts/`` (OFL, redistributable) and registered at import, so no system install is
+needed. Figures are designed at the target placement width so point sizes render 1:1.
 """
 from __future__ import annotations
 
@@ -16,22 +11,22 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 
-# ---- paper geometry (scaleai-paper.cls: letter, 0.82in L/R margins) ----
+# ---- paper geometry (letter, 0.82in L/R margins) ----
 TEXT_WIDTH_IN = 6.86          # \textwidth == \linewidth (single column)
 
 # ---- fonts: brand Aeonik -> OSS fallbacks Host Grotesk / Geist Mono ----
 # Prefer the copies bundled next to this module (assets/fonts); fall back to a
-# user install at ~/.fonts/scale. Both are OFL and redistributable.
+# a user font directory. Both are OFL and redistributable.
 _FONT_DIRS = [
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts"),
-    os.path.expanduser("~/.fonts/scale"),
+    os.path.expanduser("~/.fonts/house"),
 ]
 _FILES = ("HostGrotesk.ttf", "GeistMono.ttf")
 
 FAMILY = "sans-serif"   # -> Host Grotesk
 MONO = "monospace"      # -> Geist Mono
 
-# ---- Scale 2.0 palette (brand.scale.com) ----
+# ---- house palette (the house palette) ----
 PALETTE = {
     "black": "#000000", "white": "#FFFFFF",
     "evergreen": "#193A29",   # Evergreen Core
@@ -48,7 +43,7 @@ INK_FAINT = "#7A7A7A"    # source note / faint furniture
 CATEGORICAL = [PALETTE["atlas"], PALETTE["tan"], PALETTE["evergreen"],
                PALETTE["purple"], PALETTE["slate"], PALETTE["gray_soft"]]
 
-# Nature-legible type scale (points, at 1:1 final size)
+# Print-legible type scale (points, at 1:1 final size)
 FS = {"title": 11.0, "subtitle": 8.2, "axis": 8.5, "tick": 8.0,
       "label": 8.0, "value": 7.2, "annot": 7.5, "legend": 7.8, "source": 6.8}
 
@@ -70,7 +65,7 @@ def _register_fonts():
     return sans, mono
 
 
-def apply_scale_style():
+def apply_house_style():
     sans, mono = _register_fonts()
     plt.rcParams.update({
         "font.family": "sans-serif",

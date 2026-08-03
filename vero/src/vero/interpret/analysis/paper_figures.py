@@ -1,11 +1,11 @@
-"""Print figures in the Scale 2.0 brand style: vector PDF for LaTeX, PNG to review.
+"""Print figures in the house style: vector PDF for LaTeX, PNG to review.
 
 Separate from `figures.py` on purpose. That module builds one interactive HTML page
 for colleagues to explore — hover, dark mode, table views. This one produces
 caption-driven figures for a paper: no baked-in titles, sized at the real placement
 width so point sizes render 1:1, muted palette on white.
 
-Archetypes are taken from the brand skill rather than invented. Role prevalence is a
+Archetypes are chosen by the shape of the comparison rather than invented. Role prevalence is a
 bounded-metric grid, so it is a sequential heatmap. Diversity-versus-null and
 knob direction each have two values per item where the gap is the story, so both are
 dumbbells. Rarefaction is a plain line plot — no archetype fits a saturation curve,
@@ -27,13 +27,13 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
-from scale_brand_style import (  # noqa: E402
+from house_style import (  # noqa: E402
     FS,
     INK,
     INK_FAINT,
     PALETTE,
     TEXT_WIDTH_IN,
-    apply_scale_style,
+    apply_house_style,
     family_colors,
     save,
 )
@@ -78,7 +78,7 @@ def fig_prevalence(rows: list[dict], stem: Path) -> None:
             groups.append([cat, i, i])
 
     cmap = LinearSegmentedColormap.from_list(
-        "scale_blue", ["#FFFFFF", PALETTE["slate"], PALETTE["atlas"]]
+        "sequential_blue", ["#FFFFFF", PALETTE["slate"], PALETTE["atlas"]]
     )
     nrow, ncol = M.shape
     fig, ax = plt.subplots(figsize=(TEXT_WIDTH_IN, 0.30 * nrow + 0.55))
@@ -243,7 +243,7 @@ FIGURES: list[tuple[str, str]] = [
 
 
 def render_all(rows: list[dict], edits: dict[str, dict], out: Path) -> list[str]:
-    apply_scale_style()
+    apply_house_style()
     written: list[str] = []
     for fid, func in FIGURES:
         folder = out / fid
