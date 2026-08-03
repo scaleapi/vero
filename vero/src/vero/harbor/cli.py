@@ -528,6 +528,20 @@ def _compiled_run_environment(
     environment["ANTHROPIC_BASE_URL"] = producer_base_url[: -len("/v1")] if (
         producer_base_url.endswith("/v1")
     ) else producer_base_url
+    # openhands-sdk reads its own LLM_* surface and ignores OPENAI_*/ANTHROPIC_*
+    # entirely (harbor/agents/installed/openhands_sdk.py). The producer token is
+    # minted per run, so it cannot be supplied through build.yaml agent_env --
+    # it has to be injected here alongside the other two surfaces. Same
+    # unconditional rule: a harness that does not read these ignores them.
+    environment["LLM_API_KEY"] = producer_api_key
+    environment["LLM_BASE_URL"] = producer_base_url
+    # goose reads OPENAI_HOST + OPENAI_BASE_PATH and never OPENAI_BASE_URL, and it
+    # JOINS them, so the host must not already carry /v1 or the request goes to
+    # .../v1/v1/chat/completions and the proxy 403s.
+    environment["OPENAI_HOST"] = producer_base_url[: -len("/v1")] if (
+        producer_base_url.endswith("/v1")
+    ) else producer_base_url
+    environment["OPENAI_BASE_PATH"] = "v1/chat/completions"
     return environment
 
 
