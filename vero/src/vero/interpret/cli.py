@@ -175,7 +175,20 @@ def report(labels_file, edits_file, out) -> None:
     for line in Path(edits_file).read_text().splitlines():
         e = json.loads(line)
         edits[e["id"]] = e
-    rows = [json.loads(l) for l in Path(labels_file).read_text().splitlines()]
+    # A label carries only edit_id; the aggregations key on the edit's cell and
+    # symbol, so join here rather than duplicating those fields into every label.
+    rows = []
+    orphans = 0
+    for line in Path(labels_file).read_text().splitlines():
+        lab = json.loads(line)
+        edit = edits.get(lab["edit_id"])
+        if edit is None:
+            orphans += 1
+            continue
+        rows.append({**lab, "cell_key": edit["cell_key"], "symbol": edit["symbol"],
+                     "symbol_kind": edit["symbol_kind"], "path": edit["path"]})
+    if orphans:
+        click.echo(f"warning: {orphans} labels had no matching edit and were dropped")
     cells = len({r["cell_key"] for r in rows})
     meta = {"cells": cells, "edits": len(edits), "labels": len(rows)}
 

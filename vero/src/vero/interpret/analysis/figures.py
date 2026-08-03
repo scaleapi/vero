@@ -262,6 +262,42 @@ def fig_direction(rows: list[dict], edits: dict[str, dict]) -> str:
     return "".join(out) + leg + tbl
 
 
+def fig_provenance(rows: list[dict]) -> str:
+    """Whose defect each fix repaired. Derived from the seed tree, not model-assigned."""
+    data = stats.provenance_of_fixes(rows)
+    benches = [b for b in stats.BENCH_ORDER if b in data]
+    if not benches:
+        return "<p class='note'>No fixes labelled.</p>"
+    order = ["seed", "own", "unknown"]
+    cols = {"seed": CAT_LIGHT[0], "own": CAT_LIGHT[1], "unknown": "#7a7975"}
+    lw, w, rh = 150, 760, 32
+    h = 34 + rh * len(benches)
+    maxv = max(sum(data[b].values()) for b in benches)
+    bw = w - lw - 70
+    out = [f'<svg viewBox="0 0 {w} {h}" width="100%" role="img">']
+    for i, b in enumerate(benches):
+        y = 22 + i * rh
+        total = sum(data[b].values())
+        out.append(f'<text class="axis" x="{lw-10}" y="{y+17}" text-anchor="end">{_esc(b)}</text>')
+        x = lw
+        for key in order:
+            n = data[b].get(key, 0)
+            if not n:
+                continue
+            seg = n * bw / maxv
+            tip = f"<b>{_esc(b)}</b><br>{_esc(key)}: {n} of {total} fixes ({n/total:.0%})"
+            out.append(f'<rect class="hit" data-tip="{tip}" x="{x:.1f}" y="{y+4}" '
+                       f'width="{max(seg-2,1):.1f}" height="20" rx="4" fill="{cols[key]}"/>')
+            x += seg
+        out.append(f'<text class="muted" x="{x+8:.1f}" y="{y+19}">{total}</text>')
+    out.append("</svg>")
+    leg = '<div class="legend">' + "".join(
+        f'<span><i style="background:{cols[k]}"></i>{k} defect</span>' for k in order) + "</div>"
+    tbl = _table(["benchmark"] + order,
+                 [[b] + [data[b].get(k, 0) for k in order] for b in benches], "Table view")
+    return "".join(out) + leg + tbl
+
+
 def render(rows: list[dict], edits: dict[str, dict], meta: dict) -> str:
     ag = stats.hint_agreement(rows)
     figs = [
@@ -286,6 +322,13 @@ def render(rows: list[dict], edits: dict[str, dict], meta: dict) -> str:
          "Edits per role, split by action. This is the one view where edit counts are the "
          "right unit, since the question is about the composition of the work.",
          fig_action_role(rows)),
+        ("Whose defect did each fix repair?",
+         "Fixes split by whether the repaired code was still exactly as the seed wrote it "
+         "(seed defect) or had already been rewritten by an earlier candidate in the same "
+         "cell (the optimizer's own). Derived by comparing trees, not asked of the model: "
+         "asking returned 452 own against 3 seed and called 21 of 22 swe-atlas submission "
+         "fixes self-inflicted, when 15 of them repair a defect in the seed's answer parser.",
+         fig_provenance(rows)),
         ("Which way did the knobs go?",
          "Scalar constants whose value actually changed, by direction. Constants touched by "
          "reformatting without a value change are excluded.",
