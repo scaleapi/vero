@@ -1077,6 +1077,36 @@ class HarborBackend:
         return spans
 
     @staticmethod
+    def _attempt_is_starved(attempt: dict[str, Any]) -> bool:
+        """Whether an attempt ran to completion but bought no inference at all.
+
+        A trial can finish every phase -- sandbox, agent setup, agent execution,
+        verifier -- having made zero model calls. A gateway answering 402
+        ``budget_exhausted`` is not an exception the agent must raise: the stock
+        adapters swallow it, the repository reaches the verifier unedited, the
+        hidden suite fails, and the attempt records an honest 0.0 with no
+        exception anywhere. ``_attempt_is_infra`` therefore counts it as clean
+        and ``error_rate`` never sees it, because the case still returns SUCCESS.
+
+        Measured on the swe-bench-pro grid: 132 of 198 held-out attempts scored
+        exactly this way, deflating four cells' rewards by 2.4x to 3.4x with
+        nothing in any report to say so. Zero tokens is the fact that separates
+        them from a candidate that simply got the task wrong, and unlike an
+        exception it is always recorded.
+        """
+        result = attempt.get("agent_result")
+        if not isinstance(result, dict):
+            return False
+        seen = 0.0
+        for name in ("n_input_tokens", "n_output_tokens"):
+            value = result.get(name)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                # No counter means we cannot tell. Never accuse on missing data.
+                return False
+            seen += abs(float(value))
+        return seen == 0.0
+
+    @staticmethod
     def _agent_reported_tokens(attempts: list[dict[str, Any]]) -> dict[str, float]:
         """Sum the agent-self-reported token counts across a case's attempts.
 
@@ -1126,58 +1156,6 @@ class HarborBackend:
             f"max_case_{metric}": float(max(values)),
         }
 
-    async def _scope_budget_is_exhausted(self, *, finalization: bool) -> bool | None:
-        """Ask the gateway whether this scope's pool is genuinely empty.
-
-        The authoritative answer to "did we run out of budget" is the gateway's
-        own ledger, not an exception message. Returns None when it cannot be
-        established -- no gateway configured, or the request failed -- and
-        callers must then leave the text-derived classification alone rather than
-        guess in either direction.
-
-        This exists because the message is all that survives an in-container
-        failure (see the note in _case_result), so the terminating budget
-        category was reachable from prose: on 2026-07-29 a provider rate limit
-        whose text happened to contain "quota" terminated an officeqa cell while
-        both scopes sat under 10% of their 3,000M caps, and the gateway had
-        emitted no 402 at all. Narrowing the pattern stops that specific string;
-        consulting the ledger is what makes the claim checkable in general, and
-        it also removes the candidate's ability to force a terminating condition
-        by printing the gateway's own error code.
-        """
-        base = self.config.inference_gateway_url
-        token = (
-            self.config.inference_gateway_finalization_token
-            if finalization
-            else self.config.inference_gateway_token
-        )
-        if base is None or token is None:
-            return None
-        scope = "finalization" if finalization else "evaluation"
-        try:
-            import httpx  # noqa: PLC0415 -- ships with the harbor extra
-        except ImportError:  # pragma: no cover - harbor extra always provides it
-            return None
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{base.rstrip('/')}/usage/{scope}",
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            if response.status_code != 200:
-                return None
-            usage = response.json()
-        except Exception:  # noqa: BLE001 -- never fail an evaluation over telemetry
-            return None
-        # A scope with no configured cap reports None and can never be exhausted.
-        remaining = [
-            usage.get("remaining_requests"),
-            usage.get("remaining_tokens"),
-        ]
-        if all(value is None for value in remaining):
-            return False
-        return any(value is not None and value <= 0 for value in remaining)
-
     def _case_result(
         self,
         case: HarborCase,
@@ -1185,7 +1163,6 @@ class HarborBackend:
         *,
         artifact_root: Path,
         trusted: bool = False,
-        budget_exhausted: bool | None = None,
     ) -> tuple[CaseResult, float]:
         trial_artifacts = self._trial_artifacts(attempts, artifact_root)
         trace = self._execution_trace(attempts)
@@ -1227,6 +1204,13 @@ class HarborBackend:
                     if reward is None
                     and self._attempt_is_infra(attempt, trusted=trusted)
                 )
+                # Counted separately from n_dead_infra on purpose: a starved
+                # attempt usually DOES have a reward (an honest 0.0 from the
+                # verifier), so it lands in n_clean and inflates the denominator
+                # of a mean it could never have contributed to.
+                n_starved = sum(
+                    1 for attempt in attempts if self._attempt_is_starved(attempt)
+                )
                 return (
                     CaseResult(
                         case_id=case.id,
@@ -1239,6 +1223,7 @@ class HarborBackend:
                             ),
                             "n_dead_infra": float(n_dead_infra),
                             "n_clean": float(len(attempts) - n_dead_infra),
+                            "n_starved": float(n_starved),
                             **(
                                 {"wall_seconds": wall_seconds}
                                 if wall_seconds is not None
@@ -1324,17 +1309,6 @@ class HarborBackend:
             category = ErrorCategory.TRANSIENT_INFRA
         else:
             category = classify_case(signals)
-            if (
-                category == ErrorCategory.INFERENCE_BUDGET_EXHAUSTED
-                and budget_exhausted is False
-            ):
-                # The message claimed budget exhaustion and the gateway's ledger
-                # says the pool still has headroom, so the claim is false. In
-                # practice this is a provider rate limit wearing the wrong words:
-                # retryable, non-terminating infrastructure. Only an explicit
-                # False overrides -- None means we could not ask, and guessing
-                # would risk letting a real exhaustion run on.
-                category = ErrorCategory.TRANSIENT_INFRA
             if not trusted and category == ErrorCategory.TRANSIENT_INFRA:
                 # A trial ran and died with a transient-looking exception. For
                 # competitive (agent) selection we cannot trust a candidate-
@@ -1345,20 +1319,6 @@ class HarborBackend:
                 # the failure value instead. Genuine infrastructure is caught
                 # out of band (coverage gaps above; gateway-ledger budget/auth,
                 # which remain terminating) and via trusted-only retry.
-                #
-                # The terminating categories stay exempt on purpose: a real
-                # budget exhaustion or auth failure means every later request
-                # fails the same way, so continuing would only burn the agent's
-                # remaining case budget on doomed work. What made that dangerous
-                # until 2026-07-29 was not this exemption but the breadth of the
-                # patterns behind it -- "quota" and "permission" matched ordinary
-                # prose, so a candidate could terminate its own run by printing
-                # the wrong word. That is fixed in error_taxonomy by matching
-                # provider codes and SDK type names instead. Residual risk worth
-                # closing later: a candidate that deliberately emits
-                # "budget_exhausted" can still force an INVALID evaluation, which
-                # is only truly fixed by taking budget state from the gateway
-                # ledger out of band, as that module's docstring intends.
                 category = ErrorCategory.TASK_FAILURE
         category_policy = policy(category)
         output["dead_exception_types"] = exception_counts
@@ -1603,19 +1563,12 @@ class HarborBackend:
 
         case_results: list[CaseResult] = []
         scores: list[float] = []
-        # Fetched once per evaluation rather than per case: the ledger is a
-        # whole-scope pool, so the answer cannot differ between cases, and one
-        # request keeps this off the hot path.
-        budget_exhausted = await self._scope_budget_is_exhausted(
-            finalization=context.finalization
-        )
         for case in cases:
             case_result, score = self._case_result(
                 case,
                 groups.get(case.expected_result_task_name, []),
                 artifact_root=context.artifact_dir,
                 trusted=context.finalization,
-                budget_exhausted=budget_exhausted,
             )
             case_results.append(case_result)
             scores.append(score)
@@ -1758,11 +1711,57 @@ class HarborBackend:
                     reported_totals[total_key] = (
                         reported_totals.get(total_key, 0.0) + float(value)
                     )
+        # Starvation is an evaluation-wide fact, not a per-case one: when the
+        # inference budget runs out it takes every attempt after that instant,
+        # so the number that matters is the fraction of the whole pass that
+        # never had a chance. Reported next to `score` because it is the first
+        # thing that makes a low score uninterpretable, and logged at WARNING
+        # because the grid's four affected cells each looked completely healthy.
+        def _total(name: str) -> int:
+            return sum(
+                int(case.metrics.get(name, 0.0) or 0.0) for case in case_results
+            )
+
+        n_attempts = _total("n_attempts")
+        # A budget running out lands in ONE OF TWO buckets depending on whether
+        # the agent harness swallowed the 402 or let it propagate, and neither
+        # bucket alone is sufficient. Verified against the 2026-07-29 grid: the
+        # two opus5 cells swallowed it, so 136 and 140 attempts recorded zero
+        # tokens with n_dead_infra at 2; sol-opencode and sonnet5-opencode let it
+        # propagate, so n_dead_infra caught 114 and 115 while zero-token counts
+        # were 0. Reporting only one of these calls half the affected runs clean.
+        n_starved = _total("n_starved")
+        n_dead_infra = _total("n_dead_infra")
+        starved_rate = (n_starved / n_attempts) if n_attempts else 0.0
+        dead_infra_rate = (n_dead_infra / n_attempts) if n_attempts else 0.0
+        n_lost = n_starved + n_dead_infra
+        lost_rate = (n_lost / n_attempts) if n_attempts else 0.0
+        if n_lost:
+            logger.warning(
+                "%d of %d attempts (%.1f%%) never produced a usable measurement "
+                "(%d bought zero inference tokens, %d died on infrastructure). "
+                "They were averaged in as failures rather than excluded, so "
+                "`score` is deflated by roughly 1/(1-%.3f) and is NOT comparable "
+                "to a clean pass. Check the inference budget for this scope.",
+                n_lost,
+                n_attempts,
+                100.0 * lost_rate,
+                n_starved,
+                n_dead_infra,
+                lost_rate,
+            )
         report = EvaluationReport(
             status=EvaluationStatus.SUCCESS,
             metrics={
                 "score": sum(informative_scores) / len(informative_scores),
                 "error_rate": len(infra_cases) / len(case_results),
+                # See the warning above: error_rate cannot see any of these,
+                # because they sit inside cases that still return SUCCESS.
+                # `unmeasured_attempt_rate` is the one to read: it is the union,
+                # and either half alone reports a badly damaged run as clean.
+                "starved_attempt_rate": starved_rate,
+                "dead_infra_attempt_rate": dead_infra_rate,
+                "unmeasured_attempt_rate": lost_rate,
                 # Spread across informative cases, so a real difference between
                 # candidates is distinguishable from evaluation noise.
                 "score_stddev": (

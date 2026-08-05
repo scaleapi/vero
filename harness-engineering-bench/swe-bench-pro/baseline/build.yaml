@@ -95,19 +95,31 @@ wandb:
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
-  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
-  # gateway token usage to individual trials (trusted, vs. content-matching).
-  # Without it the fallback recovers only each conversation's root turn: measured
-  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
-  request_log_attribution: true
   producer:
     # Both prefixed and bare forms: the gateway model match is prefix-sensitive.
     allowed_models: ["${optimizer_model:-gpt-5.3-codex}"]
     max_concurrency: 8
   evaluation:
     allowed_models: [gpt-4o]
-    max_requests: 15000
-    max_tokens: 100000000
+    max_requests: 200000
+    # Sized by the suite convention in harness-engineering-bench/CONFIGURATION.md:
+    # ~5M tokens per case-run, which is 3.3-5.1x the worst MEASURED cost of an
+    # *optimized* candidate, itself ~3x its own baseline, because more turns and
+    # bigger contexts are exactly what the optimizer buys. Sizing off a baseline
+    # measurement instead (swe-bench-pro's seed costs ~1.5M/case-run) under-funds
+    # the run by ~3x. Siblings: gaia and officeqa 5.1M, tau3 4.4M per case-run.
+    # ~90% of these are cache reads, which count at full weight against max_tokens.
+    max_tokens: 2500000000  # 438 agent case-runs (146 dev + 292 validation)
+    max_concurrency: 64
+  # Declared explicitly, as every sibling now does. Left unset it inherits
+  # `evaluation`'s LIMITS as a separate pool of the same size (the compiler mints
+  # a finalization token unconditionally and the gateway keys each ledger by scope
+  # name), so the risk is not search stealing it: the risk is a held-out pass
+  # funded at search-sized numbers. That is exactly what happened on 2026-07-29.
+  finalization:
+    allowed_models: [gpt-4o]
+    max_requests: 200000
+    max_tokens: 4500000000  # 293 test cases x3 attempts + rescore headroom
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
