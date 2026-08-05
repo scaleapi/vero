@@ -47,6 +47,12 @@ MAX_TURNS = 50
 MAX_TOOL_OUTPUT_CHARS = 20_000
 MAX_FILE_READ_CHARS = 60_000
 
+# ``run`` resends the whole conversation every turn instead of relying on the
+# provider to remember it, so the transcript has to be bounded: 50 turns of
+# 20k-character tool output would overflow any context window. Oldest whole
+# turns are dropped first and the task statement is never dropped.
+MAX_HISTORY_CHARS = 300_000
+
 # Repository checkout location inside the task environment. The pinned
 # swebenchpro task images set `WORKDIR /app` and reset the project's git
 # checkout in place there, and the task instruction says so verbatim ("I've
@@ -285,6 +291,26 @@ class SweBenchProAgent(BaseAgent):
         omitted = len(value) - (2 * half)
         return f"{value[:half]}\n...[{omitted} characters omitted]...\n{value[-half:]}"
 
+    @staticmethod
+    def _history_size(blocks: list[list[dict[str, Any]]]) -> int:
+        return sum(
+            len(json.dumps(item, ensure_ascii=False))
+            for block in blocks
+            for item in block
+        )
+
+    def _trim_history(self, blocks: list[list[dict[str, Any]]]) -> int:
+        """Drop whole oldest turns until the transcript fits the budget.
+
+        Whole turns, never individual items: a ``function_call`` sent without its
+        matching ``function_call_output`` is a hard 400 from the Responses API.
+        """
+        dropped = 0
+        while len(blocks) > 1 and self._history_size(blocks) > MAX_HISTORY_CHARS:
+            blocks.pop(0)
+            dropped += 1
+        return dropped
+
     def _trace(self, event: dict[str, Any]) -> None:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         trace_path = self.logs_dir / "swe-bench-pro-trace.jsonl"
@@ -447,17 +473,30 @@ class SweBenchProAgent(BaseAgent):
         context: AgentContext,
     ) -> None:
         self._patch_index = 0
-        next_input: Any = instruction
-        previous_response_id: str | None = None
         input_tokens = 0
         output_tokens = 0
         cached_tokens = 0
+        # The conversation is held HERE, not on the provider. An earlier version
+        # sent only the newest tool result and passed ``previous_response_id`` to
+        # let the server reconstruct the rest. That silently loses everything on
+        # any OpenAI-compatible gateway that accepts the field without backing it
+        # with a response store: from turn 2 the model saw a bare tool result with
+        # no task attached, so it re-explored the repository until the turn budget
+        # ran out. Measured on the 66-case sample with deepseek-v4-flash: 66/66
+        # exhausted all 50 turns, 3163 of 3300 tool calls were ls/find/git/cat, and
+        # write_file, apply_patch and submit were called zero times, for a reward
+        # of 0.0000 on every case.
+        task_item: dict[str, Any] = {"role": "user", "content": instruction}
+        blocks: list[list[dict[str, Any]]] = []
 
         for turn in range(1, MAX_TURNS + 1):
+            conversation: list[Any] = [task_item]
+            for block in blocks:
+                conversation.extend(block)
             request: dict[str, Any] = {
                 "model": self._api_model,
                 "instructions": INSTRUCTIONS,
-                "input": next_input,
+                "input": conversation,
                 "tools": TOOLS,
                 "max_output_tokens": 12_000,
                 "parallel_tool_calls": False,
@@ -466,8 +505,6 @@ class SweBenchProAgent(BaseAgent):
             # gpt-4.1 is a hard 400 on the very first turn.
             if _is_reasoning_model(self._api_model):
                 request["reasoning"] = {"effort": "high"}
-            if previous_response_id is not None:
-                request["previous_response_id"] = previous_response_id
             response = await self._responses_create(**request)
             usage = response.usage
             input_tokens += self._usage_value(usage, "input_tokens")
@@ -494,9 +531,23 @@ class SweBenchProAgent(BaseAgent):
                 context.metadata = {"turns": turn, "trace": "swe-bench-pro-trace.jsonl"}
                 break
 
-            next_input = []
+            turn_items: list[dict[str, Any]] = []
+            if response.output_text:
+                turn_items.append(
+                    {"role": "assistant", "content": response.output_text}
+                )
             submitted = False
             for call in calls:
+                # Echo the call itself before its output: the API matches the two
+                # by call_id, and an orphaned output is rejected.
+                turn_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call.call_id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }
+                )
                 try:
                     arguments = json.loads(call.arguments or "{}")
                 except json.JSONDecodeError as error:
@@ -531,7 +582,7 @@ class SweBenchProAgent(BaseAgent):
                     else:
                         result = {"error": f"unknown tool: {call.name}"}
                 self._trace({"turn": turn, "tool": call.name, "result": result})
-                next_input.append(
+                turn_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": call.call_id,
@@ -540,10 +591,13 @@ class SweBenchProAgent(BaseAgent):
                 )
                 if submitted:
                     break
+            blocks.append(turn_items)
+            dropped = self._trim_history(blocks)
+            if dropped:
+                self._trace({"turn": turn, "event": "history_trimmed", "turns_dropped": dropped})
             if submitted:
                 context.metadata = {"turns": turn, "trace": "swe-bench-pro-trace.jsonl"}
                 break
-            previous_response_id = response.id
         else:
             # Exhausting the turn budget is NOT a trial failure. The reward comes
             # from the task's hidden suite run against whatever the agent left in
