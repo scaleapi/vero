@@ -29,6 +29,9 @@ harbor = [
 claude = [
     "claude-agent-sdk>=0.1.56",
 ]
+interpret = [
+    "openai>=1.0",
+]
 optimize = [
     "async-lru>=2.0.5",
     "beautifulsoup4>=4.14.2",
