@@ -108,6 +108,9 @@ class Edit(BaseModel):
     after_source: str | None = None    # the symbol's full text after the edit
     in_seed: bool = True               # did this symbol exist in the seed at all?
     prior_touches: int = 0             # earlier candidates in this cell that touched it
+    # Whose defect was being repaired, decided by comparing trees rather than by
+    # asking the model, which answers "own" almost everywhere. See edits.provenance.
+    provenance: str = "unknown"
 
     @staticmethod
     def make_id(cell_key: str, sha: str, path: str, symbol: str, diff: str) -> str:
@@ -124,7 +127,10 @@ class EditLabel(BaseModel):
     edit_id: str
     action: str
     role: str
-    provenance: str = "unknown"
+    # The model's own reading of provenance, kept only so the derived answer can be
+    # audited against it. The report reads `Edit.provenance`; naming both fields
+    # `provenance` is what let the model's version reach the figures unnoticed.
+    model_provenance: str = "unknown"
     direction: str = "na"
     mechanism: str = ""              # one line, the model's own words
     confidence: float = 0.0

@@ -20,19 +20,14 @@ from vero.interpret.edits.locus import symbol_source
 from vero.interpret.labeling.taxonomy import Provenance
 
 
-def provenance_of(
-    repo: CandidateRepo,
-    seed_sha: str,
-    parent_sha: str,
-    path: str,
-    symbol: str,
-) -> Provenance:
-    """SEED if the repaired code is untouched since the seed, OWN if not."""
-    if not parent_sha or not seed_sha or parent_sha.startswith(seed_sha[:12]):
-        return Provenance.SEED
+def provenance_between(seed_src: str, parent_src: str, symbol: str) -> Provenance:
+    """SEED if `symbol` is untouched between these two sources, OWN if not.
 
-    seed_src = repo.show_file(seed_sha, path)
-    parent_src = repo.show_file(parent_sha, path)
+    Takes sources rather than shas because `decompose` has already read both files to
+    build the symbol map and the before/after values; going back to git per symbol
+    would be one subprocess per row for bytes already in memory. `provenance_of`
+    below is the same decision for callers holding only shas.
+    """
     if not seed_src:
         # The file did not exist in the seed, so whatever is being fixed is the
         # optimizer's own work by construction.
@@ -47,3 +42,21 @@ def provenance_of(
         # rather than by guess.
         return Provenance.SEED if seed_src == parent_src else Provenance.OWN
     return Provenance.SEED if seed_sym == parent_sym else Provenance.OWN
+
+
+def provenance_of(
+    repo: CandidateRepo,
+    seed_sha: str,
+    parent_sha: str,
+    path: str,
+    symbol: str,
+) -> Provenance:
+    """SEED if the repaired code is untouched since the seed, OWN if not."""
+    if not parent_sha or not seed_sha:
+        return Provenance.UNKNOWN
+    if parent_sha.startswith(seed_sha[:12]):
+        # Editing the seed itself: nothing else has touched this code yet.
+        return Provenance.SEED
+    return provenance_between(
+        repo.show_file(seed_sha, path), repo.show_file(parent_sha, path), symbol
+    )

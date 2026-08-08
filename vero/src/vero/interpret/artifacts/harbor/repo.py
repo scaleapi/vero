@@ -16,20 +16,33 @@ class CandidateRepo:
         self.git_dir = Path(git_dir)
 
     def _run(self, *args: str) -> str:
+        """stdout, or "" if git failed.
+
+        The exit code has to be consulted: `rev-parse <root>^` cannot resolve a root
+        commit's parent and *still* echoes the unresolved `<sha>^` to stdout, so
+        trusting stdout alone reports a parent that does not exist and no commit ever
+        looks like the seed.
+        """
         out = subprocess.run(
             ["git", "--git-dir", str(self.git_dir), *args],
             capture_output=True,
             text=True,
         )
-        return out.stdout
+        return out.stdout if out.returncode == 0 else ""
 
     def log(self) -> list[tuple[str, str, str]]:
         """(sha, subject, body) oldest first, so index 0 is the seed.
 
         `--all` because a candidate chain can leave commits unreachable from any
         branch head once the optimizer reaches back past them.
+
+        `--topo-order` because the default is commit date, which interleaves sibling
+        candidates: when the optimizer branches off an earlier parent, a date-ordered
+        list puts a child before its own parent and splices the two chains together.
+        Topological order keeps each chain contiguous and every parent ahead of its
+        children, which is what `position` is read as downstream.
         """
-        raw = self._run("log", "--all", "--format=%H%x1f%s%x1f%b%x1e")
+        raw = self._run("log", "--all", "--topo-order", "--format=%H%x1f%s%x1f%b%x1e")
         rows = []
         for record in raw.split("\x1e"):
             record = record.strip("\n")

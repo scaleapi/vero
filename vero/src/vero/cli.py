@@ -1018,8 +1018,10 @@ def session_clear(session_dir: Path, yes: bool) -> None:
 
 # harbor subcommand registered here, after `main` is defined
 from vero.harbor.cli import harbor as harbor_command  # noqa: E402, I001
+from vero.interpret.cli import main as interpret_command  # noqa: E402, I001
 
 main.add_command(harbor_command)
+main.add_command(interpret_command, name="interpret")
 
 
 if __name__ == "__main__":

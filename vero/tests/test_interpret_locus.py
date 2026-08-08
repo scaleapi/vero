@@ -65,6 +65,20 @@ def test_changed_lines_parses_zero_context_hunks():
     assert changed_lines(diff) == {1, 11, 12, 13}
 
 
+def test_deletion_only_hunk_contributes_no_line():
+    """`+start,0` adds nothing; `start` is the surviving line before the removal.
+
+    Counting it hands the deletion to whichever symbol now occupies that line, and
+    also hides the deletion from the module row that carries the removal count.
+    """
+    assert changed_lines("@@ -5,3 +4,0 @@\n-a\n-b\n-c\n") == set()
+
+
+def test_deletion_alongside_an_addition_keeps_only_the_addition():
+    diff = "@@ -5,3 +4,0 @@\n-a\n-b\n-c\n@@ -20,0 +18,2 @@\n+x\n+y\n"
+    assert changed_lines(diff) == {18, 19}
+
+
 def test_scalar_value_reads_the_literal():
     assert scalar_value(SOURCE, "MAX_TURNS") == "24"
     assert scalar_value(SOURCE, "SHELL_TIMEOUT_SEC") == "150"

@@ -24,12 +24,20 @@ _PROMPT_MIN_CHARS = 200
 
 
 def changed_lines(diff: str) -> set[int]:
-    """Post-image line numbers touched by a `-U0` diff of a single file."""
+    """Post-image line numbers touched by a `-U0` diff of a single file.
+
+    A `+start,0` hunk is a deletion with nothing added, and `start` is the surviving
+    line *before* the removal, not a changed one. Counting it invents a post-image
+    line and hands the deletion to whatever symbol now sits there, so these hunks
+    contribute nothing here; `decompose` carries their removals on the module row.
+    """
     lines: set[int] = set()
     for match in _HUNK.finditer(diff):
         start = int(match.group(1))
         count = int(match.group(2) or 1)
-        lines.update(range(start, start + max(count, 1)))
+        if count == 0:
+            continue
+        lines.update(range(start, start + count))
     return lines
 
 

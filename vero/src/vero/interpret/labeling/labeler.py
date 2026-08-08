@@ -158,7 +158,7 @@ class Labeler:
             edit_id=edit.id,
             action=raw["action"],
             role=role,
-            provenance=raw.get("provenance", Provenance.UNKNOWN.value),
+            model_provenance=raw.get("provenance", Provenance.UNKNOWN.value),
             direction=direction_of(edit.before_value, edit.after_value).value,
             mechanism=raw.get("mechanism", "")[:300],
             confidence=float(raw.get("confidence", 0.0)),

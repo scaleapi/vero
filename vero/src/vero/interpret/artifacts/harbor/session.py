@@ -20,6 +20,24 @@ _WANTED_DIR = "/candidates/repository.git/"
 _WANTED_FILE = "evaluation.json"
 
 
+def _contained(member: tarfile.TarInfo, dest: Path) -> bool:
+    """Would extracting `member` stay inside `dest`?
+
+    Name-matching alone is not containment: a member named
+    `../../candidates/repository.git/config` matches the wanted prefix and still
+    escapes. Links are dropped outright rather than resolved, which is what 3.12's
+    `filter="data"` does and all these archives ever contain anyway.
+    """
+    if not (member.isfile() or member.isdir()):
+        return False
+    try:
+        # An absolute member name makes Path() discard `dest` entirely, which
+        # resolve() then exposes as an escape.
+        return Path(dest, member.name).resolve().is_relative_to(dest.resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def digest(path: Path, *, chunk: int = 1 << 20) -> str:
     """Hash the archive itself, so the cache key is independent of where it sits."""
     h = hashlib.sha256()
@@ -43,10 +61,12 @@ def unpack(archive: Path, cache: Cache) -> Path | None:
                 for m in tar.getmembers()
                 if _WANTED_DIR in m.name or m.name.endswith(_WANTED_FILE)
             ]
+            # Containment is checked here rather than left to `filter=`, which is
+            # 3.12+; on 3.11 a member named `../…` matching the wanted prefix would
+            # otherwise be written outside the cache.
+            members = [m for m in members if _contained(m, dest)]
             if not members:
                 return None
-            # filter= is 3.12+; these are our own verifier's archives, so the guard is
-            # about running on 3.11 rather than about untrusted input.
             if sys.version_info >= (3, 12):
                 tar.extractall(dest, members=members, filter="data")
             else:

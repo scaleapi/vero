@@ -97,15 +97,21 @@ def edits(src, cache_dir, out) -> None:
             repo = CandidateRepo(repo_dir)
             n = 0
             seed_sha = next((c.sha for c in traj.candidates if c.is_seed), None)
-            # Accumulated in candidate order so prior_touches means "before this one".
-            seen_symbols: set[tuple[str, str]] = set()
+            # Inherited along the parent chain, not accumulated across the whole cell:
+            # `prior_touches` has to mean "earlier in this candidate's own history".
+            # A single running set also folds in sibling branches, which the optimizer
+            # produces whenever it reaches back past a candidate to try again, and
+            # those edits are not ancestors of this one. Candidates arrive in
+            # topological order, so a parent's set is always ready before its child.
+            touched: dict[str, set[tuple[str, str]]] = {}
             for cand in sorted(traj.candidates, key=lambda c: c.position):
+                inherited = touched.get(cand.parent_sha or "", set())
                 produced = decompose(repo, traj.ref.key, cand, seed_sha=seed_sha,
-                                     prior_symbols=seen_symbols)
+                                     prior_symbols=inherited)
                 for edit in produced:
                     fh.write(edit.model_dump_json() + "\n")
                     n += 1
-                seen_symbols |= {(e.path, e.symbol) for e in produced}
+                touched[cand.sha] = inherited | {(e.path, e.symbol) for e in produced}
             total += n
             click.echo(f"  {traj.ref.key}: {n} edits")
     click.echo(f"wrote {out}  ({total} edits)")
@@ -189,8 +195,12 @@ def report(labels_file, edits_file, out) -> None:
         if edit is None:
             orphans += 1
             continue
+        # `provenance` comes from the edit, never the label: it is derived by comparing
+        # the seed and parent trees, and the model's own answer is kept beside it as
+        # `model_provenance` only so the two can be compared.
         rows.append({**lab, "cell_key": edit["cell_key"], "symbol": edit["symbol"],
-                     "symbol_kind": edit["symbol_kind"], "path": edit["path"]})
+                     "symbol_kind": edit["symbol_kind"], "path": edit["path"],
+                     "provenance": edit.get("provenance", "unknown")})
     if orphans:
         click.echo(f"warning: {orphans} labels had no matching edit and were dropped")
     cells = len({r["cell_key"] for r in rows})

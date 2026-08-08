@@ -113,11 +113,16 @@ class HarborAdapter:
     def _candidates(self, repo: CandidateRepo, shipped_sha: str) -> list[Candidate]:
         out: list[Candidate] = []
         for position, (sha, subject, body) in enumerate(repo.log()):
-            stats = repo.numstat(f"{sha}^", sha) if position else {}
+            # The seed is the root of the chain, which is a property of the commit
+            # rather than of its place in a flattened list: with sibling candidates
+            # the list is one interleaving of several chains, and only the parentless
+            # commit is the seed under every ordering.
+            parent_sha = repo.parent(sha)
+            stats = repo.numstat(parent_sha, sha) if parent_sha else {}
             out.append(
                 Candidate(
                     sha=sha,
-                    parent_sha=repo.parent(sha),
+                    parent_sha=parent_sha,
                     position=position,
                     subject=subject,
                     body=body[:4000],
@@ -125,7 +130,7 @@ class HarborAdapter:
                     insertions=sum(a for a, _ in stats.values()),
                     deletions=sum(r for _, r in stats.values()),
                     tree_sha=repo.tree_sha(sha),
-                    is_seed=position == 0,
+                    is_seed=parent_sha is None,
                     is_shipped=bool(shipped_sha) and sha.startswith(shipped_sha[:12]),
                 )
             )

@@ -16,6 +16,8 @@ from collections import defaultdict
 
 from vero.interpret.artifacts.harbor.repo import CandidateRepo
 from vero.interpret.edits import locus
+from vero.interpret.edits.provenance import provenance_between, provenance_of
+from vero.interpret.labeling.taxonomy import Provenance
 from vero.interpret.models import Candidate, Edit, SymbolKind
 
 _HUNK_SPLIT = re.compile(r"^(@@ .*?@@.*)$", re.M)
@@ -28,8 +30,13 @@ MAX_STORED_DIFF = 60_000
 MAX_STORED_SOURCE = 20_000
 
 
-def _per_symbol_diff(diff: str, keep: set[int]) -> str:
-    """Hunks of `diff` whose post-image start line falls in `keep`."""
+def _per_symbol_diff(diff: str, keep: set[int], *, deletions: bool = False) -> str:
+    """Hunks of `diff` whose post-image lines fall in `keep`.
+
+    Deletion-only (`+start,0`) hunks match no post-image line, so they belong to no
+    symbol; `deletions` puts them on the module row, which is where the file's
+    removal count is carried, instead of dropping them from every stored diff.
+    """
     parts = _HUNK_SPLIT.split(diff)
     if len(parts) < 2:
         return ""
@@ -40,7 +47,11 @@ def _per_symbol_diff(diff: str, keep: set[int]) -> str:
             continue
         start = int(match.group(1))
         count = int(match.group(2) or 1)
-        if keep & set(range(start, start + max(count, 1))):
+        if count == 0:
+            if deletions:
+                chunks.append(header + body.rstrip("\n"))
+            continue
+        if keep & set(range(start, start + count)):
             chunks.append(header + body.rstrip("\n"))
     return "\n".join(chunks)[:MAX_STORED_DIFF]
 
@@ -73,9 +84,12 @@ def decompose(
             removed = sum(
                 1 for line in diff.splitlines() if line.startswith("-") and line[1:2] != "-"
             )
+            # Whole-file comparison; there is no symbol to resolve in a non-Python file.
+            prov = provenance_of(repo, seed_sha or "", candidate.parent_sha, path, "<file>")
             edits.append(
                 _edit(cell_key, candidate, path, "<file>", SymbolKind.NON_PYTHON,
-                      added, removed, diff[:MAX_STORED_DIFF], None, None, None, True, 0)
+                      added, removed, diff[:MAX_STORED_DIFF], None, None, None, True, 0,
+                      prov.value)
             )
             continue
 
@@ -99,7 +113,11 @@ def decompose(
             1 for line in diff.splitlines() if line.startswith("+") and line[1:2] != "+"
         )
         attributed_added = sum(len(v) for v in grouped.values())
-        if removed_total and not grouped:
+        # Removals ride on the module row (see below), so that row has to exist
+        # whenever the file lost lines — not only when nothing else was attributed.
+        # A commit that adds a helper and deletes another function outright has a
+        # populated `grouped` and would otherwise drop the deletion entirely.
+        if removed_total and ("<module>", SymbolKind.MODULE) not in grouped:
             grouped[("<module>", SymbolKind.MODULE)] = set()
 
         for (symbol, kind), lines in grouped.items():
@@ -114,6 +132,15 @@ def decompose(
             after_source = locus.symbol_source(after_src, symbol)
             in_seed = bool(seed_src) and locus.symbol_source(seed_src, symbol) is not None
             touches = len([1 for k in (prior_symbols or set()) if k == (path, symbol)])
+            # Derived here, not asked of the labeller: shown one edit in isolation the
+            # model answers "own" almost everywhere. Only the tree comparison knows
+            # whether this code is still as the seed left it.
+            if not seed_sha:
+                prov = Provenance.UNKNOWN
+            elif candidate.parent_sha.startswith(seed_sha[:12]):
+                prov = Provenance.SEED
+            else:
+                prov = provenance_between(seed_src, before_src, symbol)
             edits.append(
                 _edit(
                     cell_key,
@@ -125,12 +152,14 @@ def decompose(
                     # Removals cannot be attributed per symbol; carry the file total
                     # on the module row so the count is never silently lost.
                     removed_total if symbol == "<module>" else 0,
-                    _per_symbol_diff(diff, lines) or diff[:MAX_STORED_DIFF],
+                    _per_symbol_diff(diff, lines, deletions=symbol == "<module>")
+                    or diff[:MAX_STORED_DIFF],
                     before,
                     after,
                     after_source[:MAX_STORED_SOURCE] if after_source else None,
                     in_seed,
                     touches,
+                    prov.value,
                 )
             )
         if attributed_added < added_total and grouped:
@@ -152,6 +181,7 @@ def _edit(
     after_source: str | None,
     in_seed: bool,
     prior_touches: int,
+    provenance: str,
 ) -> Edit:
     return Edit(
         id=Edit.make_id(cell_key, candidate.sha, path, symbol, diff),
@@ -168,4 +198,5 @@ def _edit(
         after_source=after_source,
         in_seed=in_seed,
         prior_touches=prior_touches,
+        provenance=provenance,
     )
