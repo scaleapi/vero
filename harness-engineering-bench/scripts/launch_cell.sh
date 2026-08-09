@@ -18,6 +18,13 @@
 #                 via --param optimizer_model. Usually the launch-model minus the
 #                 harness-specific prefix: claude-opus-5, fireworks_ai/kimi-k3.
 #   wandb-run     <benchmark>__<model>__<harness>__r<n>
+#   [extra...]    optional trailing KEY=VALUE pairs, each forwarded as --param.
+#                 Needed by configs whose producer allow-list has more than one
+#                 slot: swe-atlas-qna and tau3's gpt-5.4-mini variant take
+#                 optimizer_model_bare and optimizer_aux_model as well, and an
+#                 anthropic-routed optimizer must pass them explicitly because the
+#                 defaults resolve to the OpenAI family. The gateway compares exact
+#                 strings, so a missing slot is a 403 model_denied on that model.
 #
 # Why the daemonizer: macOS has no setsid(1), and the harness SIGTERMs background
 # tasks belonging to an idle session's process group. A plain `nohup ... &` loses
@@ -28,13 +35,24 @@
 # worked, and that has already cost us a full grid once.
 set -euo pipefail
 
-if [ "$#" -ne 8 ]; then
-  sed -n '2,28p' "$0" >&2
+if [ "$#" -lt 8 ]; then
+  sed -n '2,36p' "$0" >&2
   exit 2
 fi
 
 outdir=$1 config=$2 envfile=$3 environment=$4
 agent=$5 launch_model=$6 wire_model=$7 wandb_run=$8
+shift 8
+# Each remaining KEY=VALUE becomes its own --param. Validated here rather than
+# passed through blind, so a typo fails at launch instead of at the gateway.
+extra_params=""
+for pair in "$@"; do
+  case "$pair" in
+    *=*) extra_params="$extra_params \\
+  --param \"$pair\"" ;;
+    *) echo "extra args must be KEY=VALUE, got: $pair" >&2; exit 2 ;;
+  esac
+done
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/../.." && pwd)
@@ -64,7 +82,7 @@ exec uv run vero harbor run \\
   --agent "$agent" \\
   --model "$launch_model" \\
   --param "optimizer_model=$wire_model" \\
-  --param "wandb_run=$wandb_run" \\
+  --param "wandb_run=$wandb_run"$extra_params \\
   --yes \\
   -o "$rundir/jobs"
 EOF
