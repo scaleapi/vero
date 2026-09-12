@@ -12,6 +12,10 @@ task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6
 task_manifest: ../partitions/manifest.json
 agent_import_path: gaia_agent.agent:GaiaAgent
 harbor_requirement: harbor[modal]==0.20.0
+# Set once the vero on PyPI carries the compiled-task changes this branch relies on
+# (env-delivered scope tokens, outer-trial limits); until then the images copy the
+# local source. With it set, the compiled task holds no vero and can be committed.
+# vero_requirement: scaleapi-vero==0.6.0
 
 partition_files:
   development: ../partitions/development.json

@@ -1769,3 +1769,34 @@ def test_launcher_mints_run_inputs_matching_the_compiled_names(tmp_path):
     task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
     for name in runtime:
         assert task["environment"]["env"][name] == "${" + name + "}"
+
+
+def test_vero_requirement_installs_from_pypi_instead_of_copying_source(tmp_path):
+    """A pinned published vero keeps the source tree out of the compiled task."""
+    from importlib.metadata import version
+
+    pin = f"scaleapi-vero=={version('scaleapi-vero')}"
+    output = compile_harbor_task(
+        _config(tmp_path, vero_requirement=pin), tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+    assert not (output / "environment/vero").exists()
+    main = (output / "environment/Dockerfile").read_text(encoding="utf-8")
+    sidecar = (output / "environment/sidecar/Dockerfile").read_text(encoding="utf-8")
+    assert f"scaleapi-vero[harbor]=={version('scaleapi-vero')}" in main
+    assert f"scaleapi-vero[harbor]=={version('scaleapi-vero')}" in sidecar
+    assert "COPY vero " not in main and "COPY vero " not in sidecar
+    # and the manifest no longer carries a vero subtree
+    from vero.harbor.cli import _compiled_manifest
+
+    assert not any(p.startswith("environment/vero/") for p in _compiled_manifest(output, tmp_path / "b.yaml")["files"])
+
+
+def test_vero_requirement_must_match_the_compiling_vero(tmp_path):
+    with pytest.raises(ValueError, match="must run the version that compiled them"):
+        compile_harbor_task(
+            _config(tmp_path / "a", vero_requirement="scaleapi-vero==0.0.1"),
+            tmp_path / "compiled-a", vero_root=Path(__file__).parents[1],
+        )
+    with pytest.raises(ValueError, match="exact pin"):
+        _config(tmp_path / "b", vero_requirement="scaleapi-vero[harbor]>=0.5")

@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tarfile
 import tomllib
+from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as distribution_version
 from pathlib import Path, PurePosixPath
 
@@ -127,6 +128,34 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
         # filter="data" strips device files / setuid bits and neutralizes unsafe
         # links, matching extract_harbor_session_archive's defensive posture.
         archive.extractall(destination, filter="data")
+
+
+def _published_vero(requirement: str | None) -> str | None:
+    """The build's pinned vero requirement, checked against the vero compiling it.
+
+    The compiled serve.json and gateway config are read by the vero inside the
+    images, so they must be written by the same version. A pin that names another
+    version would compile cleanly and fail at container start, or worse, run with a
+    config it half understands.
+    """
+    if requirement is None:
+        return None
+    name, _, version = requirement.partition("==")
+    try:
+        installed = distribution_version(name)
+    except PackageNotFoundError:
+        return requirement  # not importable under that name here; trust the pin
+    if installed != version:
+        raise ValueError(
+            f"vero_requirement pins {requirement} but this compiler is {name} "
+            f"{installed}; the images must run the version that compiled them"
+        )
+    return requirement
+
+
+def _with_extras(requirement: str, extras: str) -> str:
+    name, _, version = requirement.partition("==")
+    return f"{name}[{extras}]=={version}"
 
 
 #: Every compiled baseline commit is stamped with this instant, not the wall
@@ -561,8 +590,9 @@ def compile_harbor_task(
     """Emit a self-contained Harbor task directory from validated config."""
     output = Path(output_dir).expanduser().resolve()
     source_root = (vero_root or Path(__file__).parents[4]).resolve()
-    use_local_vero = _is_vero_source(source_root)
-    if vero_root is not None and not use_local_vero:
+    published = _published_vero(config.vero_requirement)
+    use_local_vero = published is None and _is_vero_source(source_root)
+    if vero_root is not None and published is None and not use_local_vero:
         raise ValueError(f"vero_root {source_root} is not a scaleapi-vero source checkout")
     protected = [Path(config.agent_repo).resolve()]
     if use_local_vero:
@@ -788,10 +818,9 @@ def compile_harbor_task(
         "vero_requirement": (
             None
             if use_local_vero
-            else (
-                "scaleapi-vero["
-                + ("harbor,wandb" if config.wandb is not None else "harbor")
-                + f"]=={distribution_version('scaleapi-vero')}"
+            else _with_extras(
+                published or f"scaleapi-vero=={distribution_version('scaleapi-vero')}",
+                "harbor,wandb" if config.wandb is not None else "harbor",
             )
         ),
         "harbor_requirement": config.harbor_requirement,

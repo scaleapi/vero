@@ -68,6 +68,12 @@ class _TaskIdentityFields(StrictModel):
             while the built-in opening line tells them to *improve* one.
         base_image_main: Base image for the main container.
         base_image_sidecar: Base image for the sidecar container.
+        vero_requirement: Install vero into the task images from this published
+            requirement (``scaleapi-vero==0.6.0``) instead of copying the source
+            checkout in. The version must equal the vero doing the compiling,
+            because the compiled serve and gateway configs are read by the vero
+            inside the images. None (the default) copies the local source, which
+            is what a checkout with unreleased changes needs.
     """
 
     name: str
@@ -79,6 +85,19 @@ class _TaskIdentityFields(StrictModel):
     instruction_template: str | None = None
     base_image_main: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
     base_image_sidecar: str = "ghcr.io/astral-sh/uv:python3.12-bookworm"
+    vero_requirement: str | None = None
+
+    @field_validator("vero_requirement")
+    @classmethod
+    def validate_vero_requirement(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.+!-]*", value):
+            raise ValueError(
+                "vero_requirement must be an exact pin like scaleapi-vero==0.6.0 "
+                "(no extras: the compiler adds the ones each image needs)"
+            )
+        return value
 
     @field_validator("name", "agent_repo", "base_image_main", "base_image_sidecar")
     @classmethod
