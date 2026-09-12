@@ -1,0 +1,215 @@
+name: vero/optimize-gaia-shell-e2e
+description: >-
+  The program must answer canonical GAIA tasks: general-knowledge questions that
+  may need research, computation, or inspection of attached files. How it does
+  that is yours to decide -- the approach, what the agent can do, how it uses its
+  environment, how many model calls it takes, and when it stops. Preserve the
+  Harbor agent interface and the class import path. The grader reads the exact
+  answer from /app/answer.txt.
+instruction_template: instruction.shell.md.j2
+agent_repo: target-shell
+task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
+task_manifest: ../partitions/manifest.json
+agent_import_path: gaia_agent.agent:GaiaAgent
+harbor_requirement: harbor[modal]==0.20.0
+# Set once the vero on PyPI carries the compiled-task changes this branch relies on
+# (env-delivered scope tokens, outer-trial limits); until then the images copy the
+# local source. With it set, the compiled task holds no vero and can be committed.
+# vero_requirement: scaleapi-vero==0.6.0
+
+# E2E SMOKE VARIANT of build.shell.yaml. Same seed, same target, same gateway
+# scopes; eight cases in total, tiny budgets, and a 25-minute agent clock so the
+# run reaches finalization quickly. It exists to prove the trial machinery end to
+# end (compile, tokens, evaluations, agent timeout -> verifier, session archive)
+# after a change to vero, not to measure anything. Never report its score.
+partition_files:
+  development: ../partitions-e2e/development.json
+  validation: ../partitions-e2e/validation.json
+  test: ../partitions-e2e/test.json
+
+# total_cases = 4 full passes per partition (dev 33*4, validation 66*4).
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 6
+    total_cases: 12
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 1
+    total_runs: 6
+    total_cases: 18
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # Zero by construction, not by measurement: the skeleton writes an empty
+    # answer, so every case is scored and wrong. Confirm with one baseline round
+    # before quoting deltas -- the number is a claim about the seed, not a
+    # measurement of it.
+    baseline_reward: 0.0
+    failure_value: 0.0
+    max_attempts: 1
+    # The held-out eval is noisy: score the selected candidate 3x per case and
+    # average, so the final reward is comparable to the pinned baseline, which was
+    # itself pooled over 3 rounds. Without this the candidate carries ~sqrt(3) more
+    # standard error than the floor it is judged against.
+    # Per-target override - search/validation keep the global n_attempts (1).
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: gaia
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 1
+rescore_attempts: 1
+
+# GAIA is multimodal: 5 of the 66 held-out tasks send image inputs, and a
+# text-only target 400s on them ("This model does not support image inputs"),
+# which reads as ordinary agent failure and caps achievable reward near 0.92.
+# Unprefixed on purpose -- the agent sends model_name.removeprefix("openai/"),
+# so an openai/-prefixed name here would be allow-listed in one form and
+# requested in another, and the gateway would deny it.
+model: gpt-5.4-mini
+environment_name: ${inner_env:-modal}
+# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+# Raised from 1 on 2026-07-29. This field exists precisely so "a transient
+# upstream rate-limit storm during a mandatory evaluation does not fail
+# otherwise-good candidates" (see HarborBuildConfig), and it was set to the
+# least aggressive value. Measured that night: the shared Fireworks per-minute
+# bucket rejected 78,748 requests across one officeqa pass, sustaining
+# ~900-1,000/min for 24 minutes, and SEVEN rejections spread over ten minutes
+# were enough to destroy a 37-case evaluation. The retry stack during search is
+# only the target agent's own SDK (max_retries=8, ~1 min of jittered backoff,
+# and candidate-controlled so it cannot be relied on) plus this one; the
+# infrastructure_max_attempts retry below applies to trusted finalization only.
+# 4 retries at multiplier 2 from a 4s floor, capped at 120s, gives roughly four
+# more minutes of ride-out per case. That covers the bursts, though not a
+# 24-minute saturation -- for which the answer is fewer concurrent runs or a
+# larger provider quota, not more retrying.
+max_retries: 4
+retry_max_wait_seconds: 120
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Unreachable: worst case is ceil(198/24) x 600 = 5400s, every
+# finalize trial (66 held-out x n_attempts=3) hitting its own cap. Assumes
+# max_concurrency=24; recompute if that drops.
+timeout_seconds: 1800
+# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
+# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
+# clock the benchmark intends. Harbor times agent setup, environment build and
+# verification on separate clocks with separate multipliers, so none of them
+# eat into this budget and no buffer is warranted.
+case_timeout_seconds: 600
+task_agent_timeout_seconds: 600
+max_concurrency: 24  # 8 -> 24; see officeqa for the measured headroom argument
+error_rate_threshold: 0.1
+# Unreachable: worst-case finalize (5400) + worst-case rescore_top_k=3
+# validation rescore (5400). A verifier timeout loses the score outright.
+verifier_timeout_seconds: 3600
+# Limits on the OUTER optimizer trial: the Modal sandbox the optimizer itself runs
+# in, not the nested evaluation. Every value reproduces what ran implicitly before
+# 2026-09, now written down so the task states its own bounds.
+#   sandbox timeout: Harbor's Modal default of 24 h. When it fires the sandbox is
+#   destroyed with no verifier and no archive, so the trial is lost.
+optimizer_sandbox_timeout_seconds: 14400
+#   idle timeout: reclaims a sandbox whose optimizer died with no running command.
+#   The inner evaluation app has used 3600 since July; the outer sandbox had none.
+optimizer_sandbox_idle_timeout_seconds: 1800
+#   agent clock: Harbor stops the optimizer here and STILL runs the verifier, so a
+#   runaway is scored and archived instead of lost at the sandbox timeout. Clean
+#   cells finish in 8-17 h; the longest finalization seen was ~3.5 h, which is
+#   what the 4 h gap to the sandbox timeout is for.
+# 25 minutes: long enough for the optimizer to run a few evaluations, short
+# enough that Harbor stops it and hands over to the verifier within the hour,
+# which is the path this variant exists to exercise.
+optimizer_agent_timeout_seconds: 1500
+#   Harbor's default resolves to public internet; stated rather than inherited.
+optimizer_allow_internet: true
+#   optimizer_cpus / optimizer_memory_mb / optimizer_storage_mb are left unset on
+#   purpose: that is Modal's default (0.125-core / 128 MiB reservation, bursting to
+#   the host), which is what every August cell ran under. Set them once the first
+#   rebuttal wave has been read off the Modal dashboard.
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  # Which Modal environment the sandboxes land in. Harbor passes none to the SDK,
+  # so without this every sandbox goes to the workspace default (`main`), which is
+  # where all pre-2026-09 cells ran. Declared as a secret so it reaches the sidecar
+  # (inner evaluations) as well as the launcher (outer trial). Set to `enterprise`.
+  - MODAL_ENVIRONMENT
+  - WANDB_API_KEY
+  - WANDB_BASE_URL  # self-hosted or cloud W&B
+
+# candidate harness runs as an unprivileged uid, unable to read held-out state.
+harness_user: harness
+# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
+# Claude Code's Bash tool caps a single call at BASH_MAX_TIMEOUT_MS (default
+# 600000=10min), well under one inner eval, which pushed the officeqa optimizer
+# into --detach + background-poll + end-turn -- and a headless --print run is
+# never re-woken, so the search died there. Raise the cap so a whole eval fits in
+# one blocking call. The background-task vars are defence in depth only: they gate
+# *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
+# parameter, which the model can still choose. The instruction forbids that.
+agent_env:
+  # Above this benchmark's widest single eval: a full validation pass is
+  # ceil(66/24) x 600 = 1800s worst case.
+  BASH_MAX_TIMEOUT_MS: "3600000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"  # same as max: an un-timed eval must still block
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)
+  # default to symlinking their entry point into /usr/local/bin, which the
+  # unprivileged optimizer user cannot write: "Failed to install executable
+  # ... Permission denied". npm/nvm-based harnesses (claude-code, opencode)
+  # are unaffected, so this only bites when the harness changes.
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+
+wandb:
+  project: harness-engineering-bench  # one project for the whole suite
+  group: gaia  # keeps the benchmark distinguishable in the shared project
+  name: ${wandb_run:-gaia-shell-e2e}  # per-launch label, e.g. --param wandb_run=gaia__opencode
+  tags: [gaia, shell-seed, e2e-smoke]
+  log_traces: true
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
+  # gateway token usage to individual trials (trusted, vs. content-matching).
+  # Without it the fallback recovers only each conversation's root turn: measured
+  # 0-13% coverage unstamped against 90-98% stamped, even with --tasks-dir.
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    max_concurrency: 8
+  # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
+  # the spend control, so a token cap only needs to stop a runaway.
+  evaluation:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 200000000  # 30 agent case-runs at most
+    max_concurrency: 64
+  # Reserved so a search-phase overspend can never starve held-out scoring.
+  finalization:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 2000000000  # 66 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true
