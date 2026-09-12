@@ -142,6 +142,11 @@ class HarborBackendConfig(StrictModel):
     # so the optimizer's search evaluations cannot exhaust the budget the mandatory
     # re-score needs. When unset, finalization falls back to the evaluation scope.
     inference_gateway_finalization_token: str | None = None
+    # A compiled task names the tokens by environment variable instead of carrying
+    # them, so the compiled tree holds nothing per-run. The sidecar fills the two
+    # fields above from these at start (deployment.resolve_runtime_secrets).
+    inference_gateway_token_env: str | None = None
+    inference_gateway_finalization_token_env: str | None = None
     # When True, task-owned evaluation services (e.g. LLM user-simulators or graders
     # that run *inside* the task containers and cannot reach the compose-internal
     # gateway) receive the real upstream credentials via OPENAI_*, while the
@@ -287,11 +292,14 @@ class HarborBackendConfig(StrictModel):
                 "environment and passthrough_environment overlap for: "
                 + ", ".join(sorted(overlap))
             )
-        if (self.inference_gateway_url is None) != (
-            self.inference_gateway_token is None
-        ):
+        has_token = (
+            self.inference_gateway_token is not None
+            or self.inference_gateway_token_env is not None
+        )
+        if (self.inference_gateway_url is None) != (not has_token):
             raise ValueError(
-                "inference_gateway_url and inference_gateway_token must be set together"
+                "inference_gateway_url and inference_gateway_token (or its _env) "
+                "must be set together"
             )
         if (
             self.inference_gateway_url is not None

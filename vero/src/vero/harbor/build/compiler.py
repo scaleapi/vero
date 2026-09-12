@@ -21,7 +21,7 @@ from vero.evaluation import (
     EvaluationSet,
     RetryPolicy,
 )
-from vero.gateway.inference import generate_inference_token, token_digest
+from vero.gateway.inference import token_digest
 from vero.harbor.build.config import HarborBuildConfig
 from vero.harbor.build.specs import WorkspaceOverlaySpec
 from vero.layout import LAYOUT
@@ -129,6 +129,11 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
         archive.extractall(destination, filter="data")
 
 
+#: Every compiled baseline commit is stamped with this instant, not the wall
+#: clock, so its hash is a function of the seed's contents only.
+BASELINE_COMMIT_DATE = "2000-01-01T00:00:00Z"
+
+
 def _prepare_baseline_repo(
     source: Path,
     destination: Path,
@@ -168,6 +173,9 @@ def _prepare_baseline_repo(
         raise ValueError("agent baseline contains reserved path '.evals'")
 
     def git(*arguments: str) -> str:
+        # Fixed identity AND fixed dates: the baseline commit hash then depends on
+        # the tree alone, so two compiles of one seed are byte-identical and the
+        # compiled task can be frozen and checked (`vero harbor build --check`).
         result = subprocess.run(
             [
                 "git",
@@ -182,6 +190,11 @@ def _prepare_baseline_repo(
             check=True,
             capture_output=True,
             text=True,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_DATE": BASELINE_COMMIT_DATE,
+                "GIT_COMMITTER_DATE": BASELINE_COMMIT_DATE,
+            },
         )
         return result.stdout.strip()
 
@@ -252,8 +265,6 @@ def _deployment_config(
     *,
     baseline_version: str,
     local_task_source: bool,
-    evaluation_inference_token: str | None,
-    finalization_inference_token: str | None,
 ) -> dict:
     task_source = TASK_SOURCE_DIR if local_task_source else config.task_source
     backends = {}
@@ -339,8 +350,16 @@ def _deployment_config(
                     if config.inference_gateway is not None
                     else None
                 ),
-                "inference_gateway_token": evaluation_inference_token,
-                "inference_gateway_finalization_token": finalization_inference_token,
+                "inference_gateway_token_env": (
+                    LAYOUT.evaluation_token_env
+                    if config.inference_gateway is not None
+                    else None
+                ),
+                "inference_gateway_finalization_token_env": (
+                    LAYOUT.finalization_token_env
+                    if config.inference_gateway is not None
+                    else None
+                ),
                 "harness_user": config.harness_user,
                 "task_services_use_upstream": config.task_services_use_upstream,
                 "upstream_api_key_env": (
@@ -571,6 +590,12 @@ def compile_harbor_task(
             gateway_environment.append(UPSTREAM_BASE_URL_ENV)
             credential_sources.append(config.inference_gateway.upstream_base_url_env)
     task_environment = list(dict.fromkeys([*config.secrets, *gateway_environment]))
+    # Per-run inference inputs the launcher supplies (tokens, producer scope). They
+    # travel like secrets -- task.toml passes them to compose -- but are never
+    # baked, which is what lets the compiled tree be frozen and diffed.
+    runtime_environment = (
+        list(LAYOUT.runtime_inference_envs) if config.inference_gateway is not None else []
+    )
     # One list, two consumers. The compose template blanks these on the candidate's
     # main service; the launcher blanks the same names for the optimizer's agent
     # exec, which compose never sees. Keeping it computed once is the point: the
@@ -581,7 +606,9 @@ def compile_harbor_task(
     # caller's own spelling.
     scrubbed_main_environment = [
         name
-        for name in dict.fromkeys([*task_environment, *credential_sources])
+        for name in dict.fromkeys(
+            [*task_environment, *credential_sources, *runtime_environment]
+        )
         if name not in GATEWAY_ROUTED_CREDENTIALS
     ]
     if os.environ.get("VERO_SKIP_SECRET_CHECK") is None:
@@ -659,30 +686,18 @@ def compile_harbor_task(
             Path(config.task_source),
             sidecar_dir / "task-source",
         )
-    producer_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
-    )
-    evaluation_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
-    )
-    finalization_inference_token = (
-        generate_inference_token() if config.inference_gateway is not None else None
-    )
+    # Tokens are not minted here. The launcher mints them per run and hands them
+    # over by environment variable; every service reads its own once at start.
     deployment = _deployment_config(
         config,
         baseline_version=baseline,
         local_task_source=local_task_source,
-        evaluation_inference_token=evaluation_inference_token,
-        finalization_inference_token=finalization_inference_token,
     )
     (sidecar_dir / "serve.json").write_text(
         json.dumps(deployment, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     if config.inference_gateway is not None:
-        assert producer_inference_token is not None
-        assert evaluation_inference_token is not None
-        assert finalization_inference_token is not None
         # Finalization reserves its own budget; default to the evaluation policy.
         finalization_spec = (
             config.inference_gateway.finalization or config.inference_gateway.evaluation
@@ -710,15 +725,18 @@ def compile_harbor_task(
             ),
             "scopes": {
                 "producer": {
-                    "token_sha256": token_digest(producer_inference_token),
+                    "token_env": LAYOUT.producer_token_env,
+                    # The launcher's --param optimizer_model lands here at run
+                    # time; the compiled list below is only the build's default.
+                    "override_env": LAYOUT.producer_scope_env,
                     **config.inference_gateway.producer.model_dump(mode="json"),
                 },
                 "evaluation": {
-                    "token_sha256": token_digest(evaluation_inference_token),
+                    "token_env": LAYOUT.evaluation_token_env,
                     **config.inference_gateway.evaluation.model_dump(mode="json"),
                 },
                 "finalization": {
-                    "token_sha256": token_digest(finalization_inference_token),
+                    "token_env": LAYOUT.finalization_token_env,
                     **finalization_spec.model_dump(mode="json"),
                 },
             },
@@ -738,8 +756,13 @@ def compile_harbor_task(
                         config.inference_gateway.upstream_base_url_env
                     ),
                     "upstream_base_url_target": UPSTREAM_BASE_URL_ENV,
-                    "producer_api_key": producer_inference_token,
                     "producer_base_url": (PRODUCER_BASE_URL),
+                    # Names, not values: the launcher mints the tokens and chooses
+                    # the producer scope, then exports them under these names.
+                    "producer_token_env": LAYOUT.producer_token_env,
+                    "evaluation_token_env": LAYOUT.evaluation_token_env,
+                    "finalization_token_env": LAYOUT.finalization_token_env,
+                    "producer_scope_env": LAYOUT.producer_scope_env,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -772,7 +795,8 @@ def compile_harbor_task(
             )
         ),
         "harbor_requirement": config.harbor_requirement,
-        "secrets": task_environment,
+        "secrets": [*task_environment, *runtime_environment],
+        "runtime_environment": runtime_environment,
         "sidecar_secrets": config.secrets,
         "inference_gateway": config.inference_gateway,
         "gateway_environment": gateway_environment,
@@ -783,8 +807,6 @@ def compile_harbor_task(
         # avoid emitting the same key twice, not to permit anything: adding a new
         # credential to `secrets` gets it blanked automatically.
         "scrubbed_main_environment": scrubbed_main_environment,
-        "producer_inference_token": producer_inference_token,
-        "evaluation_inference_token": evaluation_inference_token,
         "inference_gateway_url": INFERENCE_GATEWAY_URL,
         "read_only_paths": config.read_only_paths,
         "local_task_source": local_task_source,
