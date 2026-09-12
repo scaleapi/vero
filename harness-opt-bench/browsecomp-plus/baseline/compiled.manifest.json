@@ -36,7 +36,7 @@
   "environment/agent-baseline/src/browsecomp_plus_agent/agent.py": "137790f566ee7bc8939fb918fa5235c1e254f25598714f96e1eda10dd4d6f35e",
   "environment/agent-baseline/tests/test_agent.py": "25788ac708cf995f557b195e37bab7153af4291b3ae8f7d29fa4c48d2d02539d",
   "environment/agent-baseline/uv.lock": "e8f297525100fbd6c660b85970c7f02ec779ee35bbd8d3020108f7fd3146d05e",
-  "environment/agent-env-blanks.json": "90b8150c7380714e1b169d902c8cc153c58596bc8000dd8adeb49469f9af5699",
+  "environment/agent-env-blanks.json": "e527d19e8a42180386e30ec7219cf7dfa1127fda0340eb00be871f82fd45399f",
   "environment/agent-seed/.git/COMMIT_EDITMSG": "4b654bd1437066b13498661f3ca14774daf1066d072036beffaf06f0c014250e",
   "environment/agent-seed/.git/HEAD": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80",
   "environment/agent-seed/.git/config": "cae33efdb02cf774435c1ff9cb16bcc1014606908530c6e1dc727615fe3e8cda",
@@ -71,7 +71,7 @@
   "environment/agent-seed/src/browsecomp_plus_agent/agent.py": "137790f566ee7bc8939fb918fa5235c1e254f25598714f96e1eda10dd4d6f35e",
   "environment/agent-seed/tests/test_agent.py": "25788ac708cf995f557b195e37bab7153af4291b3ae8f7d29fa4c48d2d02539d",
   "environment/agent-seed/uv.lock": "e8f297525100fbd6c660b85970c7f02ec779ee35bbd8d3020108f7fd3146d05e",
-  "environment/docker-compose.yaml": "db36414cd7b7015e76b36da47a7d6c5d93d8a9d1c53ac39fbf31363ef94a9e04",
+  "environment/docker-compose.yaml": "e29555f903e97c83d00da27df88dd317bf263bda1b2b2675462424837daeb938",
   "environment/gateway/Dockerfile": "70d149f1928b135b8e11b7bb8d4ef70d81f331a6766bb3947192ff876e2eea26",
   "environment/gateway/config.json": "650eabf9ff9899771d5d39b0aa6f233f8405bdd98a1261aab9c3bc5beaeb6f97",
   "environment/gateway/launch.json": "462bcc8d2749f1364d79e14d36be7144a84441b6bb74c985f798115ef26636ae",
@@ -81,13 +81,13 @@
   "environment/sidecar/cases/development.jsonl": "becd3eef6841ad0174b8ec4bc73088432221f8849c48a5c822b955e62003c17d",
   "environment/sidecar/cases/test.jsonl": "b20f6750e35cabdfb65c186ff886026f78ed4b37e3cb11e67fe7538531e1dc6d",
   "environment/sidecar/cases/validation.jsonl": "4d46fc533edc1862d9ee04f8b6fcb835c017a9360c8a1a88cb7a6963cd54aa91",
-  "environment/sidecar/serve.json": "92aa6ad2ec2e7967bcf50d694f55a1efc00f911a1979a0d3e297bab6ebf903d3",
+  "environment/sidecar/serve.json": "fcad4e44748f06d8e2d1296dca60a2b8674e94e8618a79539588554992d69bd3",
   "environment/sidecar/task-source/": "abfee46a96f0ffa72ad3b4b287227ffb32a42cdc9188e1dddc72685dfcfa7c30",
-  "environment/vero/": "1855222d415aba68140d0576f06c5388d491c17520994c12680402828c95706f",
+  "environment/vero/": "e12fbae407e3bf6acfaa6445e5debc683592b66180ab69b6e6eff2b395f93f30",
   "instruction.md": "2665ef594b9dffcc447e8013ac15c633cd6baf69b7e019fef92382f479c71cb7",
   "solution/solve.sh": "906e1e8dcd72edd2fb1f11f36bb29f2df7c203269ffd7badf9fa7632bcd98544",
-  "task.toml": "a23272759e2304e32610da127c97098121e980bc38568a602175d039d807c7e5",
+  "task.toml": "d0bba169e6e962f4fe90d13ebf675f732c8ed80ae3daa2f0b6f6eff8ce211ce8",
   "tests/test.sh": "b65e90e6d67aacedd559c6b1c9d0f1d5c5071ecc9178a5bd7f9e1066f332bb0d"
  },
- "vero_commit": "64e76571afcb2827ab7bfeddda2f16a9ad6544c9"
+ "vero_commit": "96e57cf22e5b7f3a4e8cea9ade61bf5f61c66692"
 }
