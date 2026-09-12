@@ -4,7 +4,7 @@ A conformance check for the *stack*, not the model. Run it before spending a rea
 benchmark on a new optimizer harness or a new model, and you find out in minutes
 whether the pieces an optimizer depends on actually work.
 
-It is deliberately the **same path** as `harness-engineering-bench`: the harbor
+It is deliberately the **same path** as `harness-opt-bench`: the harbor
 evaluation backend, a nested `harbor run` per case, a target agent metered through
 the inference gateway's evaluation scope, and an optimizer metered through the
 producer scope. Only the work is trivial — six arithmetic tasks, two per
@@ -83,7 +83,7 @@ generated from a template (`task.toml`, `instruction.md`,
 cases so the whole run stays a few minutes.
 
 Timeouts follow the same rules as the benchmark suite (see
-`harness-engineering-bench/CONFIGURATION.md`): `case_timeout_seconds` equals the
+`harness-opt-bench/CONFIGURATION.md`): `case_timeout_seconds` equals the
 tasks' declared `[agent] timeout_sec` so harbor's agent-timeout multiplier is
 exactly 1.0, and each ceiling sits above
 `ceil(trials / max_concurrency) × case_timeout`.

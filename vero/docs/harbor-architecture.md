@@ -99,7 +99,7 @@ candidate commit) and `database.json` (every evaluation and score). To recover a
 candidate from either one: `extract_harbor_session_archive`, then
 `git --git-dir=<session>/candidates/repository.git archive <sha>`. Re-scoring it
 against a benchmark's pinned baseline is
-`harness-engineering-bench/scripts/rescore_candidate.py --session <archive>`,
+`harness-opt-bench/scripts/rescore_candidate.py --session <archive>`,
 which lives out of tree because it needs that benchmark's `build.yaml`.
 
 A true *resume* is not available and is not the goal here: the optimizer's
@@ -179,7 +179,7 @@ renders the whole deployable
 task (Dockerfiles + compose + `serve.json` + cases + instructions). `serve.json`
 deserializes into `HarborDeploymentConfig` (`harbor/deployment.py`), which
 `build_harbor_components` turns into the live sidecar + verifier. So a benchmark
-is *fully specified by one YAML* (see `harness-engineering-bench/gaia/baseline/`).
+is *fully specified by one YAML* (see `harness-opt-bench/gaia/baseline/`).
 
 ## Observability
 
@@ -196,7 +196,7 @@ own W&B run.
 Read outside-in — from *what a benchmark declares* down to *how it runs and stays
 honest*. Paths are under `vero/src/vero/` unless noted.
 
-1. **What a benchmark is** — `harness-engineering-bench/gaia/baseline/build.yaml`
+1. **What a benchmark is** — `harness-opt-bench/gaia/baseline/build.yaml`
    and `harbor/build/specs.py` (`AgentAccessSpec`, `VerificationTargetSpec`) plus
    `harbor/build/config.py` (`HarborBuildConfig` and the field groups it is
    composed from). This is the declarative surface; everything else serves it.

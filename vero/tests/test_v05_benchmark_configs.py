@@ -1,6 +1,6 @@
 """Invariants the checked-in benchmark build YAMLs must satisfy.
 
-These read harness-engineering-bench, so they live on the branch that has it. If
+These read harness-opt-bench, so they live on the branch that has it. If
 that directory is missing the tests error rather than pass vacuously, which is
 how their predecessors drifted unnoticed.
 
@@ -24,7 +24,7 @@ import yaml
 
 from vero.harbor import load_harbor_build_config
 
-BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
+BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-opt-bench"
 
 BENCHMARKS = [
     "gaia",

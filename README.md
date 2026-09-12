@@ -50,7 +50,7 @@ includes a no-bind-mount `DockerSandbox` example.
 | --- | --- |
 | [`vero/`](vero/) | The `scaleapi-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
 | [`vero-tasks/`](vero-tasks/) | Narrow Python task types and schema-v1 evaluation runner |
-| [`harness-engineering-bench/`](harness-engineering-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
+| [`harness-opt-bench/`](harness-opt-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
 | [`legacy/`](legacy/) | The pre-v0.5 tree, i.e. the original VeRO paper code — reference only, not used by the current system |
 
 Start with the [generic C matrix-multiplication quickstart](vero/examples/c-matmul/),
@@ -60,7 +60,7 @@ command protocol without model credentials. Circle packing is a substantive
 coding-agent benchmark with exact geometry checks and inspectable search
 artifacts.
 
-For a full agent-optimization example, the [GAIA benchmark](harness-engineering-bench/gaia/)
+For a full agent-optimization example, the [GAIA benchmark](harness-opt-bench/gaia/)
 pairs a tool-using GPT-5.4 mini target with Harbor's canonical GAIA verifier and
 an immutable 20% / 40% / 40% development, validation, and test split.
 
@@ -90,7 +90,7 @@ v0.5 redesign relocated the paper-era tree into that directory rather than
 deleting it, so it sits in this branch next to the code that replaced it. Both
 the frozen ref and `legacy/` include the paper-era `vero-agents` and
 `vero-benchmarking` directories; their Harbor-native replacement is
-[`harness-engineering-bench/`](harness-engineering-bench/).
+[`harness-opt-bench/`](harness-opt-bench/).
 
 Prefer the frozen ref for reproduction, since it is the state that was actually
 published. Either way, note that both packages import as `vero` (`scale-vero`

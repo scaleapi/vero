@@ -1734,7 +1734,7 @@ class HarborBackend:
         # counts are recorded per case, so each gets the same mean/median/max
         # treatment; the trusted gateway metering below is per evaluation, so
         # only its mean is derivable here (per-case attribution of the gateway
-        # log is post-hoc — see harness-engineering-bench/scripts).
+        # log is post-hoc — see harness-opt-bench/scripts).
         case_distributions: dict[str, float] = {}
         for metric in (
             "wall_seconds",
