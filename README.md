@@ -48,7 +48,7 @@ includes a no-bind-mount `DockerSandbox` example.
 
 | Directory | Purpose |
 | --- | --- |
-| [`vero/`](vero/) | The `scale-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
+| [`vero/`](vero/) | The `scaleapi-vero` optimization kernel, runtime, CLI, and coding-agent adapters |
 | [`vero-tasks/`](vero-tasks/) | Narrow Python task types and schema-v1 evaluation runner |
 | [`harness-engineering-bench/`](harness-engineering-bench/) | Harbor-native target programs and end-to-end optimization benchmarks |
 | [`legacy/`](legacy/) | The pre-v0.5 tree, i.e. the original VeRO paper code — reference only, not used by the current system |
@@ -93,8 +93,8 @@ the frozen ref and `legacy/` include the paper-era `vero-agents` and
 [`harness-engineering-bench/`](harness-engineering-bench/).
 
 Prefer the frozen ref for reproduction, since it is the state that was actually
-published. Either way, note that both packages are named `scale-vero` and both
-import as `vero` (0.4.7 in `legacy/vero`, 0.5.0 in `vero/`), so **they cannot be
+published. Either way, note that both packages import as `vero` (`scale-vero`
+0.4.7 in `legacy/vero`, `scaleapi-vero` 0.5.0 in `vero/`), so **they cannot be
 installed into the same environment** — give the legacy package its own
 virtualenv. Development of the current system continues on `main`.
 

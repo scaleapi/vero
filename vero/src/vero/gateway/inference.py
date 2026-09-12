@@ -758,7 +758,7 @@ def create_inference_gateway_app(
     try:
         import httpx
     except ImportError as error:
-        raise RuntimeError("install scale-vero[harbor] to serve inference") from error
+        raise RuntimeError("install scaleapi-vero[harbor] to serve inference") from error
 
     base_url = (upstream_base_url or config.default_upstream_base_url).rstrip("/")
     store = InferenceUsageStore(config)

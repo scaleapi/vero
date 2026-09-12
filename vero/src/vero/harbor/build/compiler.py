@@ -106,7 +106,7 @@ def _rewrite_vero_path(pyproject: Path) -> None:
         return
     original = pyproject.read_text(encoding="utf-8")
     rewritten = re.sub(
-        r'(scale-vero\s*=\s*\{[^}]*?path\s*=\s*")[^"]*(")',
+        r'((?:scaleapi-vero|scale-vero)\s*=\s*\{[^}]*?path\s*=\s*")[^"]*(")',
         rf"\g<1>{VERO_DIR}\g<2>",
         original,
     )
@@ -509,7 +509,7 @@ def _render(
         from jinja2 import Environment, FileSystemLoader, StrictUndefined
     except ImportError as error:
         raise RuntimeError(
-            "install scale-vero[harbor] to compile Harbor tasks"
+            "install scaleapi-vero[harbor] to compile Harbor tasks"
         ) from error
     # A build may point `instruction_template` at a file of its own. Its
     # directory is searched first so the named template resolves, and the
@@ -544,7 +544,7 @@ def compile_harbor_task(
     source_root = (vero_root or Path(__file__).parents[4]).resolve()
     use_local_vero = _is_vero_source(source_root)
     if vero_root is not None and not use_local_vero:
-        raise ValueError(f"vero_root {source_root} is not a scale-vero source checkout")
+        raise ValueError(f"vero_root {source_root} is not a scaleapi-vero source checkout")
     protected = [Path(config.agent_repo).resolve()]
     if use_local_vero:
         protected.append(source_root)
@@ -766,9 +766,9 @@ def compile_harbor_task(
             None
             if use_local_vero
             else (
-                "scale-vero["
+                "scaleapi-vero["
                 + ("harbor,wandb" if config.wandb is not None else "harbor")
-                + f"]=={distribution_version('scale-vero')}"
+                + f"]=={distribution_version('scaleapi-vero')}"
             )
         ),
         "harbor_requirement": config.harbor_requirement,

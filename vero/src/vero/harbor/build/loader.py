@@ -141,7 +141,7 @@ def load_harbor_build_config(
         import yaml
     except ImportError as error:
         raise RuntimeError(
-            "install scale-vero[harbor] to load Harbor builds"
+            "install scaleapi-vero[harbor] to load Harbor builds"
         ) from error
 
     config_path = Path(path).expanduser().resolve()
