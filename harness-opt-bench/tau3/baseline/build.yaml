@@ -87,6 +87,26 @@ error_rate_threshold: 0.1
 # Unreachable: worst-case finalize (68400) + worst-case rescore_top_k=3
 # validation rescore (68400). A verifier timeout loses the score outright.
 verifier_timeout_seconds: 158400
+# Limits on the OUTER optimizer trial: the Modal sandbox the optimizer itself runs
+# in, not the nested evaluation. Every value reproduces what ran implicitly before
+# 2026-09, now written down so the task states its own bounds.
+#   sandbox timeout: Harbor's Modal default of 24 h. When it fires the sandbox is
+#   destroyed with no verifier and no archive, so the trial is lost.
+optimizer_sandbox_timeout_seconds: 86400
+#   idle timeout: reclaims a sandbox whose optimizer died with no running command.
+#   The inner evaluation app has used 3600 since July; the outer sandbox had none.
+optimizer_sandbox_idle_timeout_seconds: 3600
+#   agent clock: Harbor stops the optimizer here and STILL runs the verifier, so a
+#   runaway is scored and archived instead of lost at the sandbox timeout. Clean
+#   cells finish in 8-17 h; the longest finalization seen was ~3.5 h, which is
+#   what the 4 h gap to the sandbox timeout is for.
+optimizer_agent_timeout_seconds: 72000
+#   Harbor's default resolves to public internet; stated rather than inherited.
+optimizer_allow_internet: true
+#   optimizer_cpus / optimizer_memory_mb / optimizer_storage_mb are left unset on
+#   purpose: that is Modal's default (0.125-core / 128 MiB reservation, bursting to
+#   the host), which is what every August cell ran under. Set them once the first
+#   rebuttal wave has been read off the Modal dashboard.
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET

@@ -641,6 +641,8 @@ def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch
         agent_env: dict[str, str] = {}
         optimizer_harbor_args = ["--ek", "modal_vm_runtime=true"]
         extra_harbor_args = ["--ek", "app_name=nested-only"]
+        optimizer_sandbox_timeout_seconds = 86400
+        optimizer_sandbox_idle_timeout_seconds = 3600
         # Real configs always carry a name; the outer trial derives its Modal app
         # name from it so the sandbox is findable in a workspace of thousands.
         name = "vero/stub-benchmark"
@@ -683,6 +685,9 @@ def test_harbor_run_forwards_build_declared_optimizer_args(tmp_path, monkeypatch
     assert "app_name=nested-only" not in command
     # Build-declared flags come first so a command-line `--ek` can override them.
     assert command.index("modal_vm_runtime=true") < command.index("--yes")
+    # The outer sandbox clocks travel with the build's declared limits.
+    assert "sandbox_timeout_secs=86400" in command
+    assert "sandbox_idle_timeout_secs=3600" in command
 def test_kimi_gateway_args_override_the_openai_default(tmp_path):
     """kimi-cli reads OPENAI_BASE_URL inside the agent process, or ships to OpenAI.
 
@@ -879,3 +884,24 @@ def test_a_damaged_blank_list_still_hides_the_upstream_credential(tmp_path):
 
     blanked = {a.partition("=")[0] for a in _agent_environment_blanks(task)[1::2]}
     assert blanked == {"MY_PROVIDER_KEY", "VERO_INFERENCE_UPSTREAM_API_KEY"}
+
+
+def test_outer_sandbox_args_come_from_the_build_and_yield_to_the_caller():
+    from types import SimpleNamespace
+
+    from vero.harbor.cli import _outer_sandbox_args
+
+    cfg = SimpleNamespace(
+        optimizer_sandbox_timeout_seconds=86400,
+        optimizer_sandbox_idle_timeout_seconds=3600,
+    )
+    assert _outer_sandbox_args("modal", cfg, ()) == [
+        "--ek", "sandbox_timeout_secs=86400", "--ek", "sandbox_idle_timeout_secs=3600",
+    ]
+    assert _outer_sandbox_args("docker", cfg, ()) == []
+    # a caller's own --ek for a key wins, per harbor's last-value rule
+    assert _outer_sandbox_args("modal", cfg, ("--ek", "sandbox_timeout_secs=100")) == [
+        "--ek", "sandbox_idle_timeout_secs=3600",
+    ]
+    cfg.optimizer_sandbox_idle_timeout_seconds = None
+    assert _outer_sandbox_args("modal", cfg, ()) == ["--ek", "sandbox_timeout_secs=86400"]

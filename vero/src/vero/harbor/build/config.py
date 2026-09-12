@@ -222,6 +222,25 @@ class _HarborEvaluationFields(StrictModel):
             upstream via OPENAI_*, while the candidate keeps the metered,
             allow-listed gateway on VERO_AGENT_INFERENCE_*. Needed for
             benchmarks like tau3 whose environment makes its own model calls.
+        optimizer_agent_timeout_seconds: Harbor's clock on the optimizer
+            process in the OUTER trial (``[agent] timeout_sec``). When it fires,
+            Harbor stops the optimizer and still runs the verifier, so the trial
+            is scored and archived. None means no agent clock, and the only
+            bound is the sandbox timeout below, which loses the trial outright.
+        optimizer_sandbox_timeout_seconds: Modal's hard lifetime for the outer
+            sandbox (``--ek sandbox_timeout_secs``). When it fires the whole
+            sandbox is destroyed: no verifier, no archive. Harbor's own default
+            is 86400 and that is the default here, written down.
+        optimizer_sandbox_idle_timeout_seconds: Modal reclaims the outer sandbox
+            after this long with no running command
+            (``--ek sandbox_idle_timeout_secs``). None means never.
+        optimizer_allow_internet: ``[environment] allow_internet`` for the outer
+            sandbox. Harbor's default resolves to public access; declared so the
+            task documents it.
+        optimizer_cpus, optimizer_memory_mb, optimizer_storage_mb: Resource
+            declarations for the outer sandbox (``[environment]``). None leaves
+            the field undeclared, which is Modal's default: a reservation of
+            0.125 cores and 128 MiB that bursts to whatever the host has.
     """
 
     # Optional because a command evaluation_backend has neither; HarborBuildConfig
@@ -253,6 +272,15 @@ class _HarborEvaluationFields(StrictModel):
     # e.g. `--ek modal_vm_runtime=true` for a long trial whose teardown keeps
     # losing the DinD gRPC stream.
     optimizer_harbor_args: list[str] = Field(default_factory=list)
+    # Limits on the outer optimizer trial. Every default below is what ran
+    # implicitly before these fields existed; they exist so the task states them.
+    optimizer_agent_timeout_seconds: float | None = Field(default=None, gt=0)
+    optimizer_sandbox_timeout_seconds: int = Field(default=86400, ge=1)
+    optimizer_sandbox_idle_timeout_seconds: int | None = Field(default=None, ge=1)
+    optimizer_allow_internet: bool = True
+    optimizer_cpus: int | None = Field(default=None, ge=1)
+    optimizer_memory_mb: int | None = Field(default=None, ge=1)
+    optimizer_storage_mb: int | None = Field(default=None, ge=1)
     task_agent_timeout_seconds: float = Field(default=600.0, gt=0)
     task_environment: dict[str, str] = Field(default_factory=dict)
     task_services_use_upstream: bool = False
@@ -296,7 +324,30 @@ class _HarborEvaluationFields(StrictModel):
                 "optimizer_harbor_args override controlled flags: "
                 + ", ".join(conflicts)
             )
+        # The sandbox clocks have dedicated fields; a second copy here would win
+        # or lose on harbor's last-value rule depending on argument order.
+        clocks = [
+            argument
+            for argument in value
+            if argument.startswith(("sandbox_timeout_secs=", "sandbox_idle_timeout_secs="))
+        ]
+        if clocks:
+            raise ValueError(
+                "set optimizer_sandbox_timeout_seconds / "
+                "optimizer_sandbox_idle_timeout_seconds instead of: " + ", ".join(clocks)
+            )
         return value
+
+    @model_validator(mode="after")
+    def validate_optimizer_clocks(self):
+        agent = self.optimizer_agent_timeout_seconds
+        if agent is not None and agent >= self.optimizer_sandbox_timeout_seconds:
+            raise ValueError(
+                "optimizer_agent_timeout_seconds must be below "
+                "optimizer_sandbox_timeout_seconds, or the sandbox dies first and "
+                "the trial is lost instead of scored"
+            )
+        return self
 
 
 # The fields a command build must not set, derived from the class above so the

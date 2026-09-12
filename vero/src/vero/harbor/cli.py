@@ -400,6 +400,29 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
+def _outer_sandbox_args(
+    environment: str, config, extra: tuple[str, ...]
+) -> list[str]:
+    """Modal clocks for the outer trial's sandbox, from the build's declared limits.
+
+    ``sandbox_timeout_secs`` is the hard lifetime after which Modal destroys the
+    sandbox with no verifier and no archive; ``sandbox_idle_timeout_secs`` reclaims
+    one with no running command. Both were harbor defaults (24 h, never) until the
+    build config gained fields for them. A caller passing its own ``--ek`` for a
+    key wins, as with the app name.
+    """
+
+    if environment != "modal":
+        return []
+    args: list[str] = []
+    if not any("sandbox_timeout_secs=" in a for a in extra):
+        args += ["--ek", f"sandbox_timeout_secs={config.optimizer_sandbox_timeout_seconds}"]
+    idle = config.optimizer_sandbox_idle_timeout_seconds
+    if idle is not None and not any("sandbox_idle_timeout_secs=" in a for a in extra):
+        args += ["--ek", f"sandbox_idle_timeout_secs={idle}"]
+    return args
+
+
 def _agent_environment_blanks(task: Path) -> list[str]:
     """`--ae NAME=` for every declared credential, so the optimizer cannot read it.
 
@@ -819,6 +842,11 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         # Build-declared outer-trial flags first, so a command-line arg can still
         # override them (harbor's `--ek` takes the last value for a key).
         command.extend(config.optimizer_harbor_args)
+        command.extend(
+            _outer_sandbox_args(
+                environment, config, (*config.optimizer_harbor_args, *extra)
+            )
+        )
         # The derived app name defers to an explicit one from *either* source: a
         # build may declare `--ek app_name=` in optimizer_harbor_args just as a
         # caller may pass it on the command line, and appending ours after the

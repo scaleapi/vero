@@ -6,6 +6,11 @@ description = {{ description_toml }}
 
 [agent]
 user = "agent"
+{% if optimizer_agent_timeout is not none %}
+# Harbor stops the optimizer here and still runs the verifier. Must sit below the
+# Modal sandbox timeout (`--ek sandbox_timeout_secs`), which kills everything.
+timeout_sec = {{ optimizer_agent_timeout }}
+{% endif %}
 
 [verifier]
 environment_mode = "shared"
@@ -28,6 +33,16 @@ timeout_sec = {{ session_rescue_timeout }}
 
 [environment]
 build_timeout_sec = {{ build_timeout }}
+allow_internet = {{ "true" if optimizer_allow_internet else "false" }}
+{% if optimizer_cpus is not none %}
+cpus = {{ optimizer_cpus }}
+{% endif %}
+{% if optimizer_memory_mb is not none %}
+memory_mb = {{ optimizer_memory_mb }}
+{% endif %}
+{% if optimizer_storage_mb is not none %}
+storage_mb = {{ optimizer_storage_mb }}
+{% endif %}
 {% if secrets %}
 
 [environment.env]

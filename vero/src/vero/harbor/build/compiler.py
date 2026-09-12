@@ -813,6 +813,11 @@ def compile_harbor_task(
         "exhaust_budget": config.instruct_exhaust_budget,
         "disclose_budget": config.disclose_budget,
         "build_timeout": config.build_timeout_seconds,
+        "optimizer_agent_timeout": config.optimizer_agent_timeout_seconds,
+        "optimizer_allow_internet": config.optimizer_allow_internet,
+        "optimizer_cpus": config.optimizer_cpus,
+        "optimizer_memory_mb": config.optimizer_memory_mb,
+        "optimizer_storage_mb": config.optimizer_storage_mb,
         "verifier_timeout": (
             config.verifier_timeout_seconds or max(1, int(config.timeout_seconds))
         ),

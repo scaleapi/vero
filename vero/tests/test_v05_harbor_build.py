@@ -1627,3 +1627,49 @@ def test_custom_instruction_template_must_exist(tmp_path):
             tmp_path / "out",
             vero_root=Path(__file__).parents[1],
         )
+
+
+def test_outer_trial_limits_default_to_what_ran_implicitly(tmp_path):
+    """No agent clock, public internet, no resource declarations — harbor's defaults, now visible."""
+
+    output = compile_harbor_task(
+        _config(tmp_path), tmp_path / "compiled", vero_root=Path(__file__).parents[1]
+    )
+    task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    assert "timeout_sec" not in task["agent"]
+    assert task["environment"]["allow_internet"] is True
+    for key in ("cpus", "memory_mb", "storage_mb"):
+        assert key not in task["environment"]
+
+
+def test_outer_trial_limits_are_declared_when_set(tmp_path):
+    output = compile_harbor_task(
+        _config(
+            tmp_path,
+            optimizer_agent_timeout_seconds=72000,
+            optimizer_sandbox_timeout_seconds=86400,
+            optimizer_allow_internet=False,
+            optimizer_cpus=4,
+            optimizer_memory_mb=16384,
+            optimizer_storage_mb=20480,
+        ),
+        tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+    task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    assert task["agent"]["timeout_sec"] == 72000
+    assert task["environment"]["allow_internet"] is False
+    assert task["environment"]["cpus"] == 4
+    assert task["environment"]["memory_mb"] == 16384
+    assert task["environment"]["storage_mb"] == 20480
+
+
+def test_agent_clock_must_sit_below_sandbox_clock(tmp_path):
+    with pytest.raises(ValueError, match="below"):
+        _config(
+            tmp_path / "a",
+            optimizer_agent_timeout_seconds=86400,
+            optimizer_sandbox_timeout_seconds=86400,
+        )
+    with pytest.raises(ValueError, match="optimizer_sandbox_timeout_seconds"):
+        _config(tmp_path / "b", optimizer_harbor_args=["--ek", "sandbox_timeout_secs=1"])

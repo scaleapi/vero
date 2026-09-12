@@ -161,6 +161,14 @@ benchmark can be checked against the others at a glance.
   request log for `403 model_denied`, confirm the producer request count is
   non-zero — a zero count with a working optimizer means it found another way out
   — and confirm the `endpoint` is the one you intended.
+- **Outer-trial limits** (the sandbox the optimizer runs in, as opposed to the
+  nested evaluation): `optimizer_sandbox_timeout_seconds: 86400` (Modal destroys
+  the sandbox, trial lost), `optimizer_sandbox_idle_timeout_seconds: 3600`,
+  `optimizer_agent_timeout_seconds: 72000` (Harbor stops the optimizer and still
+  runs the verifier, so the trial is scored), `optimizer_allow_internet: true`.
+  CPU, memory and storage are deliberately undeclared, which is Modal's default
+  reservation of 0.125 cores / 128 MiB with burst. Before 2026-09 all of these were
+  implicit harbor/Modal defaults; the values are unchanged, only now stated.
 - **Telemetry**: W&B project `harness-opt-bench` for the whole suite
   (group per benchmark, `--param wandb_run=` for the per-launch name) with trace
   uploads; inner
