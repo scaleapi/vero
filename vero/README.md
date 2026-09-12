@@ -45,8 +45,9 @@ uv sync --extra optimize        # or --all-extras for the full toolchain
 uv run vero --help
 ```
 
-> Do **not** `pip install scale-vero` from public PyPI — that name is currently an
-> unrelated placeholder, not VeRO. Install from this checkout.
+> The published distribution is **`scaleapi-vero`** (`pip install scaleapi-vero`);
+> it imports as `vero`. Do **not** install `scale-vero` from PyPI — that name is
+> an unrelated placeholder squatted in July 2026, not VeRO.
 
 Python 3.11–3.13. 3.14 is excluded because litellm does not build there.
 

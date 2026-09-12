@@ -1,0 +1,86 @@
+name: publish
+
+# Build the `scaleapi-vero` distribution from vero/ and upload it to PyPI.
+#
+# Runs when a GitHub release is published, or by hand FROM A TAG (a manual run
+# on a branch fails the version guard below on purpose: a PyPI version is
+# immutable, so nothing may publish one that is not a tagged release). Publishing
+# uses PyPI's trusted publishing (OIDC): no API token is stored in this repository.
+#
+# Every action is pinned to a full commit SHA, and uv to an exact version, so
+# nothing mutable runs in the job that mints the publishing credential.
+# One-time setup on pypi.org, project `scaleapi-vero` -> Publishing -> add a
+# GitHub publisher with owner `scaleapi`, repository `vero`, workflow
+# `publish.yml`, environment `pypi`. Until that is done the publish job fails
+# with "invalid-publisher", which is the expected state on a fresh project.
+#
+# The distribution name differs from the import name on purpose: `scale-vero` is
+# squatted on PyPI by an unrelated placeholder, so the package installs as
+# `scaleapi-vero` and imports as `vero`.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  UV_PYTHON: "3.12"
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.11.28"
+
+      - name: Check the ref is a release tag naming the package version
+        # Applies to every trigger. The ref must be a tag `vX.Y.Z` equal to the
+        # version in pyproject.toml, or the upload either fails (version exists)
+        # or occupies a PyPI version that no release corresponds to.
+        working-directory: vero
+        run: |
+          test "${GITHUB_REF_TYPE}" = "tag" \
+            || { echo "ref ${GITHUB_REF} is not a tag; publish from a release tag"; exit 1; }
+          version="$(uv version --short)"
+          test "v${version}" = "${GITHUB_REF_NAME}" \
+            || { echo "tag ${GITHUB_REF_NAME} != v${version}"; exit 1; }
+
+      - name: Build sdist and wheel
+        working-directory: vero
+        run: uv build
+
+      - name: Confirm the built distribution is scaleapi-vero
+        working-directory: vero
+        run: ls dist/ && ls dist/ | grep -q '^scaleapi_vero-'
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: vero/dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write   # trusted publishing
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/

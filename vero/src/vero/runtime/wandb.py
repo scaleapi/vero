@@ -91,7 +91,7 @@ def _open_wandb_run(
             import wandb as client
         except ImportError as error:
             raise RuntimeError(
-                "W&B reporting requires `pip install scale-vero[wandb]`"
+                "W&B reporting requires `pip install scaleapi-vero[wandb]`"
             ) from error
     normalize_wandb_base_url()
     wandb_dir.mkdir(parents=True, exist_ok=True)
@@ -150,7 +150,7 @@ class WandbEventSink:
                 import wandb as client
             except ImportError as error:
                 raise RuntimeError(
-                    "W&B reporting requires `pip install scale-vero[wandb]`"
+                    "W&B reporting requires `pip install scaleapi-vero[wandb]`"
                 ) from error
 
         normalize_wandb_base_url()
@@ -261,7 +261,7 @@ class SidecarWandbSink:
                 import wandb as client
             except ImportError as error:
                 raise RuntimeError(
-                    "W&B reporting requires `pip install scale-vero[wandb]`"
+                    "W&B reporting requires `pip install scaleapi-vero[wandb]`"
                 ) from error
         self._wandb = client
         self.session_dir = session_dir
