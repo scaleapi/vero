@@ -232,11 +232,9 @@ optimizer model are supplied by the launcher through the environment and read
 once when the services start, so a running evaluation cannot be altered from
 outside.
 
-Each reported benchmark commits `baseline/compiled.manifest.json`, a checksum of
-every compiled file. `vero harbor build --check <manifest>` recompiles and fails
-if a checkout no longer reproduces the recorded task. The manifests are written
-with `inner_env=modal`; pass the same parameter when checking. Regenerate the manifest
-whenever the seed, the partitions, or the build configuration changes.
+`vero harbor build --manifest <file>` records a checksum of every compiled file,
+and `--check <file>` recompiles and fails if the output differs. Use them to
+prove that two checkouts produce the same task; nothing is committed.
 
 By default the compiled task carries a copy of the VeRO source tree so its
 images can be built without a package index. Setting `vero_requirement` to an

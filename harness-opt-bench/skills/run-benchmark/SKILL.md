@@ -85,16 +85,9 @@ Also send a small request through the configured endpoint using the exact wire
 model. A new optimizer harness or model should pass
 `vero/examples/harness-conformance/` before a full benchmark run.
 
-Each benchmark records `baseline/compiled.manifest.json`. Verify reproducibility
-with:
-
-```bash
-uv run vero harbor build \
-  --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
-  --param inner_env=<evaluation-environment> \
-  --output /tmp/harness-opt-check \
-  --check ../harness-opt-bench/<benchmark>/baseline/compiled.manifest.json
-```
+A compiled task is deterministic. To prove two checkouts agree, write a manifest
+from one with `vero harbor build --manifest <file>` and run `--check <file>` from
+the other.
 
 ## Launch discipline
 

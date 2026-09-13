@@ -683,8 +683,9 @@ def build_command(config_path, output, params, manifest_path, check_path):
 
     The output holds nothing per-run (tokens and the producer scope arrive by
     environment at launch), so two compiles of the same sources at the same vero
-    commit are byte-identical. `--manifest` records that state; `--check`
-    verifies a checkout still reproduces it, which is what "frozen" means here.
+    commit are byte-identical. `--manifest` records that state and `--check`
+    verifies another checkout reproduces it. Manifests are a tool for that
+    comparison, not something the repository carries.
     """
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
@@ -754,8 +755,8 @@ def _compiled_manifest(compiled: Path, config_path: Path) -> dict:
         commit = None
     return {
         "config": Path(config_path).name,
-        # Informational: the manifest is committed alongside the code it hashes, so
-        # its own commit can never equal HEAD. Drift is decided by the files alone.
+        # Informational: drift is decided by the files alone, so a manifest written
+        # at one commit can be checked from another.
         "vero_commit": commit,
         "files": files,
     }
