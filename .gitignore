@@ -18,3 +18,7 @@ secrets.env
 
 # Codex CLI local state, including the worktrees it checks out for its own runs.
 .codex/
+
+# Run artefacts and their write-ups live in runs/, a separate repository (git + DVC)
+# nested here. Nothing under it belongs to this repository.
+runs/
