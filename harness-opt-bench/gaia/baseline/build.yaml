@@ -126,6 +126,7 @@ optimizer_allow_internet: true
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
+  - MODAL_ENVIRONMENT  # which Modal environment the sandboxes land in; unset = workspace default
   - WANDB_API_KEY
   - WANDB_BASE_URL  # self-hosted or cloud W&B
 

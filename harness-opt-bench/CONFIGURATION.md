@@ -169,6 +169,9 @@ benchmark can be checked against the others at a glance.
   CPU, memory and storage are deliberately undeclared, which is Modal's default
   reservation of 0.125 cores / 128 MiB with burst. Before 2026-09 all of these were
   implicit harbor/Modal defaults; the values are unchanged, only now stated.
+- **Modal environment**: `MODAL_ENVIRONMENT=enterprise`, declared in every build's
+  `secrets` so it reaches both the launcher and the sidecar. Harbor gives the Modal SDK
+  no environment, so without it sandboxes land in the workspace default `main`.
 - **Telemetry**: W&B project `harness-opt-bench` for the whole suite
   (group per benchmark, `--param wandb_run=` for the per-launch name) with trace
   uploads; inner

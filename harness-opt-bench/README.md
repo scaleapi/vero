@@ -1,25 +1,65 @@
-# Harness engineering benchmarks
+# HarnessOpt-Bench: Evaluating LLMs at Harness Optimization
 
-`harness-opt-bench` contains end-to-end benchmarks for automatically
-improving the harness of an agent or the code of a component used to build
-agents. Each leaf directory pairs one editable target program with one immutable
-Harbor dataset and compiles them into an outer Harbor optimization task.
+[![Paper](https://img.shields.io/badge/arXiv-2608.06301-b31b1b.svg)](https://arxiv.org/abs/2608.06301)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
+[![Built on VeRO](https://img.shields.io/badge/built%20on-VeRO-2b6a4f.svg)](../vero/)
 
-The benchmark definitions intentionally keep three boundaries visible:
+An LLM's usefulness in an agentic system depends on its **harness** as much as
+on its weights: the prompts, tools, control flow, memory and orchestration code
+around it. HarnessOpt-Bench measures how well frontier LLMs improve such a
+harness themselves, under expensive and stochastic evaluation.
 
-- `target/` is the program the optimization agent may edit.
-- `partitions/` pins the cases and the development/validation/test split.
-- `build.yaml` is trusted configuration: model, evaluator, access policy,
-  budgets, and final scoring.
+An **optimizer**, an LLM paired with a coding harness, receives a target agent's
+seed harness, graded evaluation feedback and a fixed evaluation budget. It edits
+the harness and nominates a final candidate, which is scored by its normalized
+gain over the seed on a held-out test partition it never sees. A trusted
+execution environment enforces that boundary, meters the target agent's
+resource use, and keeps every candidate version for audit.
 
-In each benchmark, the complete development tasks and attachments are mounted
-read-only for the optimization agent. Development evaluations expose per-case
-results and complete Harbor trial records, including exact failures and
-target-agent logs. Validation remains aggregate-only, and
-test is reachable only by the trusted final verifier.
+![Optimizer sandbox, trusted evaluation server and model gateway, evaluation sandboxes](docs/figure1-architecture.png)
 
-The paper-era benchmark stack remains available on the `paper/v1` branch and
-the `paper-v1` tag. New benchmarks should use this Harbor-native layout.
+Every benchmark here is one optimization task: an editable target agent, an
+immutable Harbor dataset with a pinned development / validation / test split,
+and a `build.yaml` that VeRO compiles into an outer Harbor task. The optimizer
+runs inside that task with read access to the development cases, aggregate-only
+access to validation, and no access to test.
+
+- **Paper**: [HarnessOpt-Bench: Evaluating LLMs at Harness Optimization](https://arxiv.org/abs/2608.06301)
+- **Framework**: [VeRO](../vero/), which runs the version-evaluate-select loop, the evaluation sidecar and the metered model gateway
+- **Conventions**: [`CONFIGURATION.md`](CONFIGURATION.md) documents every shared setting and the per-benchmark values
+
+## Layout of a benchmark
+
+- `target/` is the program the optimizer may edit. The paper's GAIA variant uses
+  `target-shell/`, a non-functional stub, so gain there is the raw held-out score.
+- `partitions/` pins the cases and the split, as JSON lists of task ids.
+- `baseline/build.yaml` is trusted configuration: target model, evaluator,
+  access policy, budgets, gateway scopes, outer-trial limits and final scoring.
+- `baseline/compiled.manifest.json`, where present, is the SHA-256 manifest of
+  the compiled task; `vero harbor build --check` verifies a checkout reproduces it.
+
+Development evaluations expose per-case results and complete Harbor trial
+records, including exact failures and target-agent logs. Validation is
+aggregate-only, and test is reachable only by the trusted final verifier.
+
+## Running a cell
+
+```bash
+cd vero
+uv run vero harbor run \
+  --config ../harness-opt-bench/officeqa/baseline/build.yaml \
+  --env-file secrets.env --environment modal \
+  --agent opencode --model anthropic/claude-sonnet-5 \
+  --param optimizer_model=claude-sonnet-5 \
+  --param wandb_run=officeqa__claude-sonnet-5-opencode__r1 \
+  -o ../runs/officeqa/claude-sonnet-5-opencode-r1/jobs
+```
+
+`scripts/launch_cell.sh` wraps this so the run outlives the shell that started
+it. The env file carries the gateway upstream key, Modal and W&B credentials,
+and `MODAL_ENVIRONMENT`. See `CONFIGURATION.md` for how each optimizer harness
+spells its model on the wire; a mismatch with the producer allow-list is a 403
+on the first request.
 
 ## First run in a fresh checkout: fetch the task data
 
@@ -46,9 +86,10 @@ then scores a subset of the benchmark without saying so.
 
 ## Benchmarks
 
-Promoted benchmarks live at the top level. Task sets still under review live in
-`candidates/`; we work through the list in the paper's `benchmark-scoping.md` and
-promote a task set to the top level once it is ready.
+Promoted benchmarks live at the top level. The four the paper reports on are
+GAIA, OfficeQA, BrowseComp-Plus and Terminal-Bench; SWE-Atlas-QnA and tau3 are
+wired and runnable but their held-out rewards did not resolve the field, so they
+are not in the paper's tables.
 
 ### Promoted
 
