@@ -23,13 +23,9 @@ and score — a **program** (a single function up to a whole codebase), **text**
 VeRO was introduced to optimize agents, and the same version / evaluate / select
 loop applies to any of these.
 
-```mermaid
-flowchart LR
-    O["Optimizer<br/>edits the target"]
-    C["Candidate<br/>a commit of the target"]
-    E["Evaluator<br/>owns the cases and the score"]
-    O -- proposes --> C -- scored by --> E -- score and diagnostics --> O
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/loop.png" alt="The VeRO loop: the optimizer proposes a candidate, the evaluator scores it, and the score and diagnostics return to the optimizer" width="720">
+</p>
 
 The optimizer is a coding agent, a command, or a custom strategy, running
 locally or inside a Harbor container. The evaluator owns the cases and the

@@ -25,13 +25,9 @@ That is the right default for optimizing agents and for any untrusted or
 reproducibility-critical run. Lighter local backends exist for trusted work that
 does not need containment.
 
-```mermaid
-flowchart LR
-    O["Optimizer<br/>edits the target"]
-    C["Candidate<br/>a commit of the target"]
-    E["Evaluator<br/>owns the cases and the score"]
-    O -- proposes --> C -- scored by --> E -- score and diagnostics --> O
-```
+<p align="center">
+  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/loop.png" alt="The VeRO loop: the optimizer proposes a candidate, the evaluator scores it, and the score and diagnostics return to the optimizer" width="720">
+</p>
 
 Every candidate is a Git commit and stays selectable after it is scored. The
 loop is the same whichever backend produces and contains the candidate.
