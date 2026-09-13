@@ -14,6 +14,7 @@ task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404b
 task_manifest: ../partitions/manifest.json
 agent_import_path: terminal_bench_agent.agent:TerminalBenchAgent
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+vero_requirement: scaleapi-vero==0.6.0
 
 partition_files:
   development: ../partitions/development.json
