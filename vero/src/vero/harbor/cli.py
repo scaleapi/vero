@@ -418,21 +418,33 @@ def _harness_version_args(agent: str, config, extra: tuple[str, ...]) -> list[st
     release tag named by ``version``, but that script installs the *stable*
     release unless ``GOOSE_VERSION`` is set, so the pin is delivered both ways.
     """
-    if any(arg.startswith("version=") for arg in extra):
-        return []
-    versions = getattr(config, "optimizer_harness_versions", None) or {}
-    if not versions:
-        return []
-    version = versions.get(agent)
-    if version is None:
-        raise click.ClickException(
-            f"no pinned release for optimizer harness {agent!r}; add it to the "
-            "build's optimizer_harness_versions or pass --ak version=<release>"
-        )
-    if agent == "goose":
+    overrides = [
+        value.removeprefix("version=")
+        for flag, value in zip(extra, extra[1:])
+        if flag == "--ak" and value.startswith("version=")
+    ]
+    if overrides:
+        version, args = overrides[-1], []
+    else:
+        versions = getattr(config, "optimizer_harness_versions", None) or {}
+        if not versions:
+            return []
+        version = versions.get(agent)
+        if version is None:
+            raise click.ClickException(
+                f"no pinned release for optimizer harness {agent!r}; add it to the "
+                "build's optimizer_harness_versions or pass --ak version=<release>"
+            )
+        args = ["--ak", f"version={version}"]
+    if agent == "goose" and not any(
+        flag == "--ae" and value.startswith("GOOSE_VERSION=")
+        for flag, value in zip(extra, extra[1:])
+    ):
         tag = version if version.startswith("v") else f"v{version}"
-        return ["--ak", f"version={tag}", "--ae", f"GOOSE_VERSION={tag}"]
-    return ["--ak", f"version={version}"]
+        if not overrides:
+            args = ["--ak", f"version={tag}"]
+        args += ["--ae", f"GOOSE_VERSION={tag}"]
+    return args
 
 
 def _outer_sandbox_args(

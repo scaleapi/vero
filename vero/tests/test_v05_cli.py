@@ -950,8 +950,16 @@ def test_harness_version_args_pin_the_release_the_build_declares():
     assert _harness_version_args("goose", cfg, ()) == [
         "--ak", "version=v1.45.0", "--ae", "GOOSE_VERSION=v1.45.0",
     ]
-    # a caller's own --ak version= wins
+    # a caller's own --ak version= wins; a stray version= under another flag does not
     assert _harness_version_args("opencode", cfg, ("--ak", "version=1.18.30")) == []
+    assert _harness_version_args("opencode", cfg, ("--ae", "version=1.18.30")) == [
+        "--ak", "version=1.18.10",
+    ]
+    # goose keeps the env delivery when the caller overrides the release
+    assert _harness_version_args("goose", cfg, ("--ak", "version=1.50.0")) == [
+        "--ae", "GOOSE_VERSION=v1.50.0",
+    ]
+    assert _harness_version_args("goose", cfg, ("--ak", "version=v1.50.0", "--ae", "GOOSE_VERSION=v1.50.0")) == []
     # a build that pins nothing is left alone; one that pins others refuses the gap
     assert _harness_version_args("codex", SimpleNamespace(optimizer_harness_versions={}), ()) == []
     with pytest.raises(click.ClickException, match="no pinned release for optimizer harness 'codex'"):

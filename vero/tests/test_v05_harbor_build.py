@@ -1806,5 +1806,7 @@ def test_harness_versions_must_be_exact_releases(tmp_path):
     assert config.optimizer_harness_versions["opencode"] == "1.18.10"
     with pytest.raises(ValueError, match="exact release"):
         _config(tmp_path / "b", optimizer_harness_versions={"opencode": ""})
-    with pytest.raises(ValueError, match="exact release"):
-        _config(tmp_path / "c", optimizer_harness_versions={"opencode": ">= 1.18"})
+    for bad in (">= 1.18", "latest", "*", "1.18", "^1.18.10"):
+        with pytest.raises(ValueError, match="exact release"):
+            _config(tmp_path / "c", optimizer_harness_versions={"opencode": bad})
+    assert _config(tmp_path / "d", optimizer_harness_versions={"goose": "v1.45.0"})

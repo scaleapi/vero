@@ -338,6 +338,11 @@ class _HarborEvaluationFields(StrictModel):
 _HARBOR_ONLY_FIELDS = frozenset(_HarborEvaluationFields.model_fields)
 
 
+# An exact release: `1.18.10`, `v1.45.0`, `2.1.220-beta.1`. Not `latest`, `*`
+# or a range, which harbor would forward to the registry as a moving target.
+_RELEASE_VERSION = re.compile(r"v?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]+)?")
+
+
 class _OptimizerTrialFields(StrictModel):
     """Limits on the outer trial the optimizer itself runs in.
 
@@ -386,7 +391,7 @@ class _OptimizerTrialFields(StrictModel):
     @classmethod
     def validate_optimizer_harness_versions(cls, value: dict[str, str]) -> dict[str, str]:
         for agent, version in value.items():
-            if not agent.strip() or not version.strip() or " " in version:
+            if not agent.strip() or not _RELEASE_VERSION.fullmatch(version):
                 raise ValueError(
                     f"optimizer_harness_versions[{agent!r}] must be an exact release, "
                     f"got {version!r}"
