@@ -73,7 +73,7 @@
   "environment/agent-seed/uv.lock": "c7e865882c9ee4ea963fcc0511472286c3c22c8bb35051d5d4d9c8523e8a205a",
   "environment/docker-compose.yaml": "1e9d9c8496de0d73ff5bcbaa05a1fcaa4eb753ccff9933388a30cc25c3b1bba1",
   "environment/gateway/Dockerfile": "70d149f1928b135b8e11b7bb8d4ef70d81f331a6766bb3947192ff876e2eea26",
-  "environment/gateway/config.json": "51047a5c509fca6a38d44d5cd275a779df1e03fb0005b1cd15c90312bb6a157f",
+  "environment/gateway/config.json": "4578d06ed99a80678ea9748864d531833696130483eeafbb83717734ba3a27d4",
   "environment/gateway/launch.json": "462bcc8d2749f1364d79e14d36be7144a84441b6bb74c985f798115ef26636ae",
   "environment/main/seed.sh": "f51b70ef8fbc646ab6f129d2d7f8f3a72a1c37a9331691dcbd4f9b899dc7bc90",
   "environment/overlay/skills/evals/SKILL.md": "32cd544a37264d478b01985f11178f6476b093f6c6b2f682d4495b43a14e28cc",
@@ -81,12 +81,12 @@
   "environment/sidecar/cases/development.jsonl": "57896d3f3d12ceef4650246ae4f7e836879e0d0f40fbf4579156e7567f5bd25f",
   "environment/sidecar/cases/test.jsonl": "f294e63d251b10418e318a392b7a2825e4fed834e65a46dd5d63e1d32b059357",
   "environment/sidecar/cases/validation.jsonl": "30c87786e8441a2d50c14e0b09d8f2a4caf3b35709acee2bdbbca97c0e121fcb",
-  "environment/sidecar/serve.json": "e69dfcef0ecc43f0b43e999798e15b8a9139b680c4ceb7d9d2173b28bbb1382c",
-  "environment/vero/": "e12fbae407e3bf6acfaa6445e5debc683592b66180ab69b6e6eff2b395f93f30",
+  "environment/sidecar/serve.json": "3cb7e885d4ea7a842bd2e3252b4347463f7cbc6068a3870e2390eb0c5b50ff3a",
+  "environment/vero/": "b4b959797b70e9ae9583effc256dedfc5219e3b165aabfbd51a0c979f09e8818",
   "instruction.md": "044b5f8e0e5be1cb293898923b97cb3801399f2932dbec4b8a71f960c335576f",
   "solution/solve.sh": "c53ec7868ab20f6fa5bebc19c3c9a742e0419010be3f06e04e985d299c2de88c",
   "task.toml": "437fef0a28b782607ea05b9597725310e6e553c0d55448f173f281e20e032dad",
   "tests/test.sh": "b65e90e6d67aacedd559c6b1c9d0f1d5c5071ecc9178a5bd7f9e1066f332bb0d"
  },
- "vero_commit": "96e57cf22e5b7f3a4e8cea9ade61bf5f61c66692"
+ "vero_commit": "09deba52bd57913f86795423dd54c9ad5970d8ea"
 }

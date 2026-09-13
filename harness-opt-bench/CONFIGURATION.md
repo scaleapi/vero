@@ -97,6 +97,10 @@ not affect candidate selection.
 | [BrowseComp-Plus](browsecomp-plus/baseline/build.yaml) | `deepseek-v4-flash` | 33 / 66 / 66 | 0.462 ± 0.028 |
 | [Terminal-Bench](terminal-bench/baseline/build.yaml) | `grok-build-0.1` | 17 / 36 / 36 | 0.241 ± 0.013 |
 
+Target models are named without a provider. Each build maps the name to a
+deployment under the evaluation scope's `model_aliases`; pass
+`--param target_model_route=<provider/model>` to use a different one.
+
 Each baseline is the mean of three independent test rounds; the reported
 uncertainty is the standard deviation of those round means. GAIA uses a
 multimodal target because some held-out cases contain images. The reported GAIA
@@ -205,7 +209,8 @@ outside.
 
 Each reported benchmark commits `baseline/compiled.manifest.json`, a checksum of
 every compiled file. `vero harbor build --check <manifest>` recompiles and fails
-if a checkout no longer reproduces the recorded task. Regenerate the manifest
+if a checkout no longer reproduces the recorded task. The manifests are written
+with `inner_env=modal`; pass the same parameter when checking. Regenerate the manifest
 whenever the seed, the partitions, or the build configuration changes.
 
 By default the compiled task carries a copy of the VeRO source tree so its
@@ -234,6 +239,7 @@ uv run pytest tests/test_v05_benchmark_configs.py
 
 uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
+  --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ```
 

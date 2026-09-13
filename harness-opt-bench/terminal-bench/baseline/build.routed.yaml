@@ -1,11 +1,16 @@
-name: vero/optimize-browsecomp-plus-baseline
+name: vero/optimize-terminal-bench-baseline
 description: >-
-  Improve a deep-research agent on BrowseComp-Plus using its fixed corpus,
-  canonical BM25 index, and semantic answer evaluator.
+  Improve a terminal agent on Terminal-Bench 2.1 while preserving the Harbor
+  agent interface. Each task gives the agent a container and a goal; the task's
+  own tests decide pass or fail, so the reward is a pass rate.
+
+# Target model and baseline_reward are both measured and pinned. See
+# ../README.md for the model probe and runs/BASELINES.md for the pinning.
+
 agent_repo: target
-task_source: ../tasks
+task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
 task_manifest: ../partitions/manifest.json
-agent_import_path: browsecomp_plus_agent.agent:BrowseCompPlusAgent
+agent_import_path: terminal_bench_agent.agent:TerminalBenchAgent
 # Include the extra your evaluation environment needs.
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
@@ -14,51 +19,52 @@ partition_files:
   validation: ../partitions/validation.json
   test: ../partitions/test.json
 
-# Four full passes over each agent-visible partition.
+# total_cases = 4 full passes per partition (dev 17*4, validation 36*4).
 agent_access:
   - partition: development
     disclosure: full
     expose_case_resources: true
     total_runs: 100
-    total_cases: 132
+    total_cases: 68
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
     min_aggregate_cases: 5
     total_runs: 100
-    total_cases: 264
+    total_cases: 144
 
 selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.4619  # re-pinned 0.424 / 0.470 / 0.492 (sd 0.0283); was 0.4495. See runs/BASELINES.md
+    # Candidate failures score zero; evaluation-system failures are excluded.
+    baseline_reward: 0.2407  # K=3: 0.250 / 0.222 / 0.250 (sd 0.0131, n=108); was 0.2600 excluding seed-killed trials. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
     # Match the three-round procedure used to estimate the pinned baseline.
     n_attempts: 3
     aggregate_attempts: mean
 
-evaluation_set_name: browsecomp-plus
+evaluation_set_name: terminal-bench
 objective:
   selector:
     metric: score
   direction: maximize
-reward_mode: submit
-baseline_floor: false
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
 score_baseline: false
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: deepseek-v4-flash
+# Selected from a development-set probe for strong performance with room for
+# optimization. See ../README.md for the benchmark-level results.
+model: grok-build-0.1
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
 # Group evaluation sandboxes under one app and reclaim idle ones; drop these
 # for an environment that does not accept them.
 extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# Retry transient request failures during an evaluation. Whole-evaluation
-# retries remain limited to trusted final scoring.
 max_retries: 4
 retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
@@ -67,15 +73,15 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Above the 32,400-second worst case at the configured concurrency.
-timeout_seconds: 39600
-# Match the dataset's declared agent limit.
-case_timeout_seconds: 3600
-task_agent_timeout_seconds: 3600
-max_concurrency: 24
-error_rate_threshold: 0.1
+
+# Equal values preserve each task's own declared timeout through Harbor's ratio.
+case_timeout_seconds: 900
+task_agent_timeout_seconds: 900
+
+# Above the 36,000-second worst case at the configured concurrency.
+timeout_seconds: 43200
 # Covers final scoring plus validation rescoring.
-verifier_timeout_seconds: 75600
+verifier_timeout_seconds: 64800
 # Limits on the outer optimizer trial. The agent timeout leaves time for final
 # scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
@@ -95,54 +101,52 @@ secrets:
 # Telemetry (optional). Remove this block to run without it.
 wandb:
   project: harness-engineering-bench
-  group: browsecomp-plus
-  name: ${wandb_run:-browsecomp-plus}
-  tags: [browsecomp-plus]
+  group: terminal-bench
+  name: ${wandb_run:-terminal-bench}
+  tags: [terminal-bench]
   log_traces: true
+max_concurrency: 24
+error_rate_threshold: 0.1
 
-inference_gateway:
-  upstream_api_key_env: OPENAI_API_KEY
-  upstream_base_url_env: OPENAI_BASE_URL
-  # Enables reliable per-trial usage attribution.
-  request_log_attribution: true
-  producer:
-    allowed_models: ["${optimizer_model:-gpt-5.4}"]
-    max_concurrency: 8
-  # Case budgets control normal use; token caps stop runaway requests.
-  evaluation:
-    allowed_models: [deepseek-v4-flash]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
-    model_aliases:
-      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
-    max_requests: 200000
-    max_tokens: 2000000000  # 396 agent case-runs (132 dev + 264 validation)
-    max_concurrency: 64
-  # Keep final scoring capacity separate from search.
-  finalization:
-    allowed_models: [deepseek-v4-flash]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
-    model_aliases:
-      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
-    max_requests: 200000
-    max_tokens: 2000000000  # 66 test cases x3 attempts + rescore headroom
-    max_concurrency: 64
-
-instruct_multifidelity: true
-instruct_exhaust_budget: true
-
-# The task-owned evaluator needs direct endpoint access; the editable target
-# continues to receive only an evaluation-scoped gateway credential.
-task_services_use_upstream: true
-harness_user: null
-# Allow one full evaluation to complete in a foreground tool call.
+harness_user: harness
 agent_env:
-  BASH_MAX_TIMEOUT_MS: "14400000"
-  BASH_DEFAULT_TIMEOUT_MS: "14400000"
+  # Allow one full evaluation to complete in a foreground tool call.
+  BASH_MAX_TIMEOUT_MS: "28800000"
+  BASH_DEFAULT_TIMEOUT_MS: "28800000"
   ENABLE_BACKGROUND_TASKS: "0"
   FORCE_AUTO_BACKGROUND_TASKS: "0"
   UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
 
-task_environment:
-  BROWSECOMP_JUDGE_MODEL: gpt-4.1
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    # Optional explicit route for this optimizer model. This is the only
+    # difference from build.yaml.
+    model_aliases:
+      gpt-5.6-sol: ${optimizer_model_route:?set optimizer_model_route}
+    max_concurrency: 8
+  # Case budgets control normal use; token caps stop runaway requests.
+  evaluation:
+    allowed_models: [grok-build-0.1]
+    # Map the target model to a deployment; override per launch with
+    # --param target_model_route=<provider/model>.
+    model_aliases:
+      grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
+    max_requests: 200000
+    max_tokens: 1200000000
+    max_concurrency: 64
+  # Keep final scoring capacity separate from search.
+  finalization:
+    allowed_models: [grok-build-0.1]
+    # Map the target model to a deployment; override per launch with
+    # --param target_model_route=<provider/model>.
+    model_aliases:
+      grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
+    max_requests: 200000
+    max_tokens: 1100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true

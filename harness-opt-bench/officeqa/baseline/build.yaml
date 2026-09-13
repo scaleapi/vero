@@ -3,16 +3,13 @@ description: >-
   Improve a grounded-reasoning agent on OfficeQA (Treasury Bulletin corpus QA).
   The agent must search /app/corpus/ and write the exact answer to /app/answer.txt;
   scoring is rule-based (numeric/text match with 1% tolerance).
-# Local (vendored) dataset — OfficeQA is not in the Harbor hub, only the
-# harbor-datasets git repo. task_source points at the vendored task dirs; the
-# per-task task.toml carries docker_image=officeqa-corpus (full-corpus mode), so
-# extra_harbor_args uses --no-force-build to pull that prebuilt image instead of
-# building the guard Dockerfile.
+# The task source is vendored locally and uses a prebuilt corpus image.
 agent_repo: target
 task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: officeqa_agent.agent:OfficeQaAgent
-harbor_requirement: harbor[modal]==0.20.0
+# Include the extra your evaluation environment needs.
+harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
 partition_files:
   development: ../partitions/development.json
@@ -39,9 +36,7 @@ targets:
     baseline_reward: 0.3412  # re-pinned 0.354 / 0.296 / 0.374 (sd 0.0330); was 0.3603. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
-    # The held-out eval is noisy: score the selected candidate 3x per case and
-    # average, so the final reward is comparable to the K=3 pinned baseline.
-    # Per-target override — search/validation keep the global n_attempts (1).
+    # Match the three-round procedure used to estimate the pinned baseline.
     n_attempts: 3
     aggregate_attempts: mean
 
@@ -56,27 +51,16 @@ score_baseline: false
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: fireworks_ai/deepseek-v4-flash
-environment_name: ${inner_env:-modal}
-# --no-force-build pulls the prebuilt officeqa-corpus image (see task_source
-# note above); the --ek groups inner sandboxes under one dedicated Modal app.
+model: deepseek-v4-flash
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
+# Pull the prebuilt corpus image described above. The remaining options group
+# evaluation sandboxes under one app and reclaim idle ones; drop them for an
+# environment that does not accept them.
 extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# Raised from 1 on 2026-07-29. This field exists precisely so "a transient
-# upstream rate-limit storm during a mandatory evaluation does not fail
-# otherwise-good candidates" (see HarborBuildConfig), and it was set to the
-# least aggressive value. Measured that night: the shared Fireworks per-minute
-# bucket rejected 78,748 requests across one officeqa pass, sustaining
-# ~900-1,000/min for 24 minutes, and SEVEN rejections spread over ten minutes
-# were enough to destroy a 37-case evaluation. The retry stack during search is
-# only the target agent's own SDK (max_retries=8, ~1 min of jittered backoff,
-# and candidate-controlled so it cannot be relied on) plus this one; the
-# infrastructure_max_attempts retry below applies to trusted finalization only.
-# 4 retries at multiplier 2 from a 4s floor, capped at 120s, gives roughly four
-# more minutes of ride-out per case. That covers the bursts, though not a
-# 24-minute saturation -- for which the answer is fewer concurrent runs or a
-# larger provider quota, not more retrying.
+# Retry transient request failures during an evaluation. Whole-evaluation
+# retries remain limited to trusted final scoring.
 max_retries: 4
 retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
@@ -85,111 +69,75 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Unreachable: worst case is ceil(297/24) x 1800 = 23400s, every
-# finalize trial (99 held-out x n_attempts=3) hitting its own cap. Assumes
-# max_concurrency=24; recompute if that drops.
+# Above the 23,400-second worst case at the configured concurrency.
 timeout_seconds: 28800
-# Exactly the dataset's declared [agent] timeout_sec, so vero's derived
-# --agent-timeout-multiplier is 1.0 and the target agent gets precisely the
-# clock the benchmark intends. Harbor times agent setup, environment build and
-# verification on separate clocks with separate multipliers, so none of them
-# eat into this budget and no buffer is warranted.
+# Match the dataset's declared agent limit.
 case_timeout_seconds: 1800
 task_agent_timeout_seconds: 1800
-# Raised 8 -> 24 to cut finalize wall time ~3x (297 trials / concurrency x the
-# ~400s measured mean case wall: ~4.1h at 8, ~1.4h at 24 -- the mean, not the
-# 1800s cap above). Derived headroom: run #2 sustained 16 case slots
-# (2 detached evals x 8) at ~181k metered TPM/slot with upstream_errors=0, so 24
-# slots is ~1.5x a proven configuration. Watch upstream_errors in
-# artifacts/inference/usage.json; if it stays 0, there is room to go further.
 max_concurrency: 24
 error_rate_threshold: 0.1
-# Unreachable: worst-case finalize (23400) + worst-case rescore_top_k=3
-# validation rescore (23400). A verifier timeout loses the score outright.
+# Covers final scoring plus validation rescoring.
 verifier_timeout_seconds: 54000
-# Limits on the OUTER optimizer trial: the Modal sandbox the optimizer itself runs
-# in, not the nested evaluation. Every value reproduces what ran implicitly before
-# 2026-09, now written down so the task states its own bounds.
-#   sandbox timeout: Harbor's Modal default of 24 h. When it fires the sandbox is
-#   destroyed with no verifier and no archive, so the trial is lost.
+# Limits on the outer optimizer trial. The agent timeout leaves time for final
+# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
-#   idle timeout: reclaims a sandbox whose optimizer died with no running command.
-#   The inner evaluation app has used 3600 since July; the outer sandbox had none.
 optimizer_sandbox_idle_timeout_seconds: 3600
-#   agent clock: Harbor stops the optimizer here and STILL runs the verifier, so a
-#   runaway is scored and archived instead of lost at the sandbox timeout. Clean
-#   cells finish in 8-17 h; the longest finalization seen was ~3.5 h, which is
-#   what the 4 h gap to the sandbox timeout is for.
 optimizer_agent_timeout_seconds: 72000
-#   Harbor's default resolves to public internet; stated rather than inherited.
 optimizer_allow_internet: true
-#   optimizer_cpus / optimizer_memory_mb / optimizer_storage_mb are left unset on
-#   purpose: that is Modal's default (0.125-core / 128 MiB reservation, bursting to
-#   the host), which is what every August cell ran under. Set them once the first
-#   rebuttal wave has been read off the Modal dashboard.
+
+# Credentials your execution and telemetry services need. Edit to match your
+# deployment; each name must be set in the env file.
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
-  - MODAL_ENVIRONMENT  # which Modal environment the sandboxes land in; unset = workspace default
+  - MODAL_ENVIRONMENT
   - WANDB_API_KEY
-  - WANDB_BASE_URL  # self-hosted or cloud W&B
+  - WANDB_BASE_URL
 
-# candidate harness runs as an unprivileged uid, unable to read held-out state.
-harness_user: harness
-
-# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
-# Inner evals take 15-30 min; Claude Code's Bash tool caps a single call at
-# BASH_MAX_TIMEOUT_MS (default 600000=10min), which forced the agent into
-# --detach + background-poll + end-turn (it then ended its turn waiting for a
-# notification that never re-wakes a headless --print run). Raise the cap so the
-# agent can block on a whole eval in one Bash call.
-# The background-task vars are kept for defence in depth but do NOT actually
-# disable the Bash tool's run_in_background parameter -- the model can still
-# choose it, and run #2 did. The instruction is what forbids it.
-agent_env:
-  # Above this benchmark's widest single eval: a full validation pass is
-  # ceil(98/24) x 1800 = 9000s worst case.
-  BASH_MAX_TIMEOUT_MS: "10800000"
-  BASH_DEFAULT_TIMEOUT_MS: "10800000"  # same as max: an un-timed eval must still block
-  ENABLE_BACKGROUND_TASKS: "0"         # gates auto-backgrounding only (see above)
-  FORCE_AUTO_BACKGROUND_TASKS: "0"
-  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)
-  # default to symlinking their entry point into /usr/local/bin, which the
-  # unprivileged optimizer user cannot write: "Failed to install executable
-  # ... Permission denied". npm/nvm-based harnesses (claude-code, opencode)
-  # are unaffected, so this only bites when the harness changes.
-  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
-
+# Telemetry (optional). Remove this block to run without it.
 wandb:
   project: harness-engineering-bench
-  group: officeqa  # keeps the benchmark distinguishable in the shared project
-  name: ${wandb_run:-officeqa}  # per-launch label, e.g. --param wandb_run=officeqa__claude-sonnet-5
+  group: officeqa
+  name: ${wandb_run:-officeqa}
   tags: [officeqa]
   log_traces: true
+
+# Keep the candidate isolated from held-out state.
+harness_user: harness
+
+# Allow one full evaluation to complete in a foreground tool call.
+agent_env:
+  BASH_MAX_TIMEOUT_MS: "10800000"
+  BASH_DEFAULT_TIMEOUT_MS: "10800000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
 
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
-  # Stamp request-log records with a thread_id so per_trial_tokens.py can attribute
-  # gateway token usage to individual trials (trusted, vs. content-matching).
+  # Enables reliable per-trial usage attribution.
   request_log_attribution: true
   producer:
-    allowed_models: ["${optimizer_model:-openai/gpt-5.4}"]
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
-  # Token caps are a runaway backstop, not the spend control: the work is already
-  # bounded by the agent case budget above and by the fixed held-out set, so a cap
-  # that bites first only aborts authorized work. Sized at ~3M tokens per
-  # case-run, ~2.3x the worst measured cost (1.33M/case for an optimized
-  # candidate). ~90% of these tokens are cache reads, counted at full weight.
+  # Case budgets control normal use; token caps stop runaway requests.
   evaluation:
-    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    allowed_models: [deepseek-v4-flash]
+    # Map the target model to a deployment; override per launch with
+    # --param target_model_route=<provider/model>.
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000
     max_tokens: 3000000000  # 588 agent case-runs (196 dev + 392 validation)
     max_concurrency: 64
-  # Reserved so a search-phase overspend can never starve held-out scoring. This
-  # inherited evaluation's 100M, exhausted mid-finalize, and shipped reward 0.0.
+  # Keep final scoring capacity separate from search.
   finalization:
-    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    allowed_models: [deepseek-v4-flash]
+    # Map the target model to a deployment; override per launch with
+    # --param target_model_route=<provider/model>.
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000
     max_tokens: 3000000000  # 297 finalize trials (99 test x3) + 294 rescore
     max_concurrency: 64

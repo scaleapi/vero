@@ -1,22 +1,34 @@
 # tau3-bench
 
-This benchmark optimizes a customer-service agent that talks to the canonical
-tau3 simulated user and domain environment through the task's `tau3-runtime`
-MCP server. It spans airline, retail, telecom, and banking-knowledge domains.
+tau3 evaluates a customer-service agent that talks with a simulated user and a
+domain environment through each task's MCP server.
 
-The pinned 375-task dataset is split 75/150/150 for development, validation,
-and test. The deterministic split is stratified by domain.
+## At a glance
 
-Regenerate or verify the committed split from an exported dataset:
+| Item | Value |
+| --- | --- |
+| Domains | Airline, retail, telecom, and banking knowledge |
+| Cases | 375 |
+| Development / validation / test | 75 / 150 / 150 |
+| Editable harness | `baseline/target/` |
+| Split strategy | Domain |
+| Status | Archived; not part of the reported suite |
 
-```bash
+Development exposes complete task results. Validation is aggregate-only, and
+test is held out for final scoring.
+
+## Data and split
+
+Verify the deterministic split against an exported dataset:
+
+~~~bash
 python harness-opt-bench/scripts/partition_dataset.py tau3 \
-  --tasks-dir /path/to/exported/dataset \
-  --output-dir harness-opt-bench/candidates/tau3/partitions \
-  --fetch-registry
-
-python harness-opt-bench/scripts/partition_dataset.py tau3 \
-  --tasks-dir /path/to/exported/dataset \
-  --output-dir harness-opt-bench/candidates/tau3/partitions \
+  --tasks-dir <exported-tasks> \
+  --output-dir harness-opt-bench/archive/tau3/partitions \
   --check
-```
+~~~
+
+Use `--fetch-registry` when intentionally refreshing the pinned package.
+
+See [the baseline guide](baseline/README.md) for the editable target and build
+command.

@@ -1,39 +1,36 @@
-# SWE-Atlas-QnA codebase agent
+# SWE-Atlas-QnA editable target
 
-This leaf benchmark optimizes a small Harbor-native agent that explores the
-repository mounted at `/app` and writes its final answer to
-`/logs/agent/answer.txt`. The editable program controls its prompt, search
-strategy, shell tools, context management, and answer synthesis.
+The seed explores the repository mounted at `/app` and writes its answer to
+`/logs/agent/answer.txt`. The optimizer may change its prompt, search strategy,
+shell tools, context management, answer synthesis, and dependencies.
 
-Two pinned target builds share this seed, split, budgets, and access policy;
-they differ only in target model, and each pins the seed floor measured on
-**its own** model — a delta against the other build's floor is a model
-comparison, not an optimization result:
+Two builds share the same target, split, budgets, and access policy:
 
-| build | target model | pinned `baseline_reward` |
-| --- | --- | --- |
-| `build.yaml` | `fireworks_ai/gpt-oss-120b` | 0.0667 (K=3, n=150) |
-| `build.gpt54mini.yaml` | `gpt-5.4-mini` | 0.1216 (K=3, n=148) |
+| Build | Target model | Pinned seed baseline |
+| --- | --- | ---: |
+| `build.yaml` | `gpt-oss-120b` | 0.0667 |
+| `build.gpt54mini.yaml` | `gpt-5.4-mini` | 0.1216 |
 
-Both floors were measured with `scripts/rescore_candidate.py --seed`, the same
-path that produced every other pinned baseline in the suite. Trials the seed
-itself killed score 0 (they are harness headroom, and finalization taxes a
-candidate's dead attempts the same way); trials the platform killed are
-excluded. For gpt-5.4-mini that prices in the seed's ~8% empty-completion
-fail-fast — the largest single piece of fixable headroom in this seed.
+Each baseline belongs to its configured model. Comparing a candidate against the
+other build's baseline would mix harness improvement with a model change.
+Candidate-caused failures score zero; evaluation-system failures are excluded.
 
-The Harbor tasks retain their canonical rubric-based verifier. That verifier
-needs `OPENAI_API_BASE`; the target agent uses `OPENAI_BASE_URL`. They may
-point to the same OpenAI-compatible endpoint.
+## Compile
 
-Compile from the repository root:
+From the repository root:
 
-```bash
+~~~bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../harness-opt-bench/swe-atlas-qna/baseline/build.yaml \
-  --output ../harness-opt-bench/swe-atlas-qna/baseline/compiled
-```
+  --config ../harness-opt-bench/archive/swe-atlas-qna/baseline/build.yaml \
+  --param inner_env=<evaluation-environment> \
+  --output <output-directory>
+~~~
 
-For a real run, provide `OPENAI_API_KEY`, `OPENAI_BASE_URL`,
-`OPENAI_API_BASE`, and the Modal credentials declared in `build.yaml`.
+Use `build.gpt54mini.yaml` to compile the alternate target-model build. The
+`VERO_SKIP_SECRET_CHECK` setting is appropriate only for compile-time
+validation.
+
+Dataset and split details are in the
+[SWE-Atlas-QnA overview](../README.md). For a real optimization run, follow the
+shared [`run-benchmark` guide](../../../skills/run-benchmark/SKILL.md).

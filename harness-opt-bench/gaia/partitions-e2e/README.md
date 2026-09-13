@@ -1,7 +1,8 @@
-# e2e smoke partitions
+# GAIA smoke-test split
 
-Two development, three validation and three test cases, the first entries of the
-real GAIA shell partitions. Used only by `baseline/build.shell.e2e.yaml`, whose
-purpose is to exercise the whole optimizer trial (compile, gateway, evaluations,
-agent clock, finalization, session archive) in well under an hour. Scores from it
-mean nothing and are never reported.
+This split contains two development, three validation, and three test cases from
+the full GAIA shell split.
+
+It is used only by `baseline/build.shell.e2e.yaml` to exercise compilation,
+evaluation, final scoring, and artifact creation quickly. Its scores are not
+benchmark results and must not be reported.

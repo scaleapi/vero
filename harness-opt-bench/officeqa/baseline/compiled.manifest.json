@@ -73,7 +73,7 @@
   "environment/agent-seed/uv.lock": "256b8b915d8a1b7a8cc19619fa96d2f32869d615e9fe1055686228c02f138658",
   "environment/docker-compose.yaml": "1e9d9c8496de0d73ff5bcbaa05a1fcaa4eb753ccff9933388a30cc25c3b1bba1",
   "environment/gateway/Dockerfile": "70d149f1928b135b8e11b7bb8d4ef70d81f331a6766bb3947192ff876e2eea26",
-  "environment/gateway/config.json": "f218803a48ce1f927020df0c7443e5229689985cfc88f5f715b2658bf89e0507",
+  "environment/gateway/config.json": "fc3b41461cbb0bb982a0f50489a459a3555f2ba0c60f1d7b4723d939777cf35c",
   "environment/gateway/launch.json": "462bcc8d2749f1364d79e14d36be7144a84441b6bb74c985f798115ef26636ae",
   "environment/main/seed.sh": "f51b70ef8fbc646ab6f129d2d7f8f3a72a1c37a9331691dcbd4f9b899dc7bc90",
   "environment/overlay/skills/evals/SKILL.md": "32cd544a37264d478b01985f11178f6476b093f6c6b2f682d4495b43a14e28cc",
@@ -81,13 +81,13 @@
   "environment/sidecar/cases/development.jsonl": "8c4df163f6fa4b495392552e3fa9da8a1f743486783888d5a9150a391dd06e75",
   "environment/sidecar/cases/test.jsonl": "d96a98c9ae504045f9cb2a8d7fb8fa1815528237bb68855d5e0fde8c6b031b81",
   "environment/sidecar/cases/validation.jsonl": "14d86ab3071fb4091efd7b80687b1b8d8176c6b76dc1676d9a72a27f9d99032f",
-  "environment/sidecar/serve.json": "081ca2451acfb2df010c4b749baa01d4bce4727f5ad7ae511b08a070059059fa",
+  "environment/sidecar/serve.json": "1b104eaae49398fd45f1a56c6bc4c0915bb1de680895ff30594ca8df93bc0ae6",
   "environment/sidecar/task-source/": "be9f7f935eac438753a93bc1dccb66dc82a47c2911a9befad507d8f1e4e0480b",
-  "environment/vero/": "e12fbae407e3bf6acfaa6445e5debc683592b66180ab69b6e6eff2b395f93f30",
+  "environment/vero/": "b4b959797b70e9ae9583effc256dedfc5219e3b165aabfbd51a0c979f09e8818",
   "instruction.md": "c9f995857987ecbf98ca9d1bb35dd3ecee240fc50c906cda2a464f75d879471b",
   "solution/solve.sh": "6472c890bec7a80fbbf5a07e232ee0aa33a2636ca34e919bb4083e470bf11630",
   "task.toml": "b96923cb61c2d71edd27ce027a00cbe1d535290285c8e5416c1b218ed8eb1ac6",
   "tests/test.sh": "b65e90e6d67aacedd559c6b1c9d0f1d5c5071ecc9178a5bd7f9e1066f332bb0d"
  },
- "vero_commit": "96e57cf22e5b7f3a4e8cea9ade61bf5f61c66692"
+ "vero_commit": "09deba52bd57913f86795423dd54c9ad5970d8ea"
 }

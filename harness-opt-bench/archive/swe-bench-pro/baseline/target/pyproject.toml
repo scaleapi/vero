@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Editable Harbor-native SWE-bench-Pro baseline for VeRO"
 # Floor at 3.12 (harbor 0.20.0 requires it; ">=3.11" made the package's own
 # `uv run pytest` unresolvable). Cap below 3.14: an uncapped range lets uv
-# resolve to 3.14, whose litellm/pyo3 build fails.
+# resolve to 3.14, which is not supported by all transitive dependencies.
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "harbor==0.20.0",

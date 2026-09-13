@@ -1,26 +1,36 @@
 # SWE-Atlas-QnA
 
-This benchmark optimizes an agent that investigates a checked-out software
-repository and writes an evidence-backed answer to a deep codebase question.
-Scoring is the canonical rubric judge shipped in each Harbor task.
+SWE-Atlas-QnA evaluates an agent that investigates a checked-out repository and
+writes an evidence-backed answer to a codebase question.
 
-The pinned 124-task dataset is split 25/49/50 for development, validation, and
-test. The split is deterministic and stratified by source repository so that
-the ten represented codebases occur across the three partitions.
+## At a glance
 
-Regenerate or verify the committed split from an exported dataset:
+| Item | Value |
+| --- | --- |
+| Cases | 124 |
+| Development / validation / test | 25 / 49 / 50 |
+| Editable harness | `baseline/target/` |
+| Split strategy | Source repository |
+| Scoring | Canonical rubric judge |
+| Status | Archived; not part of the reported suite |
 
-```bash
+Development exposes complete task results and repositories. Validation is
+aggregate-only, and test is held out for final scoring.
+
+## Data and split
+
+The split is deterministic and keeps all ten source repositories represented
+across partitions. Verify it against an exported dataset:
+
+~~~bash
 python harness-opt-bench/scripts/partition_dataset.py swe-atlas-qna \
-  --tasks-dir /path/to/exported/dataset \
-  --output-dir harness-opt-bench/candidates/swe-atlas-qna/partitions \
-  --fetch-registry
-
-python harness-opt-bench/scripts/partition_dataset.py swe-atlas-qna \
-  --tasks-dir /path/to/exported/dataset \
-  --output-dir harness-opt-bench/candidates/swe-atlas-qna/partitions \
+  --tasks-dir <exported-tasks> \
+  --output-dir harness-opt-bench/archive/swe-atlas-qna/partitions \
   --check
-```
+~~~
 
-`--fetch-registry` requires the pinned Harbor package and verifies every task
-name and content digest against Harbor Hub.
+Use `--fetch-registry` when intentionally refreshing the pinned package. Review
+the task manifest and split before accepting new results.
+
+See [the baseline guide](baseline/README.md) for the editable target and the two
+target-model builds.

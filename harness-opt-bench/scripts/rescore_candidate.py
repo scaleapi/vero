@@ -19,7 +19,7 @@ Run from the vero checkout so PyYAML and uv are available:
 
     cd vero && uv run python \\
       ../harness-opt-bench/scripts/rescore_candidate.py \\
-      --session ../runs/officeqa/claude-sonnet-5-run2/jobs/*/task__*/verifier/session.tar.gz \\
+      --session ../runs/officeqa/example-run/jobs/*/task__*/verifier/session.tar.gz \\
       --benchmark officeqa --cases 2 --rounds 1
 
 Aggregation matches runs/recompute.py exactly: pooled mean over every scored
@@ -57,10 +57,21 @@ def load_build(benchmark: str) -> tuple[dict, Path]:
     return yaml.safe_load(path.read_text()), path
 
 
-def resolve_param(value: str) -> str:
-    """Resolve a `${name:-default}` placeholder to its default."""
-    match = re.fullmatch(r"\$\{[^:}]+:-([^}]*)\}", str(value))
-    return match.group(1) if match else str(value)
+def resolve_param(value: str, params: dict[str, str] | None = None) -> str:
+    """Resolve a `${name:-default}` or `${name:?message}` placeholder.
+
+    `--param name=value` supplies the value; a `:?` placeholder with no value is
+    an error, as it is for `vero harbor run`.
+    """
+    match = re.fullmatch(r"\$\{([^:}]+)(?::([-?])([^}]*))?\}", str(value))
+    if not match:
+        return str(value)
+    name, kind, rest = match.groups()
+    if params and name in params:
+        return params[name]
+    if kind == "-":
+        return rest
+    sys.exit(f"build parameter {name!r} is unset: pass --param {name}=<value>")
 
 
 def open_session(session: str, workdir: Path) -> Path:
@@ -129,6 +140,17 @@ def extract_candidate(session_dir: Path, version: str, dest: Path) -> None:
     log(f"extracted candidate {version[:12]} -> {dest}")
 
 
+def routed_model(build: dict, model: str, params: dict[str, str]) -> str:
+    """The deployment the gateway would route `model` to, or `model` itself.
+
+    A build names the target model without a provider and maps it to a
+    deployment under the evaluation scope's `model_aliases`. This runs harbor
+    against the upstream directly, so apply the same mapping here.
+    """
+    aliases = (build.get("inference_gateway") or {}).get("evaluation", {}).get("model_aliases") or {}
+    return resolve_param(aliases.get(model, model), params)
+
+
 def harbor_command(
     *,
     build: dict,
@@ -139,6 +161,7 @@ def harbor_command(
     attempts: int,
     concurrency: int,
     model: str,
+    params: dict[str, str],
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -158,11 +181,11 @@ def harbor_command(
         "--python", str(build.get("harbor_python_version", "3.12")),
         "--no-config", "--no-env-file",
         "--project", str(workspace),
-        "--with", build.get("harbor_requirement", "harbor[modal]==0.20.0"),
+        "--with", build.get("harbor_requirement", "harbor==0.20.0"),
         "harbor", "run", "--yes",
         *source_args,
         "--agent-import-path", build["agent_import_path"],
-        "-e", resolve_param(build.get("environment_name", "modal")),
+        "-e", resolve_param(build["environment_name"], params),
         "-m", str(model),
         "-n", str(concurrency),
         "--n-attempts", str(attempts),
@@ -223,9 +246,12 @@ def main() -> int:
     parser.add_argument("--attempts", type=int, default=1,
                         help="attempts per case within a round (default 1)")
     parser.add_argument("--concurrency", type=int, default=24)
+    parser.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
+                        help="build parameter, e.g. inner_env=modal (repeatable)")
     parser.add_argument("--output", help="output dir (default: a temp dir)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    params = dict(item.split("=", 1) for item in args.param)
 
     build, build_path = load_build(args.benchmark)
     outdir = Path(args.output).resolve() if args.output else Path(
@@ -262,8 +288,8 @@ def main() -> int:
     log(f"{len(tasks)} {args.partition} case(s), {args.rounds} round(s), "
         f"{args.attempts} attempt(s)/case, concurrency {args.concurrency}")
 
-    # Some tasks reference the base URL under litellm's alias rather than
-    # OPENAI_BASE_URL -- swe-atlas-qna's rubric judge declares
+    # Some tasks reference the base URL under an alternate compatibility name.
+    # swe-atlas-qna's rubric judge declares
     # `EVAL_BASE_URL = "${OPENAI_API_BASE}"` in [verifier.env], and harbor aborts
     # the whole job with "Missing Environment Variables" before running a single
     # trial if it is unset. Mirror it so a benchmark's own judge can start.
@@ -284,7 +310,8 @@ def main() -> int:
         command = harbor_command(
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
-            model=args.model or build["model"],
+            model=routed_model(build, args.model or build["model"], params),
+            params=params,
         )
         if args.dry_run:
             print(" ".join(command))

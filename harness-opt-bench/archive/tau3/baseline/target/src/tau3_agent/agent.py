@@ -29,12 +29,7 @@ from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
 def _is_reasoning_model(model: str) -> bool:
-    """Whether `model` is an OpenAI reasoning model.
-
-    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
-    reasoning_effort, and every gpt-5 model rejects max_tokens. Fireworks-served
-    open models match none of these prefixes, so they keep the legacy shape.
-    """
+    """Whether `model` uses the reasoning-model request fields."""
     name = model.lower()
     return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
 
@@ -307,10 +302,8 @@ class Tau3Agent(BaseAgent):
             environment, session_id, "start_conversation", {}
         )
         self._trace({"turn": 0, "tool": "start_conversation", "result": first_text})
-        # Stateless Chat Completions: the whole conversation lives in `messages`
-        # and is resent each turn. This works across every provider (unlike the
-        # OpenAI-only Responses API) and keeps full history across plain-text
-        # customer turns (the previous_response_id reset used to drop it).
+        # Keep the whole conversation in `messages` and resend it each turn so
+        # plain-text customer turns remain in context.
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": INSTRUCTIONS},
             {
@@ -364,15 +357,8 @@ class Tau3Agent(BaseAgent):
             )
 
             if calls:
-                # Every call the model made is executed, in order. The target
-                # model does return more than one per turn, and the usual guard
-                # -- parallel_tool_calls: False -- is not available here:
-                # litellm rejects it for fireworks_ai with UnsupportedParamsError.
-                # Acting on only the first would silently skip the rest, which
-                # for a customer-service agent means a verified identity with no
-                # message sent. Chat Completions requires exactly one tool
-                # message per tool_call id, so the assistant turn lists them all
-                # and each gets its reply below.
+                # Execute every requested call in order and return one tool
+                # message for each id so the conversation remains valid.
                 assistant: dict[str, Any] = {
                     "role": "assistant",
                     "tool_calls": [
