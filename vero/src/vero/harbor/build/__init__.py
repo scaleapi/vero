@@ -6,7 +6,7 @@ HarborBuildConfig and enforces the rules that span groups, loader.py reads the
 YAML into one, and compiler.py lowers it into a task directory.
 """
 
-from vero.harbor.build.compiler import compile_harbor_task
+from vero.harbor.build.compiler import compile_harbor_task, declared_credentials
 from vero.harbor.build.config import HarborBuildConfig
 from vero.harbor.build.loader import load_harbor_build_config
 from vero.harbor.build.specs import (

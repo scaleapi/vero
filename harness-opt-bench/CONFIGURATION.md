@@ -208,8 +208,8 @@ repeat their meaning.
   It carries the extra for the evaluation environment and can be overridden with
   `--param harbor_requirement=`.
 - `secrets` lists the environment variable names the run needs for its execution
-  and telemetry services. Every name must be present in the env file; the
-  compiler refuses to compile otherwise. Edit the list and the env file together.
+  and telemetry services. `vero harbor run` refuses to launch while any is
+  unset. Edit the list and the env file together.
 - `wandb` configures telemetry and is optional. Remove the block to run without it.
 - `extra_harbor_args` passes options to the evaluation sandboxes. The defaults
   group them under one application and reclaim idle ones; remove them for an

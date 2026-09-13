@@ -74,7 +74,7 @@ Compile from the repository root:
 
 ~~~bash
 cd vero
-VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+uv run vero harbor build \
   --config ../harness-opt-bench/terminal-bench/baseline/build.yaml \
   --param inner_env=<evaluation-environment> \
   --output <output-directory>

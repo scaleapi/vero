@@ -35,13 +35,6 @@ jobs:
     name: vero
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      # The task compiler refuses to emit a task whose declared credentials are
-      # absent ("declared task credentials are missing", compiler.py), so the
-      # build tests need these present. Placeholders only: nothing dials them,
-      # and port 1 fails fast instead of hanging if anything ever tries.
-      OPENAI_API_KEY: ci-not-a-real-key
-      OPENAI_BASE_URL: http://127.0.0.1:1/v1
     steps:
       - uses: actions/checkout@v4
 

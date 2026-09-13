@@ -100,14 +100,14 @@ inspect the generated task:
 
 ```bash
 cd vero
-VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
   --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ```
 
-The compiler otherwise requires every credential the benchmark declares to be
-present in the environment; the variable skips that check for a compile-only run.
+Compiling needs no credentials. `vero harbor run` checks that every credential
+the benchmark declares is set before it launches anything.
 
 See [`CONFIGURATION.md`](CONFIGURATION.md) for the shared evaluation protocol,
 per-benchmark values, and rules for changing a benchmark.

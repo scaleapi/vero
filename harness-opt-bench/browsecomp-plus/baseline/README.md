@@ -15,12 +15,11 @@ Prepare the generated tasks as described in the
 
 ~~~bash
 cd vero
-VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+uv run vero harbor build \
   --config ../harness-opt-bench/browsecomp-plus/baseline/build.yaml \
   --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ~~~
 
-The `VERO_SKIP_SECRET_CHECK` setting is appropriate only for compile-time
-validation. For a real optimization run, use a local credential file and follow
+For a real optimization run, use a local credential file and follow
 the shared [`run-benchmark` guide](../../skills/run-benchmark/SKILL.md).

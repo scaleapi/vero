@@ -468,9 +468,9 @@ class _TaskEnvironmentFields(StrictModel):
     """Credentials, model access, and reporting for the containers.
 
     Attributes:
-        secrets: Environment variable names routed into the task. Their presence
-            on the build host is checked at compile time unless
-            VERO_SKIP_SECRET_CHECK is set.
+        secrets: Environment variable names routed into the task. `vero harbor
+            run` refuses to launch while any is unset; compiling needs only the
+            names.
         inference_gateway: Gateway credential source and per-scope policies; see
             InferenceGatewaySpec. Omit for no metered model access.
         wandb: Trusted-side Weights & Biases reporting from the evaluation
