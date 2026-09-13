@@ -1,11 +1,20 @@
-# VeRO: a harness for agents to optimize programs, text, and agents
+<p align="center">
+  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/vero-banner.png" alt="Illustration of VeRO's iterative optimization loop" width="100%">
+</p>
+
+<h1 align="center">VeRO</h1>
+
+<p align="center"><strong>A harness for agents to optimize programs, text, and agents</strong></p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2602.22480"><img src="https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg" alt="Paper"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+</p>
+
 > **Looking for the code from the VeRO paper?** See
 > [Paper reproduction](#paper-reproduction) — reproduce from the `paper-v1`
 > tag, or read the same code in place under [`legacy/`](legacy/).
-
-[![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
 VeRO gives a coding agent something to edit, an evaluation boundary, and durable
 memory of every candidate it tried. The target is anything you can put under Git
@@ -14,26 +23,22 @@ and score — a **program** (a single function up to a whole codebase), **text**
 VeRO was introduced to optimize agents, and the same version / evaluate / select
 loop applies to any of these.
 
-```
-  ┌─────────────────────────┐   submit candidate    ┌─────────────────────────┐
-  │  candidate production   ├──────────────────────►│  evaluation service     │
-  │                         │                       │                         │
-  │  coding agent, command, │◄──────────────────────┤  owns cases + scoring   │
-  │  or custom strategy;    │  score + diagnostics  │                         │
-  │  edits its own Git      │                       │  development: may ask   │
-  │  worktree per candidate │                       │  validation:  aggregate │
-  └───────────┬─────────────┘                       │  test:        withheld  │
-              │ commit                              └───────────┬─────────────┘
-              ▼                                                 │ report
-  ┌─────────────────────────┐    next round     ┌───────────────▼─────────────┐
-  │  candidate history:     │◄──────────────────┤  selection: keep the best   │
-  │  every version kept,    │                   │  feasible candidate         │
-  │  each one re-selectable │                   └─────────────────────────────┘
-  └─────────────────────────┘
+```mermaid
+flowchart LR
+    S["OptimizationStrategy<br/>chooses what to try"]
+    P["CandidateProducer<br/>creates a Candidate"]
+    E["EvaluationBackend<br/>scores the Candidate"]
+    X["SelectionPolicy<br/>chooses the best"]
+    R[("CandidateRepository<br/>keeps every Candidate")]
 
-  Every model call on both sides goes through the inference gateway, which holds
-  the provider key and meters spend in tokens against a per-scope budget.
+    S --> P --> E --> X --> S
+    P --> R
+    R -. history .-> S
 ```
+
+An `OptimizationSession` owns the run; its `Optimizer` repeats this loop.
+Every model call on both sides goes through the inference gateway, which holds
+the provider key and meters spend in tokens against a per-scope budget.
 
 The target and evaluator do not need to be Python. External evaluators and
 candidate producers connect through command protocols; Python benchmarks can

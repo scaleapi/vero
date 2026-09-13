@@ -1,8 +1,16 @@
-# VeRO: a harness for agents to optimize programs, text, and agents
+<p align="center">
+  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/vero-banner.png" alt="Illustration of VeRO's iterative optimization loop" width="100%">
+</p>
 
-[![Paper](https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg)](https://arxiv.org/abs/2602.22480)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
+<h1 align="center">VeRO</h1>
+
+<p align="center"><strong>A harness for agents to optimize programs, text, and agents</strong></p>
+
+<p align="center">
+  <a href="https://arxiv.org/abs/2602.22480"><img src="https://img.shields.io/badge/arXiv-2602.22480-b31b1b.svg" alt="Paper"></a>
+  <a href="../LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
+</p>
 
 VeRO gives an optimizer something to edit, a controlled way to evaluate it, and
 durable memory of everything it tried. The target is anything you can put under
@@ -17,26 +25,20 @@ That is the right default for optimizing agents and for any untrusted or
 reproducibility-critical run. Lighter local backends exist for trusted work that
 does not need containment.
 
-```
-  ┌─────────────────────────┐   submit candidate    ┌─────────────────────────┐
-  │  candidate production   ├──────────────────────►│  evaluation service     │
-  │                         │                       │                         │
-  │  coding agent, command, │◄──────────────────────┤  owns cases + scoring   │
-  │  or custom strategy;    │  score + diagnostics  │                         │
-  │  edits its own Git      │                       │  development: may ask   │
-  │  worktree per candidate │                       │  validation:  aggregate │
-  └───────────┬─────────────┘                       │  test:        withheld  │
-              │ commit                              └───────────┬─────────────┘
-              ▼                                                 │ report
-  ┌─────────────────────────┐    next round     ┌───────────────▼─────────────┐
-  │  candidate history:     │◄──────────────────┤  selection: keep the best   │
-  │  every version kept,    │                   │  feasible candidate         │
-  │  each one re-selectable │                   └─────────────────────────────┘
-  └─────────────────────────┘
+```mermaid
+flowchart LR
+    S["OptimizationStrategy<br/>chooses what to try"]
+    P["CandidateProducer<br/>creates a Candidate"]
+    E["EvaluationBackend<br/>scores the Candidate"]
+    X["SelectionPolicy<br/>chooses the best"]
+    R[("CandidateRepository<br/>keeps every Candidate")]
 
-  Every model call on both sides goes through the inference gateway, which holds
-  the provider key and meters spend in tokens against a per-scope budget.
+    S --> P --> E --> X --> S
+    P --> R
+    R -. history .-> S
 ```
+
+An `OptimizationSession` owns the run; its `Optimizer` repeats this loop.
 
 ## Install
 
@@ -154,7 +156,7 @@ producers connect over command protocols.
 | [`src/vero/`](src/vero/) | the library: optimization kernel, runtime, gateway, sidecar, CLI, agent adapters |
 
 For end-to-end agent-optimization benchmarks, see
-[`../harness-engineering-bench/`](../harness-engineering-bench/), which also
+[`../harness-opt-bench/`](../harness-opt-bench/), which also
 documents how each coding agent must be pointed at the gateway — the one thing
 that reliably costs a run when it is wrong.
 
