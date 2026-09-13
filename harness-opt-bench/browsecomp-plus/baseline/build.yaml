@@ -9,6 +9,7 @@ task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: browsecomp_plus_agent.agent:BrowseCompPlusAgent
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+vero_requirement: scaleapi-vero==0.6.0
 
 partition_files:
   development: ../partitions/development.json

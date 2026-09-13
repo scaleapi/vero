@@ -11,6 +11,7 @@ task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: officeqa_agent.agent:OfficeQaAgent
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+vero_requirement: scaleapi-vero==0.6.0
 
 partition_files:
   development: ../partitions/development.json

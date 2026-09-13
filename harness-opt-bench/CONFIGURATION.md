@@ -228,6 +228,8 @@ repeat their meaning.
 - `harbor_requirement` names the Harbor package the evaluation service installs.
   It carries the extra for the evaluation environment and can be overridden with
   `--param harbor_requirement=`.
+- `vero_requirement` names the published VeRO release the compiled task installs.
+  It must equal the version doing the compiling.
 - `secrets` lists the environment variable names the run needs for its execution
   and telemetry services. `vero harbor run` refuses to launch while any is
   unset. Edit the list and the env file together.
