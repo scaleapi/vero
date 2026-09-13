@@ -4,96 +4,111 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](../LICENSE)
 [![Built on VeRO](https://img.shields.io/badge/built%20on-VeRO-2b6a4f.svg)](../vero/)
 
-An LLM's usefulness in an agentic system depends on its **harness** as much as
-on its weights: the prompts, tools, control flow, memory and orchestration code
-around it. HarnessOpt-Bench measures how well frontier LLMs improve such a
-harness themselves, under expensive and stochastic evaluation.
+HarnessOpt-Bench measures how well an LLM can improve an agent harness: the
+prompts, tools, control flow, memory, and orchestration code surrounding a target
+model. The optimizer receives a seed harness, an evaluation budget, and limited
+feedback. It edits the harness and submits a candidate for held-out evaluation.
 
-An **optimizer**, an LLM paired with a coding harness, receives a target agent's
-seed harness, graded evaluation feedback and a fixed evaluation budget. It edits
-the harness and nominates a final candidate, which is scored by its normalized
-gain over the seed on a held-out test partition it never sees. A trusted
-execution environment enforces that boundary, meters the target agent's
-resource use, and keeps every candidate version for audit.
+The final result is the candidate's normalized improvement over the seed. Test
+cases remain hidden from the optimizer, and every evaluated candidate is retained
+for inspection.
 
-![Optimizer sandbox, trusted evaluation server and model gateway, evaluation sandboxes](docs/figure1-architecture.png)
+![HarnessOpt-Bench evaluation architecture](docs/figure1-architecture.png)
 
-Every benchmark here is one optimization task: an editable target agent, an
-immutable Harbor dataset with a pinned development / validation / test split,
-and a `build.yaml` that VeRO compiles into an outer Harbor task. The optimizer
-runs inside that task with read access to the development cases, aggregate-only
-access to validation, and no access to test.
+## How a benchmark works
 
-- **Paper**: [HarnessOpt-Bench: Evaluating LLMs at Harness Optimization](https://arxiv.org/abs/2608.06301)
-- **Framework**: [VeRO](../vero/), which runs the version-evaluate-select loop, the evaluation sidecar and the metered model gateway
-- **Conventions**: [`CONFIGURATION.md`](CONFIGURATION.md) documents every shared setting and the per-benchmark values
+1. The optimizer starts from an editable seed harness.
+2. It evaluates candidates on development and validation cases within a fixed
+   budget.
+3. It submits one candidate, which is scored on the held-out test partition.
 
-## Layout of a benchmark
+Development results include per-case feedback. Validation exposes aggregate
+scores only. Test cases and results are available only to the final evaluator.
 
-- `target/` is the program the optimizer may edit. The paper's GAIA variant uses
-  `target-shell/`, a non-functional stub, so gain there is the raw held-out score.
-- `partitions/` pins the cases and the split, as JSON lists of task ids.
-- `baseline/build.yaml` is trusted configuration: target model, evaluator,
-  access policy, budgets, gateway scopes, outer-trial limits and final scoring.
-- `baseline/compiled.manifest.json`, where present, is the SHA-256 manifest of
-  the compiled task; `vero harbor build --check` verifies a checkout reproduces it.
-
-Development evaluations expose per-case results and complete Harbor trial
-records, including exact failures and target-agent logs. Validation is
-aggregate-only, and test is reachable only by the trusted final verifier.
-
-## Running a cell
-
-```bash
-cd vero
-uv run vero harbor run \
-  --config ../harness-opt-bench/officeqa/baseline/build.yaml \
-  --env-file secrets.env --environment modal \
-  --agent opencode --model anthropic/claude-sonnet-5 \
-  --param optimizer_model=claude-sonnet-5 \
-  --param wandb_run=officeqa__claude-sonnet-5-opencode__r1 \
-  -o ../runs/officeqa/claude-sonnet-5-opencode-r1/jobs
-```
-
-Runs take hours, so start them detached from the shell (`setsid`, `nohup` with a
-new session, or a scheduler) and keep the process id. The env file carries the
-gateway upstream key and base URL, Modal and W&B credentials, and optionally
-`MODAL_ENVIRONMENT`. `skills/run-benchmark/SKILL.md` is the full runbook. See
-`CONFIGURATION.md` for how each optimizer harness spells its model on the wire;
-a mismatch with the producer allow-list is a 403 on the first request.
-
-## First run in a fresh checkout: fetch the task data
-
-Two benchmarks keep their task definitions out of git — officeqa's 246 and
-browsecomp-plus's 830 directories are hundreds of megabytes and thousands of
-files, and committing them once bloated the repository and timed out the
-pre-commit secret scan. A fresh checkout therefore cannot run either benchmark
-until the data is fetched, and the failure is not obvious from the error.
-
-Ask what is missing, and what to run for it:
-
-```bash
-python3 scripts/task_data.py            # status per benchmark
-python3 scripts/task_data.py --check    # exits 1 if anything is missing
-```
-
-It reports state and names the command; it deliberately fetches nothing, because
-the fetchers are slow, network-bound and replace their output directory. The
-other three benchmarks pin a registry digest and need nothing local.
-
-A count that disagrees with the expected total means a partial fetch, which is
-worth taking seriously: a half-vendored directory passes config validation and
-then scores a subset of the benchmark without saying so.
+Each benchmark pins its target, dataset, split, budgets, and scoring protocol in
+`baseline/build.yaml`. That file is the source of truth.
 
 ## Benchmarks
 
-The four benchmarks the paper reports on live at the top level. Three more that
-were wired and run but are not in the paper sit under [`archive/`](archive/),
-with the reason for each in its README.
-
 | Benchmark | Editable target | Dataset | Split |
 | --- | --- | --- | --- |
-| [GAIA baseline](gaia/baseline/) | Tool-using Responses API agent | Harbor `gaia/gaia` | 20% / 40% / 40% |
-| [OfficeQA baseline](officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
-| [BrowseComp-Plus baseline](browsecomp-plus/baseline/) | Fixed-corpus deep-research agent | Pinned local Harbor tasks | 20% / 40% / 40% |
-| [Terminal-Bench baseline](terminal-bench/baseline/) | Shell-loop terminal agent | Harbor `terminal-bench/terminal-bench-2-1` | 20% / 40% / 40% |
+| [GAIA](gaia/baseline/) | Tool-using multimodal agent | GAIA | 20% / 40% / 40% |
+| [OfficeQA](officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
+| [BrowseComp-Plus](browsecomp-plus/baseline/) | Fixed-corpus research agent | BrowseComp-Plus | 20% / 40% / 40% |
+| [Terminal-Bench](terminal-bench/baseline/) | Shell-based terminal agent | Terminal-Bench 2.1 | 20% / 40% / 40% |
+
+Additional benchmarks that were implemented but are not part of the reported
+suite live under [`archive/`](archive/).
+
+## Repository layout
+
+Each benchmark follows the same structure:
+
+| Path | Purpose |
+| --- | --- |
+| `target/` | Seed harness the optimizer may edit |
+| `partitions/` | Pinned development, validation, and test case IDs |
+| `baseline/build.yaml` | Complete benchmark and evaluation configuration |
+
+The GAIA paper variant uses `target-shell/`, a deliberately minimal starting
+point, instead of `target/`.
+
+## Quick start
+
+Install VeRO and choose a benchmark:
+
+```bash
+cd vero
+uv sync --all-extras
+
+uv run vero harbor run \
+  --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
+  --env-file <your>.env \
+  --agent <optimizer-harness> \
+  --model <optimizer-model> \
+  --param optimizer_model=<optimizer-model-as-the-harness-sends-it> \
+  -o ../runs/<run-name>/jobs
+```
+
+The env file holds your model-endpoint key, execution-environment tokens and
+telemetry credentials; keep it outside the benchmark definition. The two model
+arguments differ because some harnesses rewrite the model name before sending
+it, and the gateway only accepts the name it was told to expect. The runbook,
+[`skills/run-benchmark/SKILL.md`](skills/run-benchmark/SKILL.md), covers that
+rule, the preflight and the health checks. Before launching a full experiment,
+use [`vero/examples/harness-conformance/`](../vero/examples/harness-conformance/)
+to check that a new optimizer harness and model can complete the evaluation path.
+
+## Task data
+
+Some task definitions are too large to store in Git. Check a fresh checkout
+before running a benchmark:
+
+```bash
+python3 scripts/task_data.py --check
+```
+
+The command reports missing or incomplete data and points to the appropriate
+fetch procedure. A partial download is treated as invalid because it can silently
+change the evaluated case set.
+
+## Validating a configuration
+
+Compile a benchmark before launching a full run to validate its configuration and
+inspect the generated task:
+
+```bash
+cd vero
+VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+  --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
+  --output <output-directory>
+```
+
+The compiler otherwise requires every credential the benchmark declares to be
+present in the environment; the variable skips that check for a compile-only run.
+
+See [`CONFIGURATION.md`](CONFIGURATION.md) for the shared evaluation protocol,
+per-benchmark values, and rules for changing a benchmark.
+
+HarnessOpt-Bench is built on [VeRO](../vero/) and released under the repository's
+[MIT license](../LICENSE).
