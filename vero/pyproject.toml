@@ -1,6 +1,6 @@
 [project]
 name = "scaleapi-vero"
-version = "0.5.0"
+version = "0.6.0"
 description = "A harness for agents to optimize programs."
 readme = "README.md"
 authors = [
