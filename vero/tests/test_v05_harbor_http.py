@@ -264,6 +264,8 @@ def test_harbor_run_uses_current_python_and_pinned_harbor_extra(tmp_path, monkey
         harbor_requirement="harbor[modal]==0.20.0",
         agent_env={},
         optimizer_harbor_args=[],
+        optimizer_sandbox_timeout_seconds=86400,
+        optimizer_sandbox_idle_timeout_seconds=None,
         # Real configs always carry a name; the outer trial derives its
         # Modal app name from it so the sandbox is findable.
         name="vero/stub-benchmark",
@@ -324,6 +326,8 @@ def test_harbor_run_env_file_secrets_reach_subprocess_not_command_line(
         harbor_requirement="harbor[modal]==0.20.0",
         agent_env={},
         optimizer_harbor_args=[],
+        optimizer_sandbox_timeout_seconds=86400,
+        optimizer_sandbox_idle_timeout_seconds=None,
         # Real configs always carry a name; the outer trial derives its
         # Modal app name from it so the sandbox is findable.
         name="vero/stub-benchmark",
