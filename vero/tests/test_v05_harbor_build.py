@@ -33,6 +33,7 @@ from vero.harbor.build.config import (
     _AgentWorkspaceFields,
     _EvaluationLimitFields,
     _HarborEvaluationFields,
+    _OptimizerTrialFields,
     _SearchAndSelectionFields,
     _TaskEnvironmentFields,
     _TaskIdentityFields,
@@ -660,6 +661,7 @@ def test_field_groups_are_inherited_not_nested():
     groups = (
         _TaskIdentityFields,
         _HarborEvaluationFields,
+        _OptimizerTrialFields,
         _SearchAndSelectionFields,
         _EvaluationLimitFields,
         _TaskEnvironmentFields,
@@ -1673,3 +1675,17 @@ def test_agent_clock_must_sit_below_sandbox_clock(tmp_path):
         )
     with pytest.raises(ValueError, match="optimizer_sandbox_timeout_seconds"):
         _config(tmp_path / "b", optimizer_harbor_args=["--ek", "sandbox_timeout_secs=1"])
+
+
+def test_outer_trial_limits_apply_to_a_command_backend_too(tmp_path):
+    """The optimizer is a Harbor agent whichever backend scores its candidates."""
+    config = _config(
+        tmp_path,
+        evaluation_backend="command",
+        command_backend=_command_backend(tmp_path / "cmd"),
+        agent_import_path=_OMIT,
+        task_source=_OMIT,
+        optimizer_agent_timeout_seconds=72000,
+        optimizer_sandbox_idle_timeout_seconds=3600,
+    )
+    assert config.optimizer_agent_timeout_seconds == 72000
