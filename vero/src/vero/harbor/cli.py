@@ -403,6 +403,38 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
+def _harness_version_args(agent: str, config, extra: tuple[str, ...]) -> list[str]:
+    """Pin the optimizer harness to the release the build declares.
+
+    Harbor's installed-agent adapters take ``version`` as an agent kwarg and
+    install exactly that release (npm ``@version``, PyPI ``==version``, or the
+    claude installer's version argument). Left unset they install the latest,
+    so trials weeks apart would run different harnesses. A caller's own
+    ``--ak version=`` wins, and a build that pins nothing is left alone; a
+    build that pins some harnesses but not the one being launched is refused
+    rather than silently unpinned.
+
+    goose is the odd one out: harbor fetches ``download_cli.sh`` from the
+    release tag named by ``version``, but that script installs the *stable*
+    release unless ``GOOSE_VERSION`` is set, so the pin is delivered both ways.
+    """
+    if any(arg.startswith("version=") for arg in extra):
+        return []
+    versions = getattr(config, "optimizer_harness_versions", None) or {}
+    if not versions:
+        return []
+    version = versions.get(agent)
+    if version is None:
+        raise click.ClickException(
+            f"no pinned release for optimizer harness {agent!r}; add it to the "
+            "build's optimizer_harness_versions or pass --ak version=<release>"
+        )
+    if agent == "goose":
+        tag = version if version.startswith("v") else f"v{version}"
+        return ["--ak", f"version={tag}", "--ae", f"GOOSE_VERSION={tag}"]
+    return ["--ak", f"version={version}"]
+
+
 def _outer_sandbox_args(
     environment: str, config, extra: tuple[str, ...]
 ) -> list[str]:
@@ -994,6 +1026,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         ]
         if model is not None:
             command.extend(["-m", model])
+        command.extend(_harness_version_args(agent, config, extra))
         # Forward the build's declared agent env to the optimizer agent's shell.
         # Harbor's `--ae KEY=VALUE` populates the agent's extra_env, which harbor
         # injects into the agent's setup/install exec (scoped_exec_env). Sorted

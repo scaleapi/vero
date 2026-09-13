@@ -75,6 +75,13 @@ optimizer_sandbox_timeout_seconds: 86400
 optimizer_sandbox_idle_timeout_seconds: 3600
 optimizer_agent_timeout_seconds: 72000
 optimizer_allow_internet: true
+optimizer_harness_versions:
+  claude-code: 2.1.220
+  codex: 0.146.0
+  opencode: 1.18.11
+  kimi-cli: 1.49.0
+  goose: 1.45.0
+  mini-swe-agent: 2.4.6
 
 secrets:
   - MODAL_TOKEN_ID

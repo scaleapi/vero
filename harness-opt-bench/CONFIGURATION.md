@@ -140,6 +140,27 @@ stopped and final scoring still runs on the candidate it had submitted, so a run
 cut off by the clock is scored rather than lost. The sandbox limit is the hard
 ceiling: reaching it loses the run.
 
+### Optimizer harness versions
+
+The optimizer harness is installed from its public registry at the start of
+every run, so each build pins the exact release under
+`optimizer_harness_versions`. These are the releases the reported results were
+produced with; `vero harbor run` passes the pin to Harbor and refuses to launch
+a harness the build does not list.
+
+| Harness | Release |
+| --- | --- |
+| claude-code | 2.1.220 |
+| codex | 0.146.0 |
+| kimi-cli | 1.49.0 |
+| goose | 1.45.0 |
+| mini-swe-agent | 2.4.6 |
+| opencode | 1.18.9 (OfficeQA), 1.18.10 (BrowseComp-Plus, Terminal-Bench), 1.18.11 (GAIA) |
+
+opencode released three patch versions while the original rounds ran, so its
+pin is the release most of that benchmark's rounds used. Pass
+`--ak version=<release>` on the command line to run a different one.
+
 ## Configuration rules
 
 ### Baselines

@@ -364,6 +364,11 @@ class _OptimizerTrialFields(StrictModel):
             declarations for the outer sandbox (``[environment]``). None leaves
             the field undeclared, which is Modal's default: a reservation of
             0.125 cores and 128 MiB that bursts to whatever the host has.
+        optimizer_harness_versions: Exact release of each optimizer harness
+            (harbor agent name -> version). Harbor installs the harness at trial
+            start from its public registry, so without a pin every trial runs
+            whatever shipped that day. `vero harbor run` passes the pin as
+            ``--ak version=`` and refuses a harness with no entry.
     """
 
     # Limits on the outer optimizer trial. Every default below is what ran
@@ -375,6 +380,19 @@ class _OptimizerTrialFields(StrictModel):
     optimizer_cpus: int | None = Field(default=None, ge=1)
     optimizer_memory_mb: int | None = Field(default=None, ge=1)
     optimizer_storage_mb: int | None = Field(default=None, ge=1)
+    optimizer_harness_versions: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("optimizer_harness_versions")
+    @classmethod
+    def validate_optimizer_harness_versions(cls, value: dict[str, str]) -> dict[str, str]:
+        for agent, version in value.items():
+            if not agent.strip() or not version.strip() or " " in version:
+                raise ValueError(
+                    f"optimizer_harness_versions[{agent!r}] must be an exact release, "
+                    f"got {version!r}"
+                )
+        return value
+
     @model_validator(mode="after")
     def validate_optimizer_clocks(self):
         agent = self.optimizer_agent_timeout_seconds

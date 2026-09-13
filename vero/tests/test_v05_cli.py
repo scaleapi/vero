@@ -934,3 +934,25 @@ def test_harbor_run_refuses_when_a_declared_credential_is_unset(tmp_path, monkey
     assert result.exit_code != 0
     assert "declared task credentials are missing: DEFINITELY_UNSET_CREDENTIAL" in result.output
     assert compiled == []  # refused before compiling, so before any cost
+
+
+def test_harness_version_args_pin_the_release_the_build_declares():
+    import click
+    import pytest
+    from types import SimpleNamespace
+
+    from vero.harbor.cli import _harness_version_args
+
+    cfg = SimpleNamespace(optimizer_harness_versions={"opencode": "1.18.10", "goose": "1.45.0"})
+    assert _harness_version_args("opencode", cfg, ()) == ["--ak", "version=1.18.10"]
+    # goose's installer script ignores the release tag it was fetched from
+    # unless GOOSE_VERSION is set, so the pin is delivered both ways.
+    assert _harness_version_args("goose", cfg, ()) == [
+        "--ak", "version=v1.45.0", "--ae", "GOOSE_VERSION=v1.45.0",
+    ]
+    # a caller's own --ak version= wins
+    assert _harness_version_args("opencode", cfg, ("--ak", "version=1.18.30")) == []
+    # a build that pins nothing is left alone; one that pins others refuses the gap
+    assert _harness_version_args("codex", SimpleNamespace(optimizer_harness_versions={}), ()) == []
+    with pytest.raises(click.ClickException, match="no pinned release for optimizer harness 'codex'"):
+        _harness_version_args("codex", cfg, ())

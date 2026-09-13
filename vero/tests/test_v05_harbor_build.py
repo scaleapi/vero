@@ -1797,3 +1797,14 @@ def test_vero_requirement_must_match_the_compiling_vero(tmp_path):
         _config(tmp_path / "b", vero_requirement="scaleapi-vero[harbor]>=0.5")
     with pytest.raises(ValueError, match="pin the VeRO distribution"):
         _config(tmp_path / "c", vero_requirement="some-other-package==1.0")
+
+
+def test_harness_versions_must_be_exact_releases(tmp_path):
+    config = _config(
+        tmp_path / "a", optimizer_harness_versions={"opencode": "1.18.10", "codex": "0.146.0"}
+    )
+    assert config.optimizer_harness_versions["opencode"] == "1.18.10"
+    with pytest.raises(ValueError, match="exact release"):
+        _config(tmp_path / "b", optimizer_harness_versions={"opencode": ""})
+    with pytest.raises(ValueError, match="exact release"):
+        _config(tmp_path / "c", optimizer_harness_versions={"opencode": ">= 1.18"})
