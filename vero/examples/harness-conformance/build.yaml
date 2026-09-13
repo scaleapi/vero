@@ -1,5 +1,5 @@
 # Harness/model conformance check: the cheapest complete exercise of the path a
-# real experiment takes. Same shape as harness-engineering-bench -- harbor
+# real experiment takes. Same shape as harness-opt-bench -- harbor
 # evaluation backend, nested `harbor run` per case, a target agent metered through
 # the inference gateway's evaluation scope, an optimizer metered through the
 # producer scope -- but with six arithmetic tasks that finish in seconds.
@@ -166,7 +166,7 @@ feedback_transcripts: true
 feedback_max_bytes: 8000
 expose_attempt_detail: false
 # Every clock is derived the same way as the benchmark suite (see
-# harness-engineering-bench/CONFIGURATION.md), just small: case_timeout equals the
+# harness-opt-bench/CONFIGURATION.md), just small: case_timeout equals the
 # tasks' declared [agent] timeout_sec so harbor's multiplier is exactly 1.0, and
 # each ceiling sits above ceil(trials / max_concurrency) x case_timeout.
 timeout_seconds: 900

@@ -11,7 +11,7 @@ import re
 import secrets
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -40,9 +40,19 @@ def generate_inference_token() -> str:
 
 
 class InferenceScopeConfig(StrictModel):
-    """One independently authenticated and metered inference consumer."""
+    """One independently authenticated and metered inference consumer.
 
-    token_sha256: str
+    A compiled task names the token by environment variable (``token_env``) and
+    the gateway digests it once at start-up (``resolve_gateway_config``); a
+    hand-written or test config may carry the digest directly. ``override_env``
+    names a variable holding JSON ``{"allowed_models": [...], "model_aliases":
+    {...}}`` that replaces those two fields at start-up, which is how the
+    optimizer model becomes a launch choice on an otherwise frozen task.
+    """
+
+    token_sha256: str | None = None
+    token_env: str | None = None
+    override_env: str | None = None
     allowed_models: list[str]
     # Applied AFTER the allow-list check, on the way upstream. Keeps two
     # concerns apart: allowed_models says what the caller may ask for, and
@@ -57,12 +67,76 @@ class InferenceScopeConfig(StrictModel):
 
     @field_validator("token_sha256")
     @classmethod
-    def validate_token_digest(cls, value: str) -> str:
-        if len(value) != 64 or any(
-            character not in "0123456789abcdef" for character in value
+    def validate_token_digest(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
         ):
             raise ValueError("token_sha256 must be a lowercase SHA-256 digest")
         return value
+
+    @field_validator("token_env", "override_env")
+    @classmethod
+    def validate_env_name(cls, value: str | None) -> str | None:
+        if value is not None and not _is_identifier(value):
+            raise ValueError("scope environment names must be valid identifiers")
+        return value
+
+    @model_validator(mode="after")
+    def validate_token_source(self):
+        if self.token_sha256 is None and self.token_env is None:
+            raise ValueError("a scope needs token_sha256 or token_env")
+        return self
+
+
+def _is_identifier(value: str) -> bool:
+    return bool(value) and (value[0].isalpha() or value[0] == "_") and all(
+        character.isalnum() or character == "_" for character in value
+    )
+
+
+def resolve_gateway_config(
+    config: InferenceGatewayConfig, environ: Mapping[str, str] | None = None
+) -> InferenceGatewayConfig:
+    """Read every scope's per-run inputs from the environment, once.
+
+    Called at gateway start. A scope with ``token_env`` gets its digest from that
+    variable; a scope with ``override_env`` whose variable is non-empty gets its
+    allow-list and aliases replaced. The result carries digests only, so the
+    running gateway holds no raw token and nothing it reads later can move the
+    allowances.
+    """
+    environ = os.environ if environ is None else environ
+    scopes: dict[str, InferenceScopeConfig] = {}
+    for name, scope in config.scopes.items():
+        update: dict[str, Any] = {}
+        if scope.token_env is not None:
+            raw = environ.get(scope.token_env, "")
+            if not raw.strip():
+                raise RuntimeError(
+                    f"inference scope {name!r}: {scope.token_env} is not set"
+                )
+            update["token_sha256"] = token_digest(raw)
+        if scope.override_env is not None and environ.get(scope.override_env, "").strip():
+            try:
+                override = json.loads(environ[scope.override_env])
+            except json.JSONDecodeError as error:
+                raise RuntimeError(
+                    f"inference scope {name!r}: {scope.override_env} is not JSON"
+                ) from error
+            unknown = set(override) - {"allowed_models", "model_aliases"}
+            if not isinstance(override, dict) or unknown:
+                raise RuntimeError(
+                    f"inference scope {name!r}: {scope.override_env} may only set "
+                    "allowed_models and model_aliases"
+                )
+            update.update(override)
+        scopes[name] = (
+            InferenceScopeConfig.model_validate({**scope.model_dump(), **update})
+            if update
+            else scope
+        )
+    return config.model_copy(update={"scopes": scopes})
 
     @field_validator("allowed_models")
     @classmethod
@@ -755,6 +829,12 @@ def create_inference_gateway_app(
     """Create a scoped reverse proxy without exposing the upstream credential."""
     if not upstream_api_key.strip():
         raise ValueError("upstream API key must not be empty")
+    unresolved = [n for n, s in config.scopes.items() if s.token_sha256 is None]
+    if unresolved:
+        raise ValueError(
+            "scopes without a token digest (run resolve_gateway_config first): "
+            + ", ".join(sorted(unresolved))
+        )
     try:
         import httpx
     except ImportError as error:
@@ -806,7 +886,7 @@ def create_inference_gateway_app(
         if (
             scope is None
             or token is None
-            or not secrets.compare_digest(token_digest(token), scope.token_sha256)
+            or not secrets.compare_digest(token_digest(token), scope.token_sha256 or "")
         ):
             raise HTTPException(status_code=403, detail="invalid inference scope token")
         return store.public_status()[scope_name]
@@ -832,7 +912,7 @@ def create_inference_gateway_app(
         if (
             scope is None
             or token is None
-            or not secrets.compare_digest(token_digest(token), scope.token_sha256)
+            or not secrets.compare_digest(token_digest(token), scope.token_sha256 or "")
         ):
             return _provider_error(
                 403, "invalid inference scope token", "invalid_token"
@@ -1180,7 +1260,7 @@ def serve_inference_gateway(
 ) -> None:
     import uvicorn
 
-    config = load_inference_gateway_config(config_path)
+    config = resolve_gateway_config(load_inference_gateway_config(config_path))
     upstream_api_key = os.environ.get(config.upstream_api_key_env)
     if not upstream_api_key:
         raise RuntimeError(

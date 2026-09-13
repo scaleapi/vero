@@ -1,0 +1,128 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
+name: vero/optimize-gaia-shell
+description: >-
+  The program must answer canonical GAIA tasks: general-knowledge questions that
+  may need research, computation, or inspection of attached files. How it does
+  that is yours to decide -- the approach, what the agent can do, how it uses its
+  environment, how many model calls it takes, and when it stops. Preserve the
+  Harbor agent interface and the class import path. The grader reads the exact
+  answer from /app/answer.txt.
+instruction_template: instruction.shell.md.j2
+agent_repo: target-shell
+task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
+task_manifest: ../partitions/manifest.json
+agent_import_path: gaia_agent.agent:GaiaAgent
+harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 132
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 264
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # Zero by construction, not by measurement: the skeleton writes an empty
+    # answer, so every case is scored and wrong. Confirm with one baseline round
+    # before quoting deltas -- the number is a claim about the seed, not a
+    # measurement of it.
+    baseline_reward: 0.0
+    failure_value: 0.0
+    max_attempts: 1
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: gaia
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 3
+rescore_attempts: 1
+
+# GAIA includes image inputs, so the target must be multimodal. Keep this name
+# aligned with the exact value sent by the agent.
+model: gpt-5.4-mini
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 4
+retry_max_wait_seconds: 120
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# Above the 5,400-second worst case at the configured concurrency.
+timeout_seconds: 7200
+case_timeout_seconds: 600
+task_agent_timeout_seconds: 600
+max_concurrency: 24
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 14400
+optimizer_sandbox_timeout_seconds: 86400
+optimizer_sandbox_idle_timeout_seconds: 3600
+optimizer_agent_timeout_seconds: 72000
+optimizer_allow_internet: true
+
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - MODAL_ENVIRONMENT
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+wandb:
+  project: harness-engineering-bench
+  group: gaia
+  name: ${wandb_run:-gaia-shell}
+  tags: [gaia, shell-seed]
+  log_traces: true
+
+harness_user: harness
+agent_env:
+  BASH_MAX_TIMEOUT_MS: "3600000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 2000000000  # 396 agent case-runs (132 dev + 264 validation)
+    max_concurrency: 64
+  finalization:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 2000000000  # 66 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true

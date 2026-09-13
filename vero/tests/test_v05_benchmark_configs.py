@@ -1,6 +1,6 @@
 """Invariants the checked-in benchmark build YAMLs must satisfy.
 
-These read harness-engineering-bench, so they live on the branch that has it. If
+These read harness-opt-bench, so they live on the branch that has it. If
 that directory is missing the tests error rather than pass vacuously, which is
 how their predecessors drifted unnoticed.
 
@@ -24,15 +24,12 @@ import yaml
 
 from vero.harbor import load_harbor_build_config
 
-BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-engineering-bench"
+BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-opt-bench"
 
 BENCHMARKS = [
     "gaia",
     "officeqa",
-    "swe-atlas-qna",
-    "tau3",
     "browsecomp-plus",
-    "swe-bench-pro",
 ]
 
 # Names that would let a task reach the upstream provider directly, bypassing
@@ -70,7 +67,7 @@ def _require_vendored_task_source(path: Path) -> None:
 def _config(benchmark: str):
     path = BENCHMARK_ROOT / benchmark / "baseline" / "build.yaml"
     _require_vendored_task_source(path)
-    return load_harbor_build_config(path)
+    return load_harbor_build_config(path, params={"inner_env": "test"})
 
 
 @pytest.mark.parametrize("benchmark", BENCHMARKS)
@@ -155,8 +152,11 @@ def test_optimizer_and_target_models_are_separately_scoped(benchmark):
 def test_build_params_override_run_time_knobs_without_rebuild():
     path = BENCHMARK_ROOT / "gaia" / "baseline" / "build.yaml"
 
-    default = load_harbor_build_config(path)
-    assert default.environment_name == "modal"
+    with pytest.raises(ValueError, match="required build parameter 'inner_env'"):
+        load_harbor_build_config(path)
+
+    default = load_harbor_build_config(path, params={"inner_env": "local"})
+    assert default.environment_name == "local"
     default_producer = default.inference_gateway.producer.allowed_models
 
     overridden = load_harbor_build_config(
@@ -170,49 +170,54 @@ def test_build_params_override_run_time_knobs_without_rebuild():
     assert overridden.task_source == default.task_source
 
 
-def test_terminal_bench_azure_variant_differs_only_by_the_model_alias():
-    """build.azure.yaml must be build.yaml plus one alias, and nothing else.
+def test_terminal_bench_routed_variant_differs_only_by_the_model_alias():
+    """build.routed.yaml must be build.yaml plus one alias, and nothing else.
 
-    The variant exists only because codex cannot put a provider-qualified model
-    id on the wire, so the gateway has to pin `gpt-5.6-sol` to a single Azure
-    deployment on its behalf. Everything else -- budgets, timeouts, partitions,
-    the pinned baseline -- has to stay identical, or the cell that uses this file
-    stops being comparable to the nine that use build.yaml.
+    The variant resolves one optimizer model to an explicit route. Everything
+    else -- budgets, timeouts, partitions, and the pinned baseline -- has to
+    stay identical to build.yaml.
 
-    There is no include/extends mechanism for these YAMLs, so the variant is a
-    183-line copy. That is a drift hazard with no natural alarm: divergence in a
-    timeout or a budget would change results and fail nothing. This test is the
-    alarm. If you deliberately change build.yaml, mirror it here and the test
-    passes again; if you forget, it does not.
+    There is no include/extends mechanism for these YAMLs, so this test guards
+    against silent drift in a budget, partition, or other experiment setting.
     """
     baseline = BENCHMARK_ROOT / "terminal-bench" / "baseline"
     shared = yaml.safe_load((baseline / "build.yaml").read_text(encoding="utf-8"))
-    variant = yaml.safe_load((baseline / "build.azure.yaml").read_text(encoding="utf-8"))
+    variant = yaml.safe_load((baseline / "build.routed.yaml").read_text(encoding="utf-8"))
 
     alias = variant["inference_gateway"]["producer"].pop("model_aliases")
-    assert alias == {"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"}
+    assert alias == {"gpt-5.6-sol": "${optimizer_model_route:?set optimizer_model_route}"}
     # Compared after popping the alias: the two documents must now be equal.
     assert variant == shared, (
-        "build.azure.yaml has drifted from build.yaml beyond the model alias; "
-        "mirror the change or the azure cell is no longer comparable"
+        "build.routed.yaml has drifted from build.yaml beyond the model alias; "
+        "mirror the change or the routed cell is no longer comparable"
     )
 
     # And the alias must actually reach the gateway for the cell that needs it,
     # while staying inert for a cell whose optimizer is something else.
     sol = load_harbor_build_config(
-        baseline / "build.azure.yaml", params={"optimizer_model": "gpt-5.6-sol"}
+        baseline / "build.routed.yaml",
+        params={
+            "inner_env": "test",
+            "optimizer_model": "gpt-5.6-sol",
+            "optimizer_model_route": "route-a/gpt-5.6-sol",
+        },
     )
     other = load_harbor_build_config(
-        baseline / "build.azure.yaml", params={"optimizer_model": "claude-opus-5"}
+        baseline / "build.routed.yaml",
+        params={
+            "inner_env": "test",
+            "optimizer_model": "other-model",
+            "optimizer_model_route": "route-a/gpt-5.6-sol",
+        },
     )
     assert sol.inference_gateway.producer.allowed_models == ["gpt-5.6-sol"]
     assert sol.inference_gateway.producer.model_aliases == {
-        "gpt-5.6-sol": "azure_ai/gpt-5.6-sol"
+        "gpt-5.6-sol": "route-a/gpt-5.6-sol"
     }
-    # Present but unreachable: the allow-list admits only claude-opus-5, and an
-    # alias can fire only for a model the allow-list already passed.
-    assert other.inference_gateway.producer.allowed_models == ["claude-opus-5"]
-    assert "claude-opus-5" not in other.inference_gateway.producer.model_aliases
+    # Present but unreachable: an alias can fire only for a model admitted by
+    # the allow-list.
+    assert other.inference_gateway.producer.allowed_models == ["other-model"]
+    assert "other-model" not in other.inference_gateway.producer.model_aliases
 
 
 def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell():
@@ -229,8 +234,9 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
     and a shell that scores above zero is not a shell.
     """
     baseline = BENCHMARK_ROOT / "gaia" / "baseline"
-    seeded = load_harbor_build_config(baseline / "build.yaml")
-    shell = load_harbor_build_config(baseline / "build.shell.yaml")
+    params = {"inner_env": "test"}
+    seeded = load_harbor_build_config(baseline / "build.yaml", params=params)
+    shell = load_harbor_build_config(baseline / "build.shell.yaml", params=params)
 
     # Same benchmark: same cases, same partitions, same class to load.
     assert shell.task_source == seeded.task_source

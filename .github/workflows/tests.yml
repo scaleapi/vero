@@ -74,9 +74,6 @@ jobs:
           - browsecomp-plus
           - gaia
           - officeqa
-          - swe-atlas-qna
-          - swe-bench-pro
-          - tau3
     steps:
       # No `submodules: recursive`: the only submodule is the BrowseComp-Plus
       # upstream corpus, which no test reads.
@@ -88,9 +85,9 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        working-directory: harness-engineering-bench/${{ matrix.benchmark }}/baseline/target
+        working-directory: harness-opt-bench/${{ matrix.benchmark }}/baseline/target
         run: uv sync --locked
 
       - name: Run tests
-        working-directory: harness-engineering-bench/${{ matrix.benchmark }}/baseline/target
+        working-directory: harness-opt-bench/${{ matrix.benchmark }}/baseline/target
         run: uv run pytest -q

@@ -8,7 +8,7 @@ services:
       {{ secret }}: ""
 {% endfor %}
 {% if inference_gateway %}
-      {{ layout.producer_api_key_env }}: "{{ producer_inference_token }}"
+      {{ layout.producer_api_key_env }}: "${{ '{' }}{{ layout.producer_token_env }}:?{{ layout.producer_token_env }} must be set for the optimizer{{ '}' }}"
       {{ layout.producer_base_url_env }}: "{{ producer_base_url }}"
 {% elif layout.producer_api_key_env in secrets %}
       {{ layout.producer_api_key_env }}: ""
@@ -50,6 +50,13 @@ services:
 {% else %}
       LANG: "C.UTF-8"
 {% endif %}
+{% if inference_gateway %}
+{# The sidecar's own scope tokens, and the launcher's producer scope so the budget
+   it shows the optimizer names the models the gateway will accept. #}
+      {{ layout.evaluation_token_env }}: "${{ '{' }}{{ layout.evaluation_token_env }}:?{{ layout.evaluation_token_env }} must be set for the eval sidecar{{ '}' }}"
+      {{ layout.finalization_token_env }}: "${{ '{' }}{{ layout.finalization_token_env }}:?{{ layout.finalization_token_env }} must be set for the eval sidecar{{ '}' }}"
+      {{ layout.producer_scope_env }}: "${{ '{' }}{{ layout.producer_scope_env }}:-{{ '}' }}"
+{% endif %}
 {% if task_services_use_upstream %}
 {# Trusted sidecar receives the real upstream so it can hand task-owned eval
    services (LLM user-sims/graders) a reachable provider. The optimizer/main keeps
@@ -87,6 +94,13 @@ services:
     environment:
 {% for secret in gateway_environment %}
       {{ secret }}: "${{ '{' }}{{ secret }}:?{{ secret }} must be set for the inference gateway{{ '}' }}"
+{% endfor %}
+{% for name in runtime_environment %}
+{% if name == layout.producer_scope_env %}
+      {{ name }}: "${{ '{' }}{{ name }}:-{{ '}' }}"
+{% else %}
+      {{ name }}: "${{ '{' }}{{ name }}:?{{ name }} must be set for the inference gateway{{ '}' }}"
+{% endif %}
 {% endfor %}
     volumes:
       - inference_state:{{ layout.inference_dir }}

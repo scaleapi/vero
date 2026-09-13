@@ -13,6 +13,7 @@ import sys
 import tempfile
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
 
 import click
@@ -279,7 +280,9 @@ def _litellm_base_url_args(agent: str, task: Path) -> list[str]:
     ]
 
 
-def _kimi_gateway_args(agent: str, task: Path) -> list[str]:
+def _kimi_gateway_args(
+    agent: str, task: Path, environment: Mapping[str, str] | None = None
+) -> list[str]:
     """Point kimi-cli's provider at the gateway instead of api.openai.com.
 
     kimi-cli only accepts a model whose provider half is in its own table, and
@@ -307,7 +310,7 @@ def _kimi_gateway_args(agent: str, task: Path) -> list[str]:
     try:
         launch = json.loads(path.read_text(encoding="utf-8"))
         base_url = launch["producer_base_url"]
-        api_key = launch["producer_api_key"]
+        api_key = _producer_token(launch, environment)
     except (OSError, json.JSONDecodeError, KeyError):
         return []
     return [
@@ -400,6 +403,29 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
+def _outer_sandbox_args(
+    environment: str, config, extra: tuple[str, ...]
+) -> list[str]:
+    """Modal clocks for the outer trial's sandbox, from the build's declared limits.
+
+    ``sandbox_timeout_secs`` is the hard lifetime after which Modal destroys the
+    sandbox with no verifier and no archive; ``sandbox_idle_timeout_secs`` reclaims
+    one with no running command. Both were harbor defaults (24 h, never) until the
+    build config gained fields for them. A caller passing its own ``--ek`` for a
+    key wins, as with the app name.
+    """
+
+    if environment != "modal":
+        return []
+    args: list[str] = []
+    if not any("sandbox_timeout_secs=" in a for a in extra):
+        args += ["--ek", f"sandbox_timeout_secs={config.optimizer_sandbox_timeout_seconds}"]
+    idle = config.optimizer_sandbox_idle_timeout_seconds
+    if idle is not None and not any("sandbox_idle_timeout_secs=" in a for a in extra):
+        args += ["--ek", f"sandbox_idle_timeout_secs={idle}"]
+    return args
+
+
 def _agent_environment_blanks(task: Path) -> list[str]:
     """`--ae NAME=` for every declared credential, so the optimizer cannot read it.
 
@@ -464,6 +490,54 @@ def _agent_environment_blanks(task: Path) -> list[str]:
     return arguments
 
 
+def _producer_token(launch: dict, environment: Mapping[str, str] | None) -> str:
+    """The optimizer's scope token for this run.
+
+    A compiled task names the variable (``producer_token_env``) and the launcher
+    minted the value into ``environment``; a task compiled before tokens moved
+    out of the tree still carries ``producer_api_key`` directly.
+    """
+    name = launch.get("producer_token_env")
+    if isinstance(name, str) and name:
+        value = (environment or os.environ).get(name, "")
+        if not value:
+            raise KeyError(name)
+        return value
+    return launch["producer_api_key"]
+
+
+def _runtime_inference_environment(config, task: Path) -> dict[str, str]:
+    """Mint this run's scope tokens and choose its producer scope.
+
+    Nothing per-run is baked into a compiled task; these four variables are how
+    the run reaches it. Each service reads its own once at container start, so
+    the values are fixed for the run however the launcher's environment changes
+    afterwards. The producer scope is the build's resolved ``--param`` values, so
+    the optimizer model stays a launch choice on a frozen task.
+    """
+    path = task / "environment/gateway/launch.json"
+    if not path.exists():
+        return {}
+    launch = json.loads(path.read_text(encoding="utf-8"))
+    names = [launch.get(k) for k in ("producer_token_env", "evaluation_token_env",
+                                     "finalization_token_env", "producer_scope_env")]
+    if not all(isinstance(n, str) and n for n in names):
+        return {}  # compiled before tokens moved out of the tree
+    from vero.gateway.inference import generate_inference_token
+
+    producer = config.inference_gateway.producer
+    scope = {
+        "allowed_models": list(producer.allowed_models),
+        "model_aliases": dict(producer.model_aliases),
+    }
+    return {
+        names[0]: generate_inference_token(),
+        names[1]: generate_inference_token(),
+        names[2]: generate_inference_token(),
+        names[3]: json.dumps(scope, separators=(",", ":")),
+    }
+
+
 def _compiled_run_environment(
     task: Path, overrides: dict[str, str] | None = None
 ) -> dict[str, str]:
@@ -483,7 +557,7 @@ def _compiled_run_environment(
         launch = json.loads(path.read_text(encoding="utf-8"))
         api_source = launch["upstream_api_key_source"]
         api_target = launch["upstream_api_key_target"]
-        producer_api_key = launch["producer_api_key"]
+        producer_api_key = _producer_token(launch, environment)
         producer_base_url = launch["producer_base_url"]
         base_source = launch.get("upstream_base_url_source")
         base_target = launch["upstream_base_url_target"]
@@ -591,16 +665,117 @@ _PARAM_OPTION = click.option(
     required=True,
     type=click.Path(path_type=Path, file_okay=False),
 )
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(path_type=Path, dir_okay=False),
+    help="Also write a JSON manifest of every compiled file's SHA-256 here.",
+)
+@click.option(
+    "--check",
+    "check_path",
+    type=click.Path(path_type=Path, exists=True, dir_okay=False),
+    help="Compile to a temporary directory and fail if it differs from this manifest.",
+)
 @_PARAM_OPTION
-def build_command(config_path, output, params):
-    """Compile a build YAML into a runnable Harbor task directory."""
+def build_command(config_path, output, params, manifest_path, check_path):
+    """Compile a build YAML into a runnable Harbor task directory.
+
+    The output holds nothing per-run (tokens and the producer scope arrive by
+    environment at launch), so two compiles of the same sources at the same vero
+    commit are byte-identical. `--manifest` records that state and `--check`
+    verifies another checkout reproduces it. Manifests are a tool for that
+    comparison, not something the repository carries.
+    """
     from vero.harbor.build import compile_harbor_task, load_harbor_build_config
 
-    compiled = compile_harbor_task(
-        load_harbor_build_config(config_path, params=_parse_build_params(params)),
-        output,
-    )
+    config = load_harbor_build_config(config_path, params=_parse_build_params(params))
+    if check_path is not None:
+        expected = json.loads(check_path.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory(prefix="vero-harbor-check-") as temporary:
+            actual = _compiled_manifest(
+                compile_harbor_task(config, Path(temporary) / "task"), config_path
+            )
+        drift = _manifest_drift(expected, actual)
+        if drift:
+            raise click.ClickException(
+                f"compiled task drifts from {check_path}:\n  " + "\n  ".join(drift)
+            )
+        click.echo(f"Compiled task reproduces {check_path} ({len(actual['files'])} files)")
+        return
+    compiled = compile_harbor_task(config, output)
     click.echo(f"Compiled Harbor task: {compiled}")
+    if manifest_path is not None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(_compiled_manifest(compiled, config_path), indent=1, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        click.echo(f"Wrote manifest: {manifest_path}")
+
+
+def _compiled_manifest(compiled: Path, config_path: Path) -> dict:
+    """Every file in a compiled task with its SHA-256, plus what produced it."""
+    import hashlib
+
+    from vero.harbor.build import compiler as _compiler
+
+    files: dict[str, str] = {}
+    # Two subtrees are copies of things pinned elsewhere (the vendored task data and
+    # the vero source), thousands of files between them. One hash per subtree keeps
+    # the manifest reviewable; drift inside them still shows as that subtree changing.
+    trees = ("environment/sidecar/task-source/", "environment/vero/")
+    tree_lines: dict[str, list[str]] = {t: [] for t in trees}
+    for path in sorted(p for p in Path(compiled).rglob("*") if p.is_file()):
+        relative = path.relative_to(compiled)
+        # A git index carries inode and mtime stat data, and reflogs carry wall-clock
+        # timestamps; neither is content. Objects and refs are, and stay in.
+        if ".git" in relative.parts and (
+            relative.name == "index" or "logs" in relative.parts
+        ):
+            continue
+        posix = relative.as_posix()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        tree = next((t for t in trees if posix.startswith(t)), None)
+        if tree is None:
+            files[posix] = digest
+        else:
+            tree_lines[tree].append(f"{posix}\0{digest}\n")
+    for tree, lines in tree_lines.items():
+        if lines:
+            files[tree] = hashlib.sha256("".join(lines).encode()).hexdigest()
+    vero_root = Path(_compiler.__file__).resolve().parents[4]
+    try:
+        commit = subprocess.run(
+            ["git", "-C", str(vero_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+    return {
+        "config": Path(config_path).name,
+        # Informational: drift is decided by the files alone, so a manifest written
+        # at one commit can be checked from another.
+        "vero_commit": commit,
+        "files": files,
+    }
+
+
+def _manifest_drift(expected: dict, actual: dict) -> list[str]:
+    """Human-readable differences between two manifests' file tables."""
+    before, after = expected.get("files", {}), actual.get("files", {})
+    drift = [f"missing: {p}" for p in sorted(set(before) - set(after))]
+    drift += [f"new: {p}" for p in sorted(set(after) - set(before))]
+    drift += [f"changed: {p}" for p in sorted(set(before) & set(after)) if before[p] != after[p]]
+    if drift and expected.get("vero_commit") and actual.get("vero_commit") and (
+        expected["vero_commit"] != actual["vero_commit"]
+    ):
+        drift.append(
+            f"(manifest written at vero {expected['vero_commit'][:12]}, "
+            f"now {actual['vero_commit'][:12]})"
+        )
+    return drift
 
 
 #: The two request shapes an OpenAI-compatible upstream may accept. Agents in
@@ -789,6 +964,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
             config,
             Path(temporary) / "task",
         )
+        overrides = {**(overrides or {}), **_runtime_inference_environment(config, task)}
         command = [
             uvx,
             "--python",
@@ -815,10 +991,15 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         command.extend(_agent_environment_blanks(task))
         command.extend(_opencode_gateway_args(agent, model, task))
         command.extend(_litellm_base_url_args(agent, task))
-        command.extend(_kimi_gateway_args(agent, task))
+        command.extend(_kimi_gateway_args(agent, task, overrides))
         # Build-declared outer-trial flags first, so a command-line arg can still
         # override them (harbor's `--ek` takes the last value for a key).
         command.extend(config.optimizer_harbor_args)
+        command.extend(
+            _outer_sandbox_args(
+                environment, config, (*config.optimizer_harbor_args, *extra)
+            )
+        )
         # The derived app name defers to an explicit one from *either* source: a
         # build may declare `--ek app_name=` in optimizer_harbor_args just as a
         # caller may pass it on the command line, and appending ours after the

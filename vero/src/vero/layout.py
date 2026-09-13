@@ -85,6 +85,16 @@ class TaskLayout:
     # in, so routed_credential_envs below is the single list both sides use.
     producer_api_key_env: str = "OPENAI_API_KEY"
     producer_base_url_env: str = "OPENAI_BASE_URL"
+    # Per-run inference inputs, minted or chosen by the launcher and read ONCE by
+    # each service at container start. They exist so a compiled task can be frozen:
+    # nothing run-specific is baked into it, and the environment of a running
+    # container cannot be changed from outside, so the values are fixed for the run.
+    producer_token_env: str = "VERO_PRODUCER_TOKEN"
+    evaluation_token_env: str = "VERO_EVALUATION_TOKEN"
+    finalization_token_env: str = "VERO_FINALIZATION_TOKEN"
+    # JSON {"allowed_models": [...], "model_aliases": {...}} replacing the compiled
+    # producer scope, so the optimizer model is a launch choice, not a compile one.
+    producer_scope_env: str = "VERO_PRODUCER_SCOPE"
     # The gateway's proxy route, with the FastAPI parameter names it binds. Both
     # the route the gateway serves and every URL built for it derive from this one
     # string, so a caller cannot construct a path the gateway will not match.
@@ -139,6 +149,16 @@ class TaskLayout:
     def routed_credential_envs(self) -> tuple[str, ...]:
         """Names the compose file sets explicitly, so must not also blank."""
         return (self.producer_api_key_env, self.producer_base_url_env)
+
+    @property
+    def runtime_inference_envs(self) -> tuple[str, ...]:
+        """Every per-run inference input the launcher must supply."""
+        return (
+            self.producer_token_env,
+            self.evaluation_token_env,
+            self.finalization_token_env,
+            self.producer_scope_env,
+        )
 
     @property
     def sidecar_url(self) -> str:
