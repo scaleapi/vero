@@ -143,10 +143,10 @@ ceiling: reaching it loses the run.
 ### Optimizer harness versions
 
 The optimizer harness is installed from its public registry at the start of
-every run, so each build pins the exact release under
-`optimizer_harness_versions`. These are the releases the reported results were
-produced with; `vero harbor run` passes the pin to Harbor and refuses to launch
-a harness the build does not list.
+every run, so by default a run uses the current release. Each build records
+the releases its reported results were produced with under
+`optimizer_harness_versions`; pass `--pin-harness` to `vero harbor run` to
+install those instead and replicate a result with the same harness.
 
 | Harness | Release |
 | --- | --- |
@@ -157,9 +157,9 @@ a harness the build does not list.
 | mini-swe-agent | 2.4.6 |
 | opencode | 1.18.9 (OfficeQA), 1.18.10 (BrowseComp-Plus, Terminal-Bench), 1.18.11 (GAIA) |
 
-opencode released three patch versions while the original rounds ran, so its
-pin is the release most of that benchmark's rounds used. Pass
-`--ak version=<release>` on the command line to run a different one.
+opencode released three patch versions while the original rounds ran, so the
+recorded release is the one most of that benchmark's rounds used. Pass
+`--ak version=<release>` on the command line to run any specific release.
 
 ## Configuration rules
 

@@ -369,11 +369,12 @@ class _OptimizerTrialFields(StrictModel):
             declarations for the outer sandbox (``[environment]``). None leaves
             the field undeclared, which is Modal's default: a reservation of
             0.125 cores and 128 MiB that bursts to whatever the host has.
-        optimizer_harness_versions: Exact release of each optimizer harness
-            (harbor agent name -> version). Harbor installs the harness at trial
-            start from its public registry, so without a pin every trial runs
-            whatever shipped that day. `vero harbor run` passes the pin as
-            ``--ak version=`` and refuses a harness with no entry.
+        optimizer_harness_versions: Release of each optimizer harness the
+            build's reported results were produced with (harbor agent name ->
+            version). Harbor installs the harness at trial start from its
+            public registry, so this is a record, not a constraint: a plain
+            `vero harbor run` installs the current release, and
+            ``--pin-harness`` installs the recorded one to replicate a result.
     """
 
     # Limits on the outer optimizer trial. Every default below is what ran

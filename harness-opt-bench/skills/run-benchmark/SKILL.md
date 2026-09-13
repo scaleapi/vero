@@ -62,9 +62,11 @@ uv run vero harbor run \
 gateway. Some harnesses normalize model names, so verify the wire value before a
 large run.
 
-The harness release is pinned by the build's `optimizer_harness_versions`, so
-runs weeks apart install the same optimizer. The launcher refuses a harness the
-build does not list; pass `--ak version=<release>` to override the pin.
+The optimizer harness is installed at launch, at its current release. To
+replicate a reported result with the harness it was produced with, add
+`--pin-harness`, which installs the release recorded in the build's
+`optimizer_harness_versions`. `--ak version=<release>` selects any other
+release.
 
 ## Preflight
 

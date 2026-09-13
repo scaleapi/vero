@@ -936,7 +936,7 @@ def test_harbor_run_refuses_when_a_declared_credential_is_unset(tmp_path, monkey
     assert compiled == []  # refused before compiling, so before any cost
 
 
-def test_harness_version_args_pin_the_release_the_build_declares():
+def test_harness_version_args_pin_the_recorded_release_only_on_request():
     import click
     import pytest
     from types import SimpleNamespace
@@ -944,23 +944,28 @@ def test_harness_version_args_pin_the_release_the_build_declares():
     from vero.harbor.cli import _harness_version_args
 
     cfg = SimpleNamespace(optimizer_harness_versions={"opencode": "1.18.10", "goose": "1.45.0"})
-    assert _harness_version_args("opencode", cfg, ()) == ["--ak", "version=1.18.10"]
+    # the default installs the current release: the record is documentation
+    assert _harness_version_args("opencode", cfg, (), pin=False) == []
+    assert _harness_version_args("goose", cfg, (), pin=False) == []
+    # --pin-harness installs the recorded one
+    assert _harness_version_args("opencode", cfg, (), pin=True) == ["--ak", "version=1.18.10"]
     # goose's installer script ignores the release tag it was fetched from
     # unless GOOSE_VERSION is set, so the pin is delivered both ways.
-    assert _harness_version_args("goose", cfg, ()) == [
+    assert _harness_version_args("goose", cfg, (), pin=True) == [
         "--ak", "version=v1.45.0", "--ae", "GOOSE_VERSION=v1.45.0",
     ]
     # a caller's own --ak version= wins; a stray version= under another flag does not
-    assert _harness_version_args("opencode", cfg, ("--ak", "version=1.18.30")) == []
-    assert _harness_version_args("opencode", cfg, ("--ae", "version=1.18.30")) == [
+    assert _harness_version_args("opencode", cfg, ("--ak", "version=1.18.30"), pin=True) == []
+    assert _harness_version_args("opencode", cfg, ("--ae", "version=1.18.30"), pin=True) == [
         "--ak", "version=1.18.10",
     ]
-    # goose keeps the env delivery when the caller overrides the release
-    assert _harness_version_args("goose", cfg, ("--ak", "version=1.50.0")) == [
+    # goose keeps the env delivery when the caller picks the release, pinned or not
+    assert _harness_version_args("goose", cfg, ("--ak", "version=1.50.0"), pin=False) == [
         "--ae", "GOOSE_VERSION=v1.50.0",
     ]
-    assert _harness_version_args("goose", cfg, ("--ak", "version=v1.50.0", "--ae", "GOOSE_VERSION=v1.50.0")) == []
-    # a build that pins nothing is left alone; one that pins others refuses the gap
-    assert _harness_version_args("codex", SimpleNamespace(optimizer_harness_versions={}), ()) == []
-    with pytest.raises(click.ClickException, match="no pinned release for optimizer harness 'codex'"):
-        _harness_version_args("codex", cfg, ())
+    assert _harness_version_args(
+        "goose", cfg, ("--ak", "version=v1.50.0", "--ae", "GOOSE_VERSION=v1.50.0"), pin=True
+    ) == []
+    # pinning a harness the build does not record is refused, not silently unpinned
+    with pytest.raises(click.ClickException, match="records no release for optimizer harness 'codex'"):
+        _harness_version_args("codex", cfg, (), pin=True)
