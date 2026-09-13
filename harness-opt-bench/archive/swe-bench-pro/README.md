@@ -51,12 +51,11 @@ From the repository root:
 
 ~~~bash
 cd vero
-VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+uv run vero harbor build \
   --config ../harness-opt-bench/archive/swe-bench-pro/baseline/build.yaml \
   --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ~~~
 
-The `VERO_SKIP_SECRET_CHECK` setting is appropriate only for compile-time
-validation. For a real optimization run, follow the shared
+For a real optimization run, follow the shared
 [`run-benchmark` guide](../../skills/run-benchmark/SKILL.md).

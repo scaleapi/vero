@@ -67,7 +67,7 @@ large run.
 Compile before launching:
 
 ```bash
-VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
+uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
   --param inner_env=<evaluation-environment> \
   --output /tmp/harness-opt-preflight

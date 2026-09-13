@@ -905,3 +905,32 @@ def test_outer_sandbox_args_come_from_the_build_and_yield_to_the_caller():
     ]
     cfg.optimizer_sandbox_idle_timeout_seconds = None
     assert _outer_sandbox_args("modal", cfg, ()) == ["--ek", "sandbox_timeout_secs=86400"]
+
+
+def test_harbor_run_refuses_when_a_declared_credential_is_unset(tmp_path, monkeypatch):
+    """The check moved from the compiler to the launcher: compiling needs names, running needs values."""
+    from types import SimpleNamespace
+
+    from vero.harbor import build as harbor_build
+    from vero.harbor import cli as harbor_cli
+
+    config_path = tmp_path / "build.yaml"
+    config_path.write_text("name: org/task\n", encoding="utf-8")
+    config = SimpleNamespace(
+        secrets=["DEFINITELY_UNSET_CREDENTIAL"], inference_gateway=None,
+        harbor_requirement="harbor==0.20.0", agent_env={}, optimizer_harbor_args=[],
+        optimizer_sandbox_timeout_seconds=86400, optimizer_sandbox_idle_timeout_seconds=None,
+        name="vero/stub",
+    )
+    monkeypatch.delenv("DEFINITELY_UNSET_CREDENTIAL", raising=False)
+    monkeypatch.setattr(harbor_build, "load_harbor_build_config", lambda *a, **k: config)
+    compiled = []
+    monkeypatch.setattr(harbor_build, "compile_harbor_task", lambda c, o: compiled.append(o) or o)
+    monkeypatch.setattr(harbor_cli.shutil, "which", lambda name: "/usr/bin/uvx")
+
+    result = CliRunner().invoke(
+        main, ["harbor", "run", "--config", str(config_path), "--agent", "codex", "--yes"]
+    )
+    assert result.exit_code != 0
+    assert "declared task credentials are missing: DEFINITELY_UNSET_CREDENTIAL" in result.output
+    assert compiled == []  # refused before compiling, so before any cost

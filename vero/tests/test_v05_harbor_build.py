@@ -1055,32 +1055,27 @@ def test_compiler_emits_isolated_canonical_harbor_task(tmp_path):
     assert "vero harbor export-session" in test_script.read_text()
 
 
-def test_compiler_checks_secrets_before_writing_and_rejects_source_overlap(
+def test_compiler_needs_credential_names_not_values_and_rejects_source_overlap(
     tmp_path,
     monkeypatch,
 ):
+    """Compiling writes `${NAME}` placeholders, so an unset value is not its concern.
+
+    The presence check lives in `vero harbor run`, the one place the values are
+    consumed (see test_v05_cli). `declared_credentials` is how it learns the names.
+    """
+    from vero.harbor.build import declared_credentials
+
     config = _config(tmp_path, secrets=["MISSING_TEST_SECRET"])
     output = tmp_path / "compiled"
     monkeypatch.delenv("MISSING_TEST_SECRET", raising=False)
 
-    with pytest.raises(ValueError, match="MISSING_TEST_SECRET"):
-        compile_harbor_task(
-            config,
-            output,
-            vero_root=Path(__file__).parents[1],
-        )
-    assert not output.exists()
-
-    monkeypatch.setenv("MISSING_TEST_SECRET", "configured")
-    compile_harbor_task(
-        config,
-        output,
-        vero_root=Path(__file__).parents[1],
-    )
+    compile_harbor_task(config, output, vero_root=Path(__file__).parents[1])
     task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
     assert task["environment"]["env"] == {
         "MISSING_TEST_SECRET": "${MISSING_TEST_SECRET}"
     }
+    assert declared_credentials(config) == ["MISSING_TEST_SECRET"]
 
     safe = config.model_copy(update={"secrets": []})
     with pytest.raises(ValueError, match="overlaps protected source"):

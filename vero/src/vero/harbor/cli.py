@@ -939,7 +939,11 @@ def _preflight_models(config) -> None:
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
 def run_command(config_path, agent, model, environment, params, env_file, extra):
     """Compile to a temporary directory and invoke `harbor run`."""
-    from vero.harbor.build import compile_harbor_task, load_harbor_build_config
+    from vero.harbor.build import (
+        compile_harbor_task,
+        declared_credentials,
+        load_harbor_build_config,
+    )
 
     uvx = shutil.which("uvx")
     if uvx is None:
@@ -947,9 +951,9 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
     overrides = _load_env_file(env_file) if env_file else None
     if overrides:
         click.echo(f"Loaded {len(overrides)} secret(s) from {env_file}")
-        # Apply before compiling: the build's declared-credential check and the
-        # ${NAME} param resolution both read os.environ, so the env-file must
-        # satisfy them too — not just the launched subprocess.
+        # Apply before loading the build: ${NAME} param resolution reads
+        # os.environ, so the env-file must satisfy it too, not just the launched
+        # subprocess.
         os.environ.update(overrides)
     resolved = _parse_build_params(params)
     # The optimizer model is both codex's -m and the producer scope's allow-list;
@@ -958,6 +962,14 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
     if model is not None:
         resolved.setdefault("optimizer_model", model)
     config = load_harbor_build_config(config_path, params=resolved)
+    # A missing credential fails deep inside a container an hour from now, so
+    # refuse here, before compiling or spending anything. Only `run` checks:
+    # compiling needs the names, never the values.
+    missing = [name for name in declared_credentials(config) if not os.environ.get(name)]
+    if missing:
+        raise click.ClickException(
+            "declared task credentials are missing: " + ", ".join(missing)
+        )
     _preflight_models(config)
     with tempfile.TemporaryDirectory(prefix="vero-harbor-") as temporary:
         task = compile_harbor_task(

@@ -584,6 +584,22 @@ def _render(
     )
 
 
+def declared_credentials(config) -> list[str]:
+    """Environment variable names a run of this build must have set.
+
+    The build's `secrets` plus the gateway's upstream key and base URL sources.
+    Compiling needs none of their values, only their names, so the compiler
+    does not check for them; `vero harbor run` does, before it spends anything.
+    """
+    names = list(getattr(config, "secrets", []) or [])
+    gateway = getattr(config, "inference_gateway", None)
+    if gateway is not None:
+        names.append(gateway.upstream_api_key_env)
+        if gateway.upstream_base_url_env is not None:
+            names.append(gateway.upstream_base_url_env)
+    return list(dict.fromkeys(names))
+
+
 def compile_harbor_task(
     config: HarborBuildConfig,
     output_dir: Path | str,
@@ -644,13 +660,6 @@ def compile_harbor_task(
         )
         if name not in GATEWAY_ROUTED_CREDENTIALS
     ]
-    if os.environ.get("VERO_SKIP_SECRET_CHECK") is None:
-        required_sources = list(dict.fromkeys([*config.secrets, *credential_sources]))
-        missing = [name for name in required_sources if not os.environ.get(name)]
-        if missing:
-            raise ValueError(
-                "declared task credentials are missing: " + ", ".join(missing)
-            )
     if output.exists():
         shutil.rmtree(output)
     environment_dir = output / "environment"
