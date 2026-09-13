@@ -1,6 +1,6 @@
 # Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
 # cover only what is specific to this benchmark.
-name: vero/optimize-officeqa-baseline
+name: vero/optimize-officeqa-e2e
 description: >-
   Improve a grounded-reasoning agent on OfficeQA (Treasury Bulletin corpus QA).
   The agent must search /app/corpus/ and write the exact answer to /app/answer.txt;
@@ -13,23 +13,30 @@ agent_import_path: officeqa_agent.agent:OfficeQaAgent
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 vero_requirement: scaleapi-vero==0.6.0
 
+# E2E SMOKE VARIANT of build.yaml. Same seed, same target, same gateway scopes;
+# eight cases in total, tiny budgets, and a 25-minute agent clock so the run
+# reaches finalization quickly. It exists to prove the trial machinery end to end
+# (compile, tokens, target route, evaluations, agent timeout -> verifier, session
+# archive) after a change to vero or to the target deployment, not to measure
+# anything. Never report its score.
+
 partition_files:
-  development: ../partitions/development.json
-  validation: ../partitions/validation.json
-  test: ../partitions/test.json
+  development: ../partitions-e2e/development.json
+  validation: ../partitions-e2e/validation.json
+  test: ../partitions-e2e/test.json
 
 agent_access:
   - partition: development
     disclosure: full
     expose_case_resources: true
-    total_runs: 100
-    total_cases: 196
+    total_runs: 6
+    total_cases: 12
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
-    min_aggregate_cases: 5
-    total_runs: 100
-    total_cases: 392
+    min_aggregate_cases: 1
+    total_runs: 6
+    total_cases: 18
 
 selection_partition: validation
 targets:
@@ -49,7 +56,7 @@ objective:
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
 score_baseline: false
-rescore_top_k: 3
+rescore_top_k: 1
 rescore_attempts: 1
 
 model: deepseek-v4-flash
@@ -66,16 +73,16 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Above the 23,400-second worst case at the configured concurrency.
-timeout_seconds: 28800
+# Nine trials at most per evaluation, one 1,800-second wave.
+timeout_seconds: 3600
 case_timeout_seconds: 1800
 task_agent_timeout_seconds: 1800
 max_concurrency: 24
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 54000
-optimizer_sandbox_timeout_seconds: 86400
+verifier_timeout_seconds: 7200
+optimizer_sandbox_timeout_seconds: 10800
 optimizer_sandbox_idle_timeout_seconds: 3600
-optimizer_agent_timeout_seconds: 72000
+optimizer_agent_timeout_seconds: 1500
 optimizer_allow_internet: true
 optimizer_harness_versions:
   claude-code: 2.1.220
@@ -95,7 +102,7 @@ secrets:
 wandb:
   project: harness-engineering-bench
   group: officeqa
-  name: ${wandb_run:-officeqa}
+  name: ${wandb_run:-officeqa-e2e}
   tags: [officeqa]
   log_traces: true
 

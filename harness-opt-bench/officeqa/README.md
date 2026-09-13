@@ -63,6 +63,8 @@ For a real optimization run, follow the shared
 | Path | Contents |
 | --- | --- |
 | `baseline/build.yaml` | Evaluation configuration |
+| `baseline/build.e2e.yaml` | Eight-case smoke variant; exercises the complete pipeline quickly, never reported |
 | `baseline/target/` | Editable seed agent |
 | `partitions/` | Committed split and task manifest |
+| `partitions-e2e/` | Small smoke-test split |
 | `scripts/vendor_tasks.sh` | Dataset preparation |
