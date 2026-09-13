@@ -147,11 +147,7 @@ optimizer_allow_internet: true
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
-  # Which Modal environment the sandboxes land in. Harbor passes none to the SDK,
-  # so without this every sandbox goes to the workspace default (`main`), which is
-  # where all pre-2026-09 cells ran. Declared as a secret so it reaches the sidecar
-  # (inner evaluations) as well as the launcher (outer trial). Set to `enterprise`.
-  - MODAL_ENVIRONMENT
+  - MODAL_ENVIRONMENT  # which Modal environment the sandboxes land in; unset = workspace default
   - WANDB_API_KEY
   - WANDB_BASE_URL  # self-hosted or cloud W&B
 

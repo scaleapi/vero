@@ -194,6 +194,25 @@ Some tasks depend on external services of their own and therefore use a reduced
 isolation profile. That limitation must be declared in the benchmark configuration
 and considered before running with an adversarial optimizer.
 
+## Compiled tasks
+
+`vero harbor build` turns a `build.yaml` into a self-contained task directory,
+and two compiles of the same sources produce identical output. Nothing specific
+to one run is written into the compiled task: the per-run access tokens and the
+optimizer model are supplied by the launcher through the environment and read
+once when the services start, so a running evaluation cannot be altered from
+outside.
+
+Each reported benchmark commits `baseline/compiled.manifest.json`, a checksum of
+every compiled file. `vero harbor build --check <manifest>` recompiles and fails
+if a checkout no longer reproduces the recorded task. Regenerate the manifest
+whenever the seed, the partitions, or the build configuration changes.
+
+By default the compiled task carries a copy of the VeRO source tree so its
+images can be built without a package index. Setting `vero_requirement` to an
+exact published version (for example `scaleapi-vero==0.6.0`) installs that
+release instead; the version must match the VeRO doing the compiling.
+
 ## Adding or changing a benchmark
 
 1. Update the benchmark's `baseline/build.yaml`.
