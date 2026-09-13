@@ -55,11 +55,12 @@ uv run vero harbor run \
   -o ../runs/officeqa/claude-sonnet-5-opencode-r1/jobs
 ```
 
-`scripts/launch_cell.sh` wraps this so the run outlives the shell that started
-it. The env file carries the gateway upstream key, Modal and W&B credentials,
-and `MODAL_ENVIRONMENT`. See `CONFIGURATION.md` for how each optimizer harness
-spells its model on the wire; a mismatch with the producer allow-list is a 403
-on the first request.
+Runs take hours, so start them detached from the shell (`setsid`, `nohup` with a
+new session, or a scheduler) and keep the process id. The env file carries the
+gateway upstream key and base URL, Modal and W&B credentials, and optionally
+`MODAL_ENVIRONMENT`. `skills/run-benchmark/SKILL.md` is the full runbook. See
+`CONFIGURATION.md` for how each optimizer harness spells its model on the wire;
+a mismatch with the producer allow-list is a 403 on the first request.
 
 ## First run in a fresh checkout: fetch the task data
 

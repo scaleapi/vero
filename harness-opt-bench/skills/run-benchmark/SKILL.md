@@ -1,382 +1,255 @@
 ---
 name: run-benchmark
 description: >-
-  Run one harness-opt-bench optimization end-to-end (compile → inference
-  gateway → optimizer agent → sandboxed evals → finalize on held-out test),
-  including the preflight to confirm before launching and the health checks to
-  verify after. Use when launching, reproducing, or debugging a benchmark run.
+  Run one HarnessOpt-Bench optimization end-to-end (compile, inference gateway,
+  optimizer agent, sandboxed evaluations, finalization on the held-out test
+  split), including the preflight to confirm before launching and the health
+  checks to verify after. Use when launching, reproducing, or debugging a run.
 ---
 
-# Running a harness-opt-bench optimization
+# Running a HarnessOpt-Bench optimization
 
-This is a runbook for launching one benchmark's optimization run and confirming
-it is healthy. It is written to be provider-agnostic: fill in your own inference
-endpoint, Modal account, and W&B account. Treat every `<placeholder>` as
-something you supply. **Never commit real keys, tokens, endpoints, or absolute
-personal paths** — they belong only in a local, git-ignored `secrets.env`.
+A runbook for launching one benchmark's optimization run and confirming it is
+healthy. Fill in your own inference endpoint, Modal account and W&B account;
+treat every `<placeholder>` as something you supply. Never commit real keys,
+tokens or endpoints. They belong in a local, git-ignored env file.
 
 ## What a run is
 
 Each benchmark compiles from `harness-opt-bench/<benchmark>/baseline/build.yaml`,
 the single source of truth. `vero harbor run` compiles it into a Harbor task and
-stands up three things: an **inference gateway** (holds the real upstream key,
-enforces per-scope model allow-lists), an **evaluation sidecar** (owns the cases,
-scoring, and final candidate selection), and the **optimizer agent** (a coding
-agent that edits only `target/`, commits candidates, and scores them via the
-`evals` CLI). When the optimizer finishes, the trusted verifier scores the
-selected candidate on the held-out `test` partition and writes the final reward.
+stands up three services: an **inference gateway** that holds the real upstream
+key and enforces per-scope model allow-lists and token budgets, an **evaluation
+sidecar** that owns the cases, the scoring and the final candidate selection,
+and the **optimizer agent**, a coding agent that edits only `target/`, commits
+candidates, and scores them through the `evals` CLI. When the optimizer finishes
+or its clock runs out, the trusted verifier scores the selected candidate on the
+held-out `test` partition and writes the final reward.
 
-The optimizer itself gets a scoped producer token pointed at the gateway, not the
-real upstream key. Keep it that way.
+The optimizer holds a scoped producer token for the gateway, never the upstream
+key. The per-scope allow-list confines the target model in the normal case but
+is not a hard guarantee against an adversarial optimizer, which authors the
+candidate and holds the producer token. Benchmarks whose tasks run an
+in-container judge set `task_services_use_upstream`, which puts the raw upstream
+credential into the evaluation sub-run. Both are recorded in the affected
+`build.yaml` files and in `vero/src/vero/gateway/inference.py`.
 
-Two caveats, because this is easy to over-trust. Benchmarks that run an
-in-container judge or user-simulator set `task_services_use_upstream`, which puts
-the **raw upstream credential** into the evaluation sub-run; those benchmarks also
-run the candidate harness without a separate user, so optimizer-authored code
-shares that environment. And the per-scope model allow-list confines the target
-model in the normal case but is not a hard guarantee — the optimizer holds the
-producer token and writes the candidate. Both are known, deferred, and recorded
-in the affected `build.yaml` files and in `vero/src/vero/gateway/inference.py`.
-Treat the boundary as "an honest optimizer cannot reach the key by accident",
-not "an adversarial one cannot reach it at all".
+## Prerequisites
 
-## Prerequisites (confirm these exist first)
+- A checkout containing both `vero/` and `harness-opt-bench/`. Run commands from
+  `vero/`.
+- `uv`. The CLI is invoked as `uv run vero ...`.
+- A **Modal** account and tokens. Inner evaluation sandboxes run there
+  (`environment_name: ${inner_env:-modal}`), and the outer optimizer trial can too.
+- **Docker**, if you run the outer trial locally with `--environment docker`.
+- A **Weights & Biases** account and API key, cloud or self-hosted.
+- An **OpenAI-compatible inference endpoint** and key that serves both your
+  optimizer model and the benchmark's target model. The gateway proxies to it.
+- A local env file (start from `secrets.env.example`) with `OPENAI_API_KEY`,
+  `OPENAI_BASE_URL`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`, `WANDB_API_KEY`,
+  `WANDB_BASE_URL`, and optionally `MODAL_ENVIRONMENT` to pick a Modal
+  environment other than your workspace default. Every build declares these under
+  `secrets`; the compiler refuses to compile if one is missing.
+- The task data for officeqa and browsecomp-plus, which is not in git. Run
+  `python3 scripts/task_data.py` and follow what it prints.
 
-- The repo checkout containing both the `vero/` CLI package and
-  `harness-opt-bench/`. Run commands from the `vero/` subdirectory.
-- `uv` installed (the CLI is invoked as `uv run vero ...`).
-- **Docker** running — needed for `--environment docker` (the outer optimizer
-  compose runs locally).
-- A **Modal** account + tokens — the inner evaluation sandboxes run there by
-  default (`environment_name: ${inner_env:-modal}`).
-- A **Weights & Biases** account + API key (self-hosted or cloud) for telemetry.
-- An **OpenAI-compatible inference endpoint** + key that can serve both your
-  optimizer model and each benchmark's target model. The gateway proxies to it.
-- A local `secrets.env` (copy from a benchmark's `secrets.env.example` where
-  present). Required keys (names only — never values in any committed file):
-  `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`,
-  `WANDB_API_KEY`, `WANDB_BASE_URL`. A few benchmarks that run an in-container
-  judge/user-sim also need `OPENAI_API_BASE` (set it equal to `OPENAI_BASE_URL`).
-  See each benchmark's `baseline/README.md` and `CONFIGURATION.md`.
-
-## Launch command (template)
+## Launch command
 
 ```bash
 cd <repo-root>/vero
 uv run vero harbor run \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
-  --env-file secrets.env \
-  --environment docker \            # outer optimizer location (see tradeoff below)
-  --agent <agent-name> \            # e.g. codex or claude-code (exact registry name)
-  --model <optimizer-model> \       # must match the gateway producer allow-list
-  --param wandb_run=<benchmark>__<optimizer-model> \
+  --env-file <your>.env \
+  --environment modal \
+  --agent <harness> \
+  --model <launch-model> \
+  --param optimizer_model=<wire-model> \
+  --param wandb_run=<benchmark>__<label> \
   --yes \
-  -o ../runs/<benchmark>/<optimizer-label>/jobs
+  -o <somewhere>/<benchmark>/<label>/jobs
 ```
 
-Notes that bite if you get them wrong:
+Things that bite:
 
-- **`--agent` is the exact Harbor registry name**, not a friendly alias. If it is
-  wrong you get `Agent name <x> is not valid. Valid agent names: {...}` at init
-  (a fast, harmless crash — no containers start). The Claude Code agent is
-  `claude-code` (not `claude`); the OpenAI coding agent is `codex`. If unsure,
-  run with a deliberately bogus `--agent` once and read the valid-names list.
-- **`--model` must be spelled exactly as the producer allow-list** in the
-  build.yaml (`inference_gateway.producer.allowed_models`, usually
-  `${optimizer_model:-<default>}`). `--model` is threaded into that placeholder,
-  so the agent's model and the allow-list stay in lockstep; a mismatch is a
-  gateway 403 on the optimizer's first request. If a coding agent rewrites the
-  model string on the wire (some strip a provider prefix), pass the bare form
-  that both the upstream serves and the allow-list expects.
-- **`-o <dir>`** is forwarded to Harbor; use the systematic layout
-  `runs/<benchmark>/<optimizer-label>/jobs`.
-- **`--environment`** controls where the *optimizer* runs: `docker` = local,
-  fully observable, but the run dies if the machine sleeps; `modal` = survives a
-  local sleep/disconnect, less local visibility. **Inner evals must be on Modal.**
-  `inner_env=docker` fails every case: the inner evaluation runs
-  `harbor run -e docker` inside the sidecar, which has no docker CLI or socket, so
-  harbor produces no trials and the evaluation returns 502.
+- **`--agent` is the exact Harbor registry name**: `claude-code`, `codex`,
+  `opencode`, `kimi-cli`, `goose`, `mini-swe-agent`. A wrong name fails at init
+  before any container starts, and the error lists the valid names.
+- **The model has two spellings.** `--model` is what the harness is launched
+  with; `--param optimizer_model=` is what the gateway allow-list must contain,
+  and it must equal the string the harness puts on the wire. claude-code sends
+  the model bare, opencode requires `provider/model` but sends the bare id,
+  codex sends the last segment, kimi-cli needs an `openai/` prefix. A mismatch is
+  a 403 on the optimizer's first request. `CONFIGURATION.md` has the table.
+- **opencode also calls a small auxiliary model** of the same provider family.
+  Builds carry a third allow-list slot for it (`optimizer_aux_model`); for an
+  Anthropic optimizer pass the dated Haiku id.
+- **Inner evaluations must run on Modal.** `inner_env=docker` fails every case,
+  because the sidecar container has no Docker socket.
+- **`--environment`** picks where the optimizer itself runs. `modal` survives
+  your machine sleeping; `docker` is local and fully observable.
 
-## Preflight — confirm BEFORE launching
+## Preflight: confirm before launching
 
-Do a dry compile and inspect the artifacts. This catches almost every
+Compile without launching and read the artefacts. This catches almost every
 misconfiguration for free:
 
 ```bash
-cd <repo-root>/vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
   --output /tmp/precompile
 ```
 
-Then check, in the compiled `/tmp/precompile`:
+Then check, in `/tmp/precompile`:
 
-1. **`environment/sidecar/serve.json` → `backends`**: each partition backend has
-   the `n_attempts` / `aggregate_attempts` you intend. If you want the noisy
-   held-out finalize averaged over N, only the **test** backend should show
-   `n_attempts: N` / `aggregate_attempts: mean`; development and validation stay
-   at the global (usually 1). This is set per target in build.yaml
-   (`targets[].n_attempts` / `aggregate_attempts`).
-2. **`serve.json` → `wandb`**: `project`, `group`, `name` are what you expect.
-3. **Model allow-lists** (`serve.json` and `environment/gateway/config.json`):
-   the **evaluation** allow-list is the benchmark's target model; the
-   **producer** allow-list is your optimizer model (it shows the build default
-   here — at launch `--model` overrides it).
-4. **`instruction.md`** (the optimizer's task prompt): read it end to end. The
-   objective, the `evals run --backend ... --partition ...` command, and the
-   exposed partitions should be right, and it must not advertise tools/skills/
-   subagents that aren't actually shipped in the workspace.
+1. `environment/sidecar/serve.json`: each partition backend has the
+   `n_attempts` / `aggregate_attempts` you intend. Only the **test** backend should
+   carry `n_attempts: 3` / `aggregate_attempts: mean`.
+2. `serve.json` and `environment/gateway/config.json`: the evaluation allow-list
+   is the benchmark's target model, the producer allow-list is your optimizer
+   model. At launch, `--param optimizer_model=` replaces the compiled producer list.
+3. `task.toml`: the `[agent] timeout_sec` (the optimizer's clock) and the verifier
+   timeout are what the build declares.
+4. `instruction.md`, the optimizer's task prompt, end to end.
 
-Also confirm, out of band:
+Also confirm out of band that the optimizer model answers one tiny request on
+your endpoint under exactly the wire spelling, that W&B authenticates, that Modal
+tokens are valid, and that `baseline_reward` in the build is the floor you mean to
+compare against. `vero harbor run` refuses to launch when a configured model is
+not deployed upstream.
 
-- **The optimizer model actually serves on your upstream** — send one tiny
-  request to your inference endpoint with that exact model string. A model the
-  upstream doesn't recognize 403/404s the optimizer immediately.
-- **W&B auth works** and the project name is correct (a viewer query against your
-  W&B host with the key).
-- **Docker is up** (`docker info`) and **Modal tokens are valid**.
-- **The target model and `baseline_reward`** pinned in build.yaml are the ones
-  you mean to compare against (`CONFIGURATION.md` records the held-out baselines).
+A compiled task is deterministic. Each benchmark commits
+`baseline/compiled.manifest.json`; `vero harbor build --check <manifest>`
+confirms your checkout reproduces it.
 
-## Launch discipline
+## Launching
 
-- **Use `scripts/launch_cell.sh`** rather than assembling this by hand. It writes
-  `launch.sh`, `run.log`, `run.pid` and `daemonize.py` into
-  `runs/<benchmark>/<label>/`, double-forks into a new session, and — importantly
-  — **fails non-zero if no live pid appears**, so a launch that did not start
-  cannot be mistaken for one that did.
+Runs take hours and must outlive the shell that started them. Start the process
+in its own session (a double fork or `setsid`), redirect its output to a log,
+write its pid to a file, and **verify a live pid exists** before treating the
+launch as successful. Never wrap launches in `|| true` inside a loop: it turns
+every failure into silence.
 
-  ```bash
-  bash harness-opt-bench/scripts/launch_cell.sh \
-    <benchmark>/<label> ../harness-opt-bench/<benchmark>/baseline/build.yaml \
-    <envfile> modal <agent> <launch-model> <wire-model> <benchmark>__<label>
-  ```
+Launch one cell first and define the gate in advance, for example one evaluation
+completed with zero terminations. Ramp only after the gate is observed, and
+replace cells as they finish rather than adding in bursts.
 
-  Positions 6 and 7 are the launch form and the wire form of the model, which
-  differ for `opencode` and `kimi-cli` — see the routing table in
-  `CONFIGURATION.md`.
+## While a run is in flight
 
-- **Launch detached.** A plain `nohup ... &` is not enough: supervising harnesses
-  terminate process groups belonging to an idle session, and macOS has no
-  `setsid(1)`. The launcher's double-fork handles both.
-- **Never wrap launches in `|| true` inside a loop.** It converts every failure
-  into silence and the loop still exits 0, so you report N runs started when zero
-  did. This has cost a full grid.
-- Prefer to **confirm the launch** (of a full-budget run) before firing — these
-  spend real target-model and optimizer tokens plus Modal compute.
-
-## Watching a run while it is in flight
-
-`agent/` and `verifier/` artifacts are written only when a run *ends*, and
-`run.log` holds nothing but the outer progress spinner. So mid-run, W&B is the
-only view of whether the optimizer is actually evaluating anything:
-
-```bash
-uv run --project vero python harness-opt-bench/scripts/wandb_progress.py \
-  <benchmark> <suffix>
-```
-
-It reports, per cell, evaluations completed, evaluations terminated, upstream
-error counts and generated tokens. **`terminated` should be 0**; a non-zero value
-means evaluations are being invalidated mid-search, which costs the optimizer
-evidence without necessarily corrupting the reported score.
+`agent/` and `verifier/` artefacts are written only when the trial ends, and the
+outer log holds a progress spinner. W&B is the mid-run view. The sidecar logs
+each scope's requests and upstream errors under `inference/<scope>/...` and each
+partition's completed and terminated evaluations under
+`<partition>/agent/evaluations/...`. **Terminated evaluations should be zero.**
+Run names carry a random suffix, so query by prefix rather than exact name.
 
 Two traps when checking liveness:
 
-- **`ps aux | grep` truncates its command column to the terminal width** and will
-  report 0 processes for perfectly healthy runs, because the match text sits past
-  the cutoff. Use `pgrep -f` instead. Under a kill-on-failure policy this
-  false negative is an instruction to destroy working runs.
-- **Phase text is not liveness.** A status derived from the log will happily
-  report a phase for a dead run. Compare `stat -f %z run.log` across a sleep.
+- `ps aux | grep` truncates the command column to the terminal width and reports
+  zero processes for healthy runs. Use `pgrep -f`.
+- Phase text is not liveness. Compare the log's size across an interval.
 
 ## Concurrency
 
-Runs share one upstream provider account, so they contend. Steer by measurement,
-not arithmetic:
-
-**Steer on the marginal error rate across a check interval** — Δerrors ÷ Δrequests
-between two consecutive readings — and specifically on the rate imposed on the
-runs that were *already* going when load changed. Measured on one officeqa pass:
-4 concurrent cells sat at 0.15%; adding a fifth took the pass to 23.1% overall and
-put 17.1% on the four incumbents. Steady state at 4 later fell to 0.00%.
-
-**Do not derive a ceiling from tokens-per-minute against a published quota.** That
-was attempted twice on the same pass and mispredicted in both directions — first
-from anchoring elapsed time to process start rather than to when work began, then
-by reading a coincidental match as confirmation. The marginal error rate is the
-signal that held up.
-
-**Spikes are usually startup bursts, not a standing ceiling.** New cells hit their
-opening evaluation waves together. Wait a full interval after any load change
-before concluding anything.
-
-**Replace on completion rather than adding**, and **never kill a healthy run to
-reduce load** — see below.
+Runs share one upstream account, so they contend. Steer on measurement: the
+marginal error rate between two consecutive checks, Δerrors ÷ Δrequests, and in
+particular the rate imposed on the runs that were already going when load
+changed. Do not derive a ceiling from tokens per minute against a published
+quota; that mispredicts. New cells spike as their opening evaluations land
+together, so wait a full interval after any load change before concluding
+anything. Replace on completion rather than adding, and never kill a healthy run
+to reduce load.
 
 ## Stopping a run is two operations
 
 Killing the local process does **not** stop the work. The compose topology is
-daemon-owned and Modal sandboxes are server-side (default 24h timeout), so a
-killed run keeps executing and keeps billing — only the local collector is gone,
-which makes the results unrecoverable. Killing therefore converts expensive useful
-work into expensive useless work.
+daemon-owned and Modal sandboxes are server-side, so a killed run keeps
+executing and keeps billing with nobody collecting the result. An intentional
+stop is the local process **and** its sandboxes (`modal app list`, then stop the
+run's own app). The outer trial's app is named after the build
+(`vero-optimize-<benchmark>`); inner evaluation sandboxes share one app per
+suite, so never sweep that one while any other run is live.
 
-An intentional stop needs both halves; `scripts/cleanup_orphans.sh --dry-run`
-handles the remote half, but read its header first — all runs share one Modal app,
-so a bulk teardown mid-pass destroys healthy runs alongside orphans. Run it only
-between passes.
+### Copy the session out before you kill anything
 
-## Post-launch health check — verify AFTER launching
-
-Watch for a fast crash first (invalid agent name, missing secret, model 403,
-Docker down), then confirm forward progress. A tail filtered for failure
-signatures catches the crashes:
-
-```bash
-tail -f run.log | grep -E 'Traceback|Exception|Error|denied|40[0-9]|429|Killed|OOM|not valid|Cannot connect to the Docker'
-```
-
-After a few minutes (first build can be slow), confirm the good path:
-
-- Outer process still alive; no traceback in `run.log`.
-- The compose containers are up (gateway, sidecar, optimizer/agent).
-- The optimizer is issuing **gateway-authorized** requests — no 403s in the
-  gateway request log (a 403 storm = producer model ≠ allow-list).
-- Inner eval sandboxes are dispatching (Modal auth is good) and `result.json`
-  files begin appearing under the `jobs/` tree.
-- A W&B run shows up under the expected project, not immediately failed.
-- Provider **429s**: the seed agents retry transient rate limits, but sustained
-  429s mean you are hitting a shared upstream quota — throttle concurrency.
-
-If you see a clear failure signal, **stop the run and diagnose from disk** rather
-than letting it burn budget. Detached/daemon-owned sandboxes can keep running
-after the parent dies, so check for and clean up orphans when you kill a run.
-
-### Copy the session out BEFORE you kill anything
-
-Every commit the optimizer made — including the one it submitted — lives *only*
-inside the sidecar container until the verifier's `export-session` step writes
-`session.tar.gz`. **Kill a run before that step and the candidates are gone**,
-because stopping the stack removes the containers. A run killed mid-verifier
-leaves an empty `verifier/` directory and nothing to recover; the entire search
-is lost even though it completed successfully.
-
-So the first move when killing a run is always:
+Every candidate the optimizer committed lives only inside the sidecar until the
+verifier exports `session.tar.gz`. Kill a run before that and the search is
+lost. First:
 
 ```bash
 docker cp <sidecar-container>:/state/admin/session ./salvaged-session
 ```
 
-That gives you `candidates/repository.git` — a real git repo, so
-`git --git-dir=.../repository.git log --all` lists every candidate and
-`git archive <sha>` extracts one — plus `database.json`, `budgets.json` and the
-evaluation job records. With it, the submitted candidate can be re-scored on the
-held-out set afterwards. Only once you have it should you stop the containers.
+That gives you `candidates/repository.git`, a real git repository, plus
+`database.json`, `budgets.json` and the evaluation records. The submitted
+candidate can then be re-scored on the held-out set with
+`scripts/rescore_candidate.py`.
 
-## What "done / green" looks like
+## Post-launch health check
 
-- **`finalize.json`** (admin volume) / **`harbor-finalization.json`** (session):
-  `shipped: true`, a `rewards` map (keyed by the target's `reward_key`), and
-  `baseline_rewards`. `shipped: false` means selection produced nothing.
-- Session artifacts exported: a portable `experiment.html` report, the session
-  archive, and the candidates repo.
-- The W&B run is finished (not failed); its summary carries `shipped`.
-- Compare the candidate's held-out reward against the pinned `baseline_reward`
-  for that benchmark — an improvement is `shipped: true` with a higher reward.
+Watch for a fast crash first: invalid agent name, missing secret, model 403,
+Docker down. Then, after the images build, confirm the good path:
 
-## Cost awareness
+- the outer process is alive and the log has no traceback;
+- the three containers are up;
+- the optimizer's requests reach the gateway without 403s;
+- inner evaluation sandboxes are dispatching and a W&B run exists;
+- sustained 429s from the provider mean you are sharing a quota; stop adding.
 
-A full run spends: target-model tokens on development + validation (bounded by
-each partition's `total_cases`), the optimizer-model session, plus finalization
-(`n_attempts × test_size` case-evaluations; the pinned baseline is not re-scored
-when `score_baseline: false`). Read `budgets.json` in the session for actuals.
+On a clear failure signal, stop the run and diagnose from disk. A theory is not a
+signal; ambiguity resolves cheaply in one more interval, killing does not.
 
-The reported unit is tokens, not dollars: the trusted per-evaluation split lands
-in `reward_metrics` as `inference_input_tokens` / `inference_cached_input_tokens`
-/ `inference_output_tokens` / `inference_total_tokens` (→ W&B). Because the target
-model is fixed per benchmark, dollars are a downstream linear function of that
-triple (per-model rate vector) and are not stored.
+## What done looks like
 
-Read the per-case statistics, not just the totals: token and latency
-distributions are heavy-tailed, so `reward_metrics` carries a mean, median, and
-max per case (`mean/median/max_case_wall_seconds`,
-`mean/median/max_case_agent_reported_*_tokens`, plus a derived
-`mean_case_inference_*`). A mean far above the median means a few cases dominate
-the spend; the max is the case most likely to hit its wall budget and score the
-failure value. For per-trial breakdowns, run the post-hoc aggregator on the
-exported session:
+`jobs/<timestamp>/task__*/verifier/finalization.json` with `shipped: true`, a
+real `candidate` (non-null `parent_id`; a null one means the seed was shipped),
+`rewards` keyed by the target's `reward_key`, `baseline_rewards`, and an **empty
+`errors` block**. Alongside it: `session.tar.gz`, `experiment.html`, and in
+`artifacts/` the `session-rescue.tar.gz` collected even if the verifier failed.
 
-```bash
-python harness-opt-bench/scripts/per_trial_tokens.py <session-dir> --json
-# or roll several runs into one flat table:
-python .../per_trial_tokens.py <run1> <run2> ... --csv tokens.csv
-```
+A run whose optimizer hit its clock is still scored: the trial records
+`AgentTimeoutError` and the verifier runs on whatever was submitted.
 
-Check its `coverage_pct` (should be ~100% and `residual` ~0 when the build sets
-`inference_gateway.request_log_attribution: true`; low coverage means per-trial
-numbers are lower bounds and the per-evaluation totals are the envelope).
+## Auditing a finished run
 
-## Auditing a finished pass
+A degraded run still emits a plausible number, so a reward is a measurement only
+after these checks, all read from `finalization.json`:
 
-A run that was degraded still emits a plausible in-range number, so a reward is
-only a measurement once you have checked that it is one. Per finished cell,
-confirm all of:
+- `reward_metrics.<key>.error_rate` is `0.0`, or you can account for what dropped;
+- `errors` is empty. A non-empty block means scoring aborted and the number is an
+  artefact, not a low score;
+- `shipped: true` and `candidate.parent_id` is set;
+- the W&B `terminated_total` counters are zero. Terminations do not invalidate the
+  score but mean the search ran on less evidence;
+- across a grid, no two cells share `candidate.metadata.content_digest`. Two cells
+  that shipped the same tree usually shipped the unmodified seed.
 
-- `error_rate` is `0.0` in `jobs/*/task__*/verifier/finalization.json` — the
-  held-out set scored completely — or account for what dropped;
-- the verifier error block is empty (a non-empty one means scoring aborted and the
-  number is an artefact, not a low score);
-- `shipped: true`;
-- no evaluations were terminated mid-search (this does not invalidate the score,
-  but it means the search ran on less evidence — a caveat on the comparison);
-- no two cells share a shipped content digest, which would mean they shipped the
-  same tree, usually the unmodified baseline. That is a null result, not agreement.
-
-```bash
-cd runs && python3 audit_pass.py <benchmark> <suffix> <baseline_reward>
-cd runs && python3 terminated_evals.py <benchmark> <suffix>
-```
-
-Both glob **relative to the working directory** and must be run from `runs/`. From
-anywhere else they print an empty table with a header, which reads as "no results
-yet" rather than "wrong directory".
-
-Prefer `session/database.json` inside the session archive over convenience
-sources: the agent's own log shows only the terminations it happened to print, and
-W&B summary fields are last-value-wins, so a count there proves only "at least
-one".
+For per-trial token and latency accounting from the gateway's request log, run
+`scripts/per_trial_tokens.py <session-dir> --json` on the extracted session and
+check its `coverage_pct` is near 100.
 
 ## Per-benchmark quick reference
 
-Values drift; treat this as an index and confirm against each `baseline/build.yaml`
-before launching. Held-out baselines are the pinned `baseline_reward`.
+Values drift; confirm against each `baseline/build.yaml` before launching.
 
-| benchmark | task data | target model | held-out baseline | dev / val cases |
+| benchmark | task data | target model | pinned baseline | dev / val cases |
 |---|---|---|---|---|
-| `officeqa` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.3412 | 196 / 392 |
-| `browsecomp-plus` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.4619 | 132 / 264 |
-| `gaia` | registry digest | `gpt-5.4-mini` | 0.6205 | 132 / 264 |
+| `officeqa` | local, fetched | see build.yaml | 0.3412 | 196 / 392 |
+| `browsecomp-plus` | local, fetched | see build.yaml | 0.4619 | 132 / 264 |
+| `terminal-bench` | registry digest | `xai/grok-build-0.1` | 0.2407 | 68 / 144 |
+| `gaia` (shell seed, `build.shell.yaml`) | registry digest | `gpt-5.4-mini` | 0.0 by construction | 132 / 264 |
 
-All share the same shape: `selection_partition: validation`, `reward_mode: submit`,
-`baseline_floor: false`, global `n_attempts: 1` with the **test** target overridden
-to `n_attempts: 3` / `aggregate_attempts: mean`, and `environment_name:
-${inner_env:-modal}`.
-
-**The two benchmarks marked "local" cannot run from a fresh checkout.** Their task
-directories are gitignored, so they exist only where someone has already
-materialised them. Fetch them before launching (see the README) and do not assume a
-clean clone can run them. The failure is badly misreported: the loader leaves an
-unresolvable `task_source` untouched and the validator then reads it as a registry
-reference, so you get `registry task_source must include an explicit version`
-rather than anything pointing at a missing directory.
+All share: `selection_partition: validation`, `reward_mode: submit`,
+`baseline_floor: false`, global `n_attempts: 1` with the test target at
+`n_attempts: 3` / `aggregate_attempts: mean`, and `environment_name:
+${inner_env:-modal}`. `gaia/baseline/build.shell.e2e.yaml` is an eight-case
+variant with a 25-minute optimizer clock for testing the machinery end to end;
+its score means nothing.
 
 ## Per-benchmark gotchas
 
-Don't hardcode assumptions — read `CONFIGURATION.md` and the benchmark's
-`baseline/build.yaml` and `baseline/README.md`. Common differences: a benchmark
-may pin a **different target model**; some run an **in-container judge or
-user-simulator** on the real upstream (extra credentials + cost, and reduced
-isolation); some pull **large prebuilt images or corpora** (long first build);
-timeouts and partition sizes vary widely. When in doubt, dry-compile and read the
-rendered `instruction.md` and `serve.json`.
+Read `CONFIGURATION.md` and the benchmark's `baseline/build.yaml` and
+`baseline/README.md` rather than assuming. A benchmark may pin a different target
+model; some run an in-container judge on the real upstream; some pull large
+prebuilt images or corpora, so the first build is slow; timeouts and partition
+sizes vary widely. When in doubt, compile and read the rendered `instruction.md`
+and `serve.json`.
