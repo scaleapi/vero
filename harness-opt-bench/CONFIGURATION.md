@@ -198,6 +198,31 @@ Some tasks depend on external services of their own and therefore use a reduced
 isolation profile. That limitation must be declared in the benchmark configuration
 and considered before running with an adversarial optimizer.
 
+### Deployment settings
+
+A few fields describe the services a run depends on rather than the benchmark
+itself. They are the same in every build file, and the build files do not
+repeat their meaning.
+
+- `harbor_requirement` names the Harbor package the evaluation service installs.
+  It carries the extra for the evaluation environment and can be overridden with
+  `--param harbor_requirement=`.
+- `secrets` lists the environment variable names the run needs for its execution
+  and telemetry services. Every name must be present in the env file; the
+  compiler refuses to compile otherwise. Edit the list and the env file together.
+- `wandb` configures telemetry and is optional. Remove the block to run without it.
+- `extra_harbor_args` passes options to the evaluation sandboxes. The defaults
+  group them under one application and reclaim idle ones; remove them for an
+  environment that does not accept those options.
+- `inference_gateway.request_log_attribution` stamps each gateway request with the
+  trial it served, which is what makes per-trial usage attribution reliable.
+- `agent_env` raises the optimizer's tool-call time limit so one full evaluation
+  can complete inside a single foreground call, and disables background tasks.
+
+The remaining shared values, such as attempts, budgets, time limits and
+isolation, follow the rules above; a build file comments only on what is
+specific to its benchmark.
+
 ## Compiled tasks
 
 `vero harbor build` turns a `build.yaml` into a self-contained task directory,

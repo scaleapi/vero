@@ -1,3 +1,5 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
 name: vero/optimize-terminal-bench-baseline
 description: >-
   Improve a terminal agent on Terminal-Bench 2.1 while preserving the Harbor
@@ -11,7 +13,6 @@ agent_repo: target
 task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
 task_manifest: ../partitions/manifest.json
 agent_import_path: terminal_bench_agent.agent:TerminalBenchAgent
-# Include the extra your evaluation environment needs.
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
 partition_files:
@@ -41,7 +42,6 @@ targets:
     baseline_reward: 0.2407  # K=3: 0.250 / 0.222 / 0.250 (sd 0.0131, n=108); was 0.2600 excluding seed-killed trials. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
-    # Match the three-round procedure used to estimate the pinned baseline.
     n_attempts: 3
     aggregate_attempts: mean
 
@@ -60,8 +60,6 @@ rescore_attempts: 1
 # optimization. See ../README.md for the benchmark-level results.
 model: grok-build-0.1
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
-# Group evaluation sandboxes under one app and reclaim idle ones; drop these
-# for an environment that does not accept them.
 extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
@@ -80,17 +78,12 @@ task_agent_timeout_seconds: 900
 
 # Above the 36,000-second worst case at the configured concurrency.
 timeout_seconds: 43200
-# Covers final scoring plus validation rescoring.
 verifier_timeout_seconds: 64800
-# Limits on the outer optimizer trial. The agent timeout leaves time for final
-# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
 optimizer_sandbox_idle_timeout_seconds: 3600
 optimizer_agent_timeout_seconds: 72000
 optimizer_allow_internet: true
 
-# Credentials your execution and telemetry services need. Edit to match your
-# deployment; each name must be set in the env file.
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -98,7 +91,6 @@ secrets:
   - WANDB_API_KEY
   - WANDB_BASE_URL
 
-# Telemetry (optional). Remove this block to run without it.
 wandb:
   project: harness-engineering-bench
   group: terminal-bench
@@ -110,7 +102,6 @@ error_rate_threshold: 0.1
 
 harness_user: harness
 agent_env:
-  # Allow one full evaluation to complete in a foreground tool call.
   BASH_MAX_TIMEOUT_MS: "28800000"
   BASH_DEFAULT_TIMEOUT_MS: "28800000"
   ENABLE_BACKGROUND_TASKS: "0"
@@ -124,21 +115,15 @@ inference_gateway:
   producer:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
-  # Case budgets control normal use; token caps stop runaway requests.
   evaluation:
     allowed_models: [grok-build-0.1]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
     model_aliases:
       grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
     max_requests: 200000
     max_tokens: 1200000000
     max_concurrency: 64
-  # Keep final scoring capacity separate from search.
   finalization:
     allowed_models: [grok-build-0.1]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
     model_aliases:
       grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
     max_requests: 200000

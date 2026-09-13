@@ -1,3 +1,5 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
 name: vero/optimize-officeqa-baseline
 description: >-
   Improve a grounded-reasoning agent on OfficeQA (Treasury Bulletin corpus QA).
@@ -8,7 +10,6 @@ agent_repo: target
 task_source: ../tasks
 task_manifest: ../partitions/manifest.json
 agent_import_path: officeqa_agent.agent:OfficeQaAgent
-# Include the extra your evaluation environment needs.
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
 partition_files:
@@ -36,7 +37,6 @@ targets:
     baseline_reward: 0.3412  # re-pinned 0.354 / 0.296 / 0.374 (sd 0.0330); was 0.3603. See runs/BASELINES.md
     failure_value: 0.0
     max_attempts: 1
-    # Match the three-round procedure used to estimate the pinned baseline.
     n_attempts: 3
     aggregate_attempts: mean
 
@@ -53,14 +53,10 @@ rescore_attempts: 1
 
 model: deepseek-v4-flash
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
-# Pull the prebuilt corpus image described above. The remaining options group
-# evaluation sandboxes under one app and reclaim idle ones; drop them for an
-# environment that does not accept them.
+# Pull the prebuilt corpus image described above.
 extra_harbor_args: ["--no-force-build", "--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# Retry transient request failures during an evaluation. Whole-evaluation
-# retries remain limited to trusted final scoring.
 max_retries: 4
 retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
@@ -71,22 +67,16 @@ feedback_max_bytes: 16000
 expose_attempt_detail: false
 # Above the 23,400-second worst case at the configured concurrency.
 timeout_seconds: 28800
-# Match the dataset's declared agent limit.
 case_timeout_seconds: 1800
 task_agent_timeout_seconds: 1800
 max_concurrency: 24
 error_rate_threshold: 0.1
-# Covers final scoring plus validation rescoring.
 verifier_timeout_seconds: 54000
-# Limits on the outer optimizer trial. The agent timeout leaves time for final
-# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
 optimizer_sandbox_idle_timeout_seconds: 3600
 optimizer_agent_timeout_seconds: 72000
 optimizer_allow_internet: true
 
-# Credentials your execution and telemetry services need. Edit to match your
-# deployment; each name must be set in the env file.
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -94,7 +84,6 @@ secrets:
   - WANDB_API_KEY
   - WANDB_BASE_URL
 
-# Telemetry (optional). Remove this block to run without it.
 wandb:
   project: harness-engineering-bench
   group: officeqa
@@ -102,10 +91,8 @@ wandb:
   tags: [officeqa]
   log_traces: true
 
-# Keep the candidate isolated from held-out state.
 harness_user: harness
 
-# Allow one full evaluation to complete in a foreground tool call.
 agent_env:
   BASH_MAX_TIMEOUT_MS: "10800000"
   BASH_DEFAULT_TIMEOUT_MS: "10800000"
@@ -116,26 +103,19 @@ agent_env:
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
-  # Enables reliable per-trial usage attribution.
   request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
-  # Case budgets control normal use; token caps stop runaway requests.
   evaluation:
     allowed_models: [deepseek-v4-flash]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
     model_aliases:
       deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000
     max_tokens: 3000000000  # 588 agent case-runs (196 dev + 392 validation)
     max_concurrency: 64
-  # Keep final scoring capacity separate from search.
   finalization:
     allowed_models: [deepseek-v4-flash]
-    # Map the target model to a deployment; override per launch with
-    # --param target_model_route=<provider/model>.
     model_aliases:
       deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000

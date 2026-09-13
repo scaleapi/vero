@@ -1,3 +1,5 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
 name: vero/optimize-gaia-shell-e2e
 description: >-
   The program must answer canonical GAIA tasks: general-knowledge questions that
@@ -11,7 +13,6 @@ agent_repo: target-shell
 task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
 task_manifest: ../partitions/manifest.json
 agent_import_path: gaia_agent.agent:GaiaAgent
-# Include the extra your evaluation environment needs.
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
 # E2E SMOKE VARIANT of build.shell.yaml. Same seed, same target, same gateway
@@ -48,7 +49,6 @@ targets:
     baseline_reward: 0.0
     failure_value: 0.0
     max_attempts: 1
-    # Match the three-round procedure used to estimate the pinned baseline.
     n_attempts: 3
     aggregate_attempts: mean
 
@@ -67,13 +67,9 @@ rescore_attempts: 1
 # aligned with the exact value sent by the agent.
 model: gpt-5.4-mini
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
-# Group evaluation sandboxes under one app and reclaim idle ones; drop these
-# for an environment that does not accept them.
 extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# Retry transient request failures during an evaluation. Whole-evaluation
-# retries remain limited to trusted final scoring.
 max_retries: 4
 retry_max_wait_seconds: 120
 infrastructure_max_attempts: 3
@@ -89,8 +85,6 @@ task_agent_timeout_seconds: 600
 max_concurrency: 24
 error_rate_threshold: 0.1
 verifier_timeout_seconds: 3600
-# Limits on the outer optimizer trial. The agent timeout leaves time for final
-# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 14400
 optimizer_sandbox_idle_timeout_seconds: 1800
 # 25 minutes: long enough for the optimizer to run a few evaluations, short
@@ -99,8 +93,6 @@ optimizer_sandbox_idle_timeout_seconds: 1800
 optimizer_agent_timeout_seconds: 1500
 optimizer_allow_internet: true
 
-# Credentials your execution and telemetry services need. Edit to match your
-# deployment; each name must be set in the env file.
 secrets:
   - MODAL_TOKEN_ID
   - MODAL_TOKEN_SECRET
@@ -108,7 +100,6 @@ secrets:
   - WANDB_API_KEY
   - WANDB_BASE_URL
 
-# Telemetry (optional). Remove this block to run without it.
 wandb:
   project: harness-engineering-bench
   group: gaia
@@ -116,9 +107,7 @@ wandb:
   tags: [gaia, shell-seed, e2e-smoke]
   log_traces: true
 
-# Keep the candidate isolated from held-out state.
 harness_user: harness
-# Allow one full evaluation to complete in a foreground tool call.
 agent_env:
   BASH_MAX_TIMEOUT_MS: "3600000"
   BASH_DEFAULT_TIMEOUT_MS: "3600000"
@@ -126,16 +115,13 @@ agent_env:
   FORCE_AUTO_BACKGROUND_TASKS: "0"
   UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
 
-
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
-  # Enables reliable per-trial usage attribution.
   request_log_attribution: true
   producer:
     allowed_models: ["${optimizer_model:-gpt-5.4}"]
     max_concurrency: 8
-  # Case budgets control normal use; token caps stop runaway requests.
   evaluation:
     allowed_models: [gpt-5.4-mini]
     max_requests: 200000
