@@ -25,18 +25,15 @@ loop applies to any of these.
 
 ```mermaid
 flowchart LR
-    S["OptimizationStrategy<br/>chooses what to try"]
-    P["CandidateProducer<br/>creates a Candidate"]
-    E["EvaluationBackend<br/>scores the Candidate"]
-    X["SelectionPolicy<br/>chooses the best"]
-    R[("CandidateRepository<br/>keeps every Candidate")]
-
-    S --> P --> E --> X --> S
-    P --> R
-    R -. history .-> S
+    O["Optimizer<br/>edits the target"]
+    C["Candidate<br/>a commit of the target"]
+    E["Evaluator<br/>owns the cases and the score"]
+    O -- proposes --> C -- scored by --> E -- score and diagnostics --> O
 ```
 
-An `OptimizationSession` owns the run; its `Optimizer` repeats this loop.
+The optimizer is a coding agent, a command, or a custom strategy, running
+locally or inside a Harbor container. The evaluator owns the cases and the
+scoring, and every candidate it has scored stays selectable.
 Every model call on both sides goes through the inference gateway, which holds
 the provider key and meters spend in tokens against a per-scope budget.
 
