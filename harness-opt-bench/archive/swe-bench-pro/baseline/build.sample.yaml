@@ -94,6 +94,7 @@ rescore_attempts: 1
 
 model: deepseek-v4-flash
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
@@ -137,6 +138,8 @@ inference_gateway:
     max_concurrency: 8
   evaluation:
     allowed_models: [deepseek-v4-flash]
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64

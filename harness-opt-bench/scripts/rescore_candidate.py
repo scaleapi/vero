@@ -60,8 +60,8 @@ def load_build(benchmark: str) -> tuple[dict, Path]:
 def resolve_param(value: str, params: dict[str, str] | None = None) -> str:
     """Resolve a `${name:-default}` or `${name:?message}` placeholder.
 
-    `--param name=value` supplies the value; a `:?` placeholder with no value is
-    an error, as it is for `vero harbor run`.
+    `--param name=value` supplies the value, then the environment, as with
+    `vero harbor run`; a `:?` placeholder left unset is an error.
     """
     match = re.fullmatch(r"\$\{([^:}]+)(?::([-?])([^}]*))?\}", str(value))
     if not match:
@@ -69,6 +69,8 @@ def resolve_param(value: str, params: dict[str, str] | None = None) -> str:
     name, kind, rest = match.groups()
     if params and name in params:
         return params[name]
+    if os.environ.get(name):
+        return os.environ[name]
     if kind == "-":
         return rest
     sys.exit(f"build parameter {name!r} is unset: pass --param {name}=<value>")

@@ -54,6 +54,7 @@ rescore_attempts: 1
 
 model: deepseek-v4-flash
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 1
@@ -102,12 +103,16 @@ inference_gateway:
   # largest set here, hence the bigger ceiling.
   evaluation:
     allowed_models: [deepseek-v4-flash]
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000
     max_tokens: 4000000000  # 900 agent case-runs (300 dev + 600 validation)
     max_concurrency: 64
   # Reserved so a search-phase overspend can never starve held-out scoring.
   finalization:
     allowed_models: [deepseek-v4-flash]
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 200000
     max_tokens: 4000000000  # 150 test cases x3 attempts + rescore headroom
     max_concurrency: 64

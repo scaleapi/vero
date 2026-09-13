@@ -82,11 +82,11 @@
   "environment/sidecar/cases/test.jsonl": "9cf01d06d194f4e7de3257189b7629dea6d33c572a913d98147ec3b05c338044",
   "environment/sidecar/cases/validation.jsonl": "292ddd833d0a584c648349dcea0eca5c8dec170fe596110df6a300935d0e3c1e",
   "environment/sidecar/serve.json": "7b4847bfed41ba938fdef05d93365a7cdfd9f7864333b9712b1def207b7d0c00",
-  "environment/vero/": "b4b959797b70e9ae9583effc256dedfc5219e3b165aabfbd51a0c979f09e8818",
+  "environment/vero/": "78133548ec00da002505f8c0570c3503064c7163be1b0b70c0af30bfd2e034c8",
   "instruction.md": "ee539ac13ad8bdcaf5c3c2bd7465eb44db72001cb7181793c02fe99d440d88f6",
   "solution/solve.sh": "10923f62ac228055ab21388df27d9131a457bb51bafbb883cfd425e3c7d0a4ad",
   "task.toml": "664b022bed341b1e41e8e657553ed942cb3611bbdf7e5a278e6fac2093665e38",
   "tests/test.sh": "b65e90e6d67aacedd559c6b1c9d0f1d5c5071ecc9178a5bd7f9e1066f332bb0d"
  },
- "vero_commit": "09deba52bd57913f86795423dd54c9ad5970d8ea"
+ "vero_commit": "8e50b4a4e311e418127352ed1946be3f05151d54"
 }

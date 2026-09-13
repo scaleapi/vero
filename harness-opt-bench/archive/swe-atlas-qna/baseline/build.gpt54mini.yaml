@@ -67,6 +67,8 @@ rescore_attempts: 1
 
 model: gpt-5.4-mini
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
+# These images set a Bash entrypoint, which exits Harbor's default keepalive at once.
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", 'keepalive=["-c","sleep infinity"]']
 # Allow enough setup time when several optimizer cells start together.
 optimizer_harbor_args: ["--agent-setup-timeout-multiplier", "4"]
 harbor_python_version: "3.12"

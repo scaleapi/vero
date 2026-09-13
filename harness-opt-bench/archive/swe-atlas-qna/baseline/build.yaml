@@ -58,6 +58,8 @@ rescore_attempts: 1
 
 model: gpt-oss-120b
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
+# These images set a Bash entrypoint, which exits Harbor's default keepalive at once.
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", 'keepalive=["-c","sleep infinity"]']
 # Allow enough setup time when several optimizer cells start together.
 optimizer_harbor_args: ["--agent-setup-timeout-multiplier", "4"]
 harbor_python_version: "3.12"
@@ -111,12 +113,16 @@ inference_gateway:
   # the spend control, so a token cap only needs to stop a runaway.
   evaluation:
     allowed_models: [gpt-oss-120b]
+    model_aliases:
+      gpt-oss-120b: ${target_model_route:-fireworks_ai/gpt-oss-120b}
     max_requests: 200000
     max_tokens: 2000000000  # 296 agent case-runs (100 dev + 196 validation)
     max_concurrency: 64
   # Reserved so a search-phase overspend can never starve held-out scoring.
   finalization:
     allowed_models: [gpt-oss-120b]
+    model_aliases:
+      gpt-oss-120b: ${target_model_route:-fireworks_ai/gpt-oss-120b}
     max_requests: 200000
     max_tokens: 2000000000  # 50 test cases x3 attempts + rescore headroom
     max_concurrency: 64

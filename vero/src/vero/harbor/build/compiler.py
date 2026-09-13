@@ -143,8 +143,11 @@ def _published_vero(requirement: str | None) -> str | None:
     name, _, version = requirement.partition("==")
     try:
         installed = distribution_version(name)
-    except PackageNotFoundError:
-        return requirement  # not importable under that name here; trust the pin
+    except PackageNotFoundError as error:
+        raise ValueError(
+            f"vero_requirement pins {requirement} but {name} is not installed "
+            "here, so the pin cannot be checked against the compiling version"
+        ) from error
     if installed != version:
         raise ValueError(
             f"vero_requirement pins {requirement} but this compiler is {name} "

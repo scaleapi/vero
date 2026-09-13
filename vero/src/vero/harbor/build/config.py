@@ -92,10 +92,11 @@ class _TaskIdentityFields(StrictModel):
     def validate_vero_requirement(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*==[0-9][A-Za-z0-9.+!-]*", value):
+        if not re.fullmatch(r"scaleapi-vero==[0-9][A-Za-z0-9.+!-]*", value):
             raise ValueError(
-                "vero_requirement must be an exact pin like scaleapi-vero==0.6.0 "
-                "(no extras: the compiler adds the ones each image needs)"
+                "vero_requirement must pin the VeRO distribution exactly, like "
+                "scaleapi-vero==0.6.0 (no extras: the compiler adds the ones each "
+                "image needs)"
             )
         return value
 

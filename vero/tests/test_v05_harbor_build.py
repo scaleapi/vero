@@ -1798,5 +1798,7 @@ def test_vero_requirement_must_match_the_compiling_vero(tmp_path):
             _config(tmp_path / "a", vero_requirement="scaleapi-vero==0.0.1"),
             tmp_path / "compiled-a", vero_root=Path(__file__).parents[1],
         )
-    with pytest.raises(ValueError, match="exact pin"):
+    with pytest.raises(ValueError, match="pin the VeRO distribution"):
         _config(tmp_path / "b", vero_requirement="scaleapi-vero[harbor]>=0.5")
+    with pytest.raises(ValueError, match="pin the VeRO distribution"):
+        _config(tmp_path / "c", vero_requirement="some-other-package==1.0")

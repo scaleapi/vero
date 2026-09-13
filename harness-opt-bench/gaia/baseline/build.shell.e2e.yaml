@@ -127,7 +127,6 @@ inference_gateway:
     max_requests: 200000
     max_tokens: 200000000  # 30 agent case-runs at most
     max_concurrency: 64
-  # Reserved so a search-phase overspend can never starve held-out scoring.
   finalization:
     allowed_models: [gpt-5.4-mini]
     max_requests: 200000
