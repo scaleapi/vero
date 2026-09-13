@@ -1,25 +1,26 @@
-# tau3 MCP customer-service agent
+# tau3 editable target
 
-This leaf benchmark optimizes a Harbor-native agent that connects to the MCP
-server declared by each tau3 task, obtains the first simulated-user message,
-and carries the conversation through domain and communication tool calls. The
-editable program controls its prompt, tool selection, context management, and
-conversation policy; the task-owned MCP runtime and canonical evaluator remain
-outside the candidate repository.
+The seed connects to the MCP server declared by each task, obtains the first
+simulated-user message, and carries the conversation through domain and
+communication tool calls.
 
-The trusted build pins the target model to `gpt-5.4-mini-2026-03-17` and pins
-the Harbor dataset, split, budgets, access policy, and final test partition.
-The simulated user and natural-language assertion grader use the canonical
-model defaults encoded in the pinned tau3 tasks.
+The optimizer may change the prompt, tool selection, context management,
+conversation policy, and dependencies in `target/`. The task-owned runtime,
+simulated user, evaluator, dataset, partitions, and target model remain fixed.
 
-Compile from the repository root:
+## Compile
 
-```bash
+From the repository root:
+
+~~~bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
-  --config ../harness-opt-bench/candidates/tau3/baseline/build.yaml \
-  --output ../harness-opt-bench/candidates/tau3/baseline/compiled
-```
+  --config ../harness-opt-bench/archive/tau3/baseline/build.yaml \
+  --param inner_env=<evaluation-environment> \
+  --output <output-directory>
+~~~
 
-For a real run, provide the OpenAI and Modal credentials declared in
-`build.yaml`.
+The `VERO_SKIP_SECRET_CHECK` setting is appropriate only for compile-time
+validation. Dataset and split details are in the
+[tau3 overview](../README.md). For a real optimization run, follow the shared
+[`run-benchmark` guide](../../../skills/run-benchmark/SKILL.md).

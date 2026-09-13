@@ -14,12 +14,7 @@ from harbor.models.agent.context import AgentContext
 from openai import AsyncOpenAI
 
 def _is_reasoning_model(model: str) -> bool:
-    """Whether `model` is an OpenAI reasoning model.
-
-    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
-    reasoning_effort, and every gpt-5 model rejects max_tokens. Fireworks-served
-    open models match none of these prefixes, so they keep the legacy shape.
-    """
+    """Whether `model` uses the reasoning-model request fields."""
     name = model.lower()
     return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
 
@@ -200,10 +195,6 @@ class OfficeQaAgent(BaseAgent):
             kwargs["tools"] = TOOLS
         if _is_reasoning_model(self._api_model):
             kwargs["reasoning_effort"] = "medium"
-        # parallel_tool_calls is a separate axis: Fireworks-served models reject
-        # it, but gpt-4o supports it, so this one stays a provider check.
-        if "fireworks" not in self._api_model:
-            kwargs["parallel_tool_calls"] = False
         return kwargs
 
     def _account(self, usage: Any, totals: dict[str, int]) -> None:
@@ -220,9 +211,7 @@ class OfficeQaAgent(BaseAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
-        # Stateless Chat Completions: the full message history is resent each
-        # turn (provider prompt-caching handles the repeated prefix), which
-        # works across every provider, unlike the OpenAI-only Responses API.
+        # The API is stateless, so resend the full message history each turn.
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": INSTRUCTIONS},
             {"role": "user", "content": instruction},

@@ -325,20 +325,23 @@ def test_compiler_reserves_finalization_scope_defaulting_to_evaluation(tmp_path)
     assert "finalization" in scopes
     assert scopes["finalization"]["allowed_models"] == ["gpt-target"]
     assert scopes["finalization"]["max_tokens"] == 100000000
-    # its token is distinct from the evaluation token (optimizer can't drain it)
-    assert (
-        scopes["finalization"]["token_sha256"] != scopes["evaluation"]["token_sha256"]
-    )
-    # and the sidecar backend carries a finalization token distinct from the eval one
+    # its token arrives under its own variable, distinct from the evaluation one
+    # (so the optimizer cannot drain it); nothing is baked, only the names.
+    assert scopes["finalization"]["token_env"] == LAYOUT.finalization_token_env
+    assert scopes["evaluation"]["token_env"] == LAYOUT.evaluation_token_env
+    assert scopes["finalization"]["token_env"] != scopes["evaluation"]["token_env"]
+    assert "token_sha256" not in scopes["finalization"]
+    # and the sidecar backend names the same two variables
     serve = json.loads(
         (output / "environment/sidecar/serve.json").read_text(encoding="utf-8")
     )
     backend = next(iter(serve["backends"].values()))
-    assert backend["inference_gateway_finalization_token"] is not None
+    assert backend["inference_gateway_token_env"] == LAYOUT.evaluation_token_env
     assert (
-        backend["inference_gateway_finalization_token"]
-        != backend["inference_gateway_token"]
+        backend["inference_gateway_finalization_token_env"]
+        == LAYOUT.finalization_token_env
     )
+    assert backend.get("inference_gateway_token") is None
     # Per-request logging is on by default: the gateway captures every
     # request/response on its state volume and the sidecar mirrors it. The
     # experimental thread-attribution stamping stays off unless opted into.
@@ -1133,6 +1136,11 @@ def test_compiler_isolates_upstream_inference_credentials(tmp_path, monkeypatch)
         "TEST_MODAL_TOKEN": "${TEST_MODAL_TOKEN}",
         "VERO_INFERENCE_UPSTREAM_API_KEY": "${VERO_INFERENCE_UPSTREAM_API_KEY}",
         "VERO_INFERENCE_UPSTREAM_BASE_URL": "${VERO_INFERENCE_UPSTREAM_BASE_URL}",
+        # per-run inputs the launcher mints; harbor passes them to compose like secrets
+        "VERO_PRODUCER_TOKEN": "${VERO_PRODUCER_TOKEN}",
+        "VERO_EVALUATION_TOKEN": "${VERO_EVALUATION_TOKEN}",
+        "VERO_FINALIZATION_TOKEN": "${VERO_FINALIZATION_TOKEN}",
+        "VERO_PRODUCER_SCOPE": "${VERO_PRODUCER_SCOPE}",
     }
     compose = yaml.safe_load((output / "environment/docker-compose.yaml").read_text())
     assert set(compose["services"]) == {
@@ -1147,27 +1155,44 @@ def test_compiler_isolates_upstream_inference_credentials(tmp_path, monkeypatch)
     assert main_environment["OPENAI_API_KEY"] != "real-provider-secret"
     assert main_environment["OPENAI_BASE_URL"].endswith("/scopes/producer/optimizer/v1")
     assert compose["services"]["eval-sidecar"]["environment"] == {
-        "TEST_MODAL_TOKEN": "${TEST_MODAL_TOKEN:?TEST_MODAL_TOKEN must be set for the eval sidecar}"
+        "TEST_MODAL_TOKEN": "${TEST_MODAL_TOKEN:?TEST_MODAL_TOKEN must be set for the eval sidecar}",
+        "VERO_EVALUATION_TOKEN": "${VERO_EVALUATION_TOKEN:?VERO_EVALUATION_TOKEN must be set for the eval sidecar}",
+        "VERO_FINALIZATION_TOKEN": "${VERO_FINALIZATION_TOKEN:?VERO_FINALIZATION_TOKEN must be set for the eval sidecar}",
+        "VERO_PRODUCER_SCOPE": "${VERO_PRODUCER_SCOPE:-}",
     }
     assert compose["services"]["inference-gateway"]["environment"] == {
         "VERO_INFERENCE_UPSTREAM_API_KEY": "${VERO_INFERENCE_UPSTREAM_API_KEY:?VERO_INFERENCE_UPSTREAM_API_KEY must be set for the inference gateway}",
         "VERO_INFERENCE_UPSTREAM_BASE_URL": "${VERO_INFERENCE_UPSTREAM_BASE_URL:?VERO_INFERENCE_UPSTREAM_BASE_URL must be set for the inference gateway}",
+        "VERO_PRODUCER_TOKEN": "${VERO_PRODUCER_TOKEN:?VERO_PRODUCER_TOKEN must be set for the inference gateway}",
+        "VERO_EVALUATION_TOKEN": "${VERO_EVALUATION_TOKEN:?VERO_EVALUATION_TOKEN must be set for the inference gateway}",
+        "VERO_FINALIZATION_TOKEN": "${VERO_FINALIZATION_TOKEN:?VERO_FINALIZATION_TOKEN must be set for the inference gateway}",
+        "VERO_PRODUCER_SCOPE": "${VERO_PRODUCER_SCOPE:-}",
     }
     gateway = json.loads((output / "environment/gateway/config.json").read_text())
     assert "real-provider-secret" not in json.dumps(gateway)
-    assert gateway["scopes"]["producer"]["token_sha256"]
+    # Nothing per-run is baked: the gateway names the variables it will read once
+    # at start, and the producer scope can be replaced from the launcher.
+    assert gateway["scopes"]["producer"]["token_env"] == "VERO_PRODUCER_TOKEN"
+    assert gateway["scopes"]["producer"]["override_env"] == "VERO_PRODUCER_SCOPE"
+    assert "token_sha256" not in gateway["scopes"]["producer"]
     launch = json.loads((output / "environment/gateway/launch.json").read_text())
     assert launch["upstream_api_key_source"] == "TEST_UPSTREAM_KEY"
     assert launch["upstream_api_key_target"] == "VERO_INFERENCE_UPSTREAM_API_KEY"
-    assert launch["producer_api_key"] == main_environment["OPENAI_API_KEY"]
+    assert "producer_api_key" not in launch
+    assert launch["producer_token_env"] == "VERO_PRODUCER_TOKEN"
+    # The optimizer's key is the compose-time value of that same variable.
+    assert main_environment["OPENAI_API_KEY"].startswith("${VERO_PRODUCER_TOKEN:?")
+    # The main container is blanked for the raw variables; only OPENAI_* carries the scope.
+    for name in ("VERO_PRODUCER_TOKEN", "VERO_EVALUATION_TOKEN", "VERO_FINALIZATION_TOKEN"):
+        assert main_environment[name] == ""
     seed = (output / "environment/main/seed.sh").read_text()
     assert 'model_provider = "vero_gateway"' in seed
     assert "supports_websockets = false" in seed
     serve = json.loads((output / "environment/sidecar/serve.json").read_text())
     backend = serve["backends"]["harbor-validation"]
     assert backend["passthrough_environment"] == ["TEST_MODAL_TOKEN"]
-    assert backend["inference_gateway_token"]
-    assert backend["inference_gateway_token"] != "real-provider-secret"
+    assert backend["inference_gateway_token_env"] == "VERO_EVALUATION_TOKEN"
+    assert backend.get("inference_gateway_token") is None
     assert "real-provider-secret" not in json.dumps(serve)
     assert (output / "environment/gateway/Dockerfile").is_file()
 
@@ -1689,3 +1714,91 @@ def test_outer_trial_limits_apply_to_a_command_backend_too(tmp_path):
         optimizer_sandbox_idle_timeout_seconds=3600,
     )
     assert config.optimizer_agent_timeout_seconds == 72000
+def test_compile_is_deterministic_so_a_task_can_be_frozen(tmp_path):
+    """Two compiles of one config at one vero commit hash identically.
+
+    This is what `vero harbor build --check` relies on. Tokens are not minted at
+    compile, the baseline commit carries a fixed date, and the manifest skips the
+    git index and reflogs, which hold stat data rather than content.
+    """
+    from vero.harbor.cli import _compiled_manifest, _manifest_drift
+
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(allowed_models=["gpt-producer"]),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        ),
+    )
+    first = compile_harbor_task(config, tmp_path / "one", vero_root=Path(__file__).parents[1])
+    second = compile_harbor_task(config, tmp_path / "two", vero_root=Path(__file__).parents[1])
+    a = _compiled_manifest(first, tmp_path / "build.yaml")
+    b = _compiled_manifest(second, tmp_path / "build.yaml")
+    assert _manifest_drift(a, b) == []
+    assert a["files"]
+    assert any(p.startswith("environment/agent-baseline/.git/objects/") for p in a["files"])
+    assert not any(p.endswith("/.git/index") for p in a["files"])
+
+
+def test_launcher_mints_run_inputs_matching_the_compiled_names(tmp_path):
+    from vero.harbor.cli import _runtime_inference_environment
+
+    config = _config(
+        tmp_path,
+        inference_gateway=InferenceGatewaySpec(
+            producer=InferenceBudgetSpec(
+                allowed_models=["anthropic/claude-opus-5", "claude-opus-5"],
+                model_aliases={"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"},
+            ),
+            evaluation=InferenceBudgetSpec(allowed_models=["gpt-target"]),
+        ),
+    )
+    output = compile_harbor_task(config, tmp_path / "compiled", vero_root=Path(__file__).parents[1])
+    runtime = _runtime_inference_environment(config, output)
+    assert set(runtime) == {
+        "VERO_PRODUCER_TOKEN", "VERO_EVALUATION_TOKEN", "VERO_FINALIZATION_TOKEN",
+        "VERO_PRODUCER_SCOPE",
+    }
+    tokens = {runtime[k] for k in runtime if k.endswith("_TOKEN")}
+    assert len(tokens) == 3 and all(len(t) > 20 for t in tokens)
+    assert json.loads(runtime["VERO_PRODUCER_SCOPE"]) == {
+        "allowed_models": ["anthropic/claude-opus-5", "claude-opus-5"],
+        "model_aliases": {"gpt-5.6-sol": "azure_ai/gpt-5.6-sol"},
+    }
+    # And the same names appear in the task.toml environment so harbor passes them on.
+    task = tomllib.loads((output / "task.toml").read_text(encoding="utf-8"))
+    for name in runtime:
+        assert task["environment"]["env"][name] == "${" + name + "}"
+
+
+def test_vero_requirement_installs_from_pypi_instead_of_copying_source(tmp_path):
+    """A pinned published vero keeps the source tree out of the compiled task."""
+    from importlib.metadata import version
+
+    pin = f"scaleapi-vero=={version('scaleapi-vero')}"
+    output = compile_harbor_task(
+        _config(tmp_path, vero_requirement=pin), tmp_path / "compiled",
+        vero_root=Path(__file__).parents[1],
+    )
+    assert not (output / "environment/vero").exists()
+    main = (output / "environment/Dockerfile").read_text(encoding="utf-8")
+    sidecar = (output / "environment/sidecar/Dockerfile").read_text(encoding="utf-8")
+    assert f"scaleapi-vero[harbor]=={version('scaleapi-vero')}" in main
+    assert f"scaleapi-vero[harbor]=={version('scaleapi-vero')}" in sidecar
+    assert "COPY vero " not in main and "COPY vero " not in sidecar
+    # and the manifest no longer carries a vero subtree
+    from vero.harbor.cli import _compiled_manifest
+
+    assert not any(p.startswith("environment/vero/") for p in _compiled_manifest(output, tmp_path / "b.yaml")["files"])
+
+
+def test_vero_requirement_must_match_the_compiling_vero(tmp_path):
+    with pytest.raises(ValueError, match="must run the version that compiled them"):
+        compile_harbor_task(
+            _config(tmp_path / "a", vero_requirement="scaleapi-vero==0.0.1"),
+            tmp_path / "compiled-a", vero_root=Path(__file__).parents[1],
+        )
+    with pytest.raises(ValueError, match="pin the VeRO distribution"):
+        _config(tmp_path / "b", vero_requirement="scaleapi-vero[harbor]>=0.5")
+    with pytest.raises(ValueError, match="pin the VeRO distribution"):
+        _config(tmp_path / "c", vero_requirement="some-other-package==1.0")

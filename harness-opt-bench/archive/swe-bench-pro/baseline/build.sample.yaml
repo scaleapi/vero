@@ -32,7 +32,7 @@ task_source: swebenchpro@1.0
 # a second thing to keep in sync.
 task_manifest: ../partitions/manifest.json
 agent_import_path: swebench_pro_agent.agent:SweBenchProAgent
-harbor_requirement: harbor[modal]==0.20.0
+harbor_requirement: harbor==0.20.0
 
 partition_files:
   development: ../partitions/sample/development.json
@@ -92,9 +92,8 @@ score_baseline: false  # pinned as baseline_reward above, like every sibling
 rescore_top_k: 3
 rescore_attempts: 1
 
-model: fireworks_ai/deepseek-v4-flash
-environment_name: ${inner_env:-modal}
-# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default
+model: deepseek-v4-flash
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
 extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
 harbor_python_version: "3.12"
 n_attempts: 1
@@ -120,55 +119,27 @@ task_agent_timeout_seconds: 3000
 max_concurrency: 24  # matching the rest of the suite
 error_rate_threshold: 0.1
 verifier_timeout_seconds: 28800
-# Limits on the OUTER optimizer trial: the Modal sandbox the optimizer itself runs
-# in, not the nested evaluation. Every value reproduces what ran implicitly before
-# 2026-09, now written down so the task states its own bounds.
-#   sandbox timeout: Harbor's Modal default of 24 h. When it fires the sandbox is
-#   destroyed with no verifier and no archive, so the trial is lost.
+# Limits on the outer optimizer trial. The agent timeout leaves time for final
+# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
-#   idle timeout: reclaims a sandbox whose optimizer died with no running command.
-#   The inner evaluation app has used 3600 since July; the outer sandbox had none.
 optimizer_sandbox_idle_timeout_seconds: 3600
-#   agent clock: Harbor stops the optimizer here and STILL runs the verifier, so a
-#   runaway is scored and archived instead of lost at the sandbox timeout. Clean
-#   cells finish in 8-17 h; the longest finalization seen was ~3.5 h, which is
-#   what the 4 h gap to the sandbox timeout is for.
 optimizer_agent_timeout_seconds: 72000
-#   Harbor's default resolves to public internet; stated rather than inherited.
 optimizer_allow_internet: true
-#   optimizer_cpus / optimizer_memory_mb / optimizer_storage_mb are left unset on
-#   purpose: that is Modal's default (0.125-core / 128 MiB reservation, bursting to
-#   the host), which is what every August cell ran under. Set them once the first
-#   rebuttal wave has been read off the Modal dashboard.
-secrets:
-  - MODAL_TOKEN_ID
-  - MODAL_TOKEN_SECRET
-  - MODAL_ENVIRONMENT  # which Modal environment the sandboxes land in; unset = workspace default
-  - WANDB_API_KEY
-  - WANDB_BASE_URL  # self-hosted W&B (scaleai.wandb.io)
 
 # candidate harness runs as an unprivileged uid, unable to read held-out state.
 harness_user: harness
-
-wandb:
-  project: vero-swe-bench-pro
-  group: swe-bench-pro-sample  # distinct from the full-split group
-  log_traces: true
 
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
   upstream_base_url_env: OPENAI_BASE_URL
   producer:
-    # NOTE: gpt-5.3-codex has no /responses deployment on the LiteLLM proxy
-    # (/chat/completions is 200, /responses is 404 DeploymentNotFound), and the
-    # codex agent is Responses-native, so launch with
-    # `--model gpt-5.6-sol` (or gpt-4.1) until that deployment exists.
+    # The optimizer model must support the API used by its harness.
     allowed_models: ["${optimizer_model:-gpt-5.6-sol}"]
     max_concurrency: 8
   evaluation:
-    # Prefixed form only: the agents strip just `openai/` before calling the
-    # gateway, which then matches this allow-list as an exact string.
-    allowed_models: [fireworks_ai/deepseek-v4-flash]
+    allowed_models: [deepseek-v4-flash]
+    model_aliases:
+      deepseek-v4-flash: ${target_model_route:-fireworks_ai/deepseek-v4-flash-0731}
     max_requests: 15000
     max_tokens: 100000000
     max_concurrency: 64

@@ -1,39 +1,57 @@
 # GAIA
 
-The GAIA benchmark uses the canonical Harbor task packages and verifier. It
-does not reproduce the paper's pure-language subset or its original split.
+GAIA evaluates a multimodal research agent that can search the web, inspect
+files and images, run shell commands, and submit an exact answer.
 
-The committed split is deterministic and stratified by GAIA level and whether
-the task has an attached file:
+## At a glance
 
-- development: 33 cases (20%)
-- validation: 66 cases (40%)
-- test: 66 cases (40%)
+| Item | Value |
+| --- | --- |
+| Task source | Pinned GAIA Harbor package |
+| Editable harness | `baseline/target/` |
+| Development / validation / test | 33 / 66 / 66 |
+| Split strategy | GAIA level and attachment presence |
+| Target model | `gpt-5.4-mini` |
+| Pinned seed baselines | 0.6205 working target; 0.0 shell target |
+| Scoring | Canonical task verifier |
 
-All 165 cases come from the immutable dataset reference recorded in
-[`partitions/manifest.json`](partitions/manifest.json). The development set is
-available to the optimization agent with full result disclosure. Validation is
-aggregate-only and is used to select candidates. Test is held out until Harbor
-grades the completed outer task. The complete development task packages and
-attachments are mounted read-only under `.evals/tasks/`; successful and failed
-development evaluations place their complete Harbor trial records—including
-exact failures and target-agent logs—under
-`.evals/results/`. Neither validation nor test resources are mounted.
+Development cases expose full results and task resources. Validation exposes
+aggregate scores, and test remains hidden until final scoring.
 
-The pinned GAIA tasks declare a 600-second Harbor agent timeout. The build
-config sets `case_timeout_seconds: 180` and
-`task_agent_timeout_seconds: 600`, so VeRO invokes Harbor with an agent-timeout
-multiplier of `0.3`. The 180-second limit reported to the optimizer is therefore
-the timeout enforced by the inner Harbor trial.
+## Variants
 
-To verify or regenerate the split after downloading the pinned Harbor dataset:
+| Build | Starting point | Purpose |
+| --- | --- | --- |
+| `baseline/build.yaml` | Working tool-using agent | Measure harness improvement |
+| `baseline/build.shell.yaml` | Minimal non-solving skeleton | Measure harness construction from scratch |
+| `baseline/build.shell.e2e.yaml` | Skeleton with eight cases | Exercise the complete pipeline quickly |
 
-```bash
-uv run --python 3.12 scripts/partition_gaia.py \
-  --tasks-dir /path/to/downloaded/gaia \
+The full and shell builds use the same tasks, model, budgets, and evaluation
+policy. See [the baseline guide](baseline/README.md) for their editable surfaces
+and build commands.
+
+## Data and split
+
+The 165 task references are pinned in
+[`partitions/manifest.json`](partitions/manifest.json). To verify the committed
+split against downloaded tasks, run from the repository root:
+
+~~~bash
+uv run --python 3.12 harness-opt-bench/gaia/scripts/partition_gaia.py \
+  --tasks-dir <downloaded-gaia-tasks> \
   --check
-```
+~~~
 
-Refreshing from a different registry revision is an explicit operation: update
-the dataset constant in the script and `build.yaml`, then run with
-`--fetch-registry`. Review the manifest diff before committing it.
+Changing the dataset revision is a benchmark change. Update the source pin,
+regenerate the partitions, and review the manifest before using new results.
+
+## Where to look
+
+| Path | Contents |
+| --- | --- |
+| `baseline/build*.yaml` | Benchmark variants and evaluation settings |
+| `baseline/target/` | Working editable agent |
+| `baseline/target-shell/` | Minimal editable skeleton |
+| `partitions/` | Reported development, validation, and test split |
+| `partitions-e2e/` | Small smoke-test split |
+| `scripts/partition_gaia.py` | Split verification and regeneration |

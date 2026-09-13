@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 import httpx
 from fastapi.testclient import TestClient
 
@@ -1186,3 +1188,60 @@ def test_model_alias_rewrites_upstream_after_the_allow_list(tmp_path):
         ("vendor_x/gpt-test", "gpt-test"),
         ("plain", None),
     ]
+
+
+def test_resolve_gateway_config_reads_tokens_and_producer_scope_once():
+    from vero.gateway.inference import (
+        InferenceGatewayConfig,
+        InferenceScopeConfig,
+        create_inference_gateway_app,
+        resolve_gateway_config,
+        token_digest,
+    )
+
+    config = InferenceGatewayConfig(
+        scopes={
+            "producer": InferenceScopeConfig(
+                token_env="VERO_PRODUCER_TOKEN",
+                override_env="VERO_PRODUCER_SCOPE",
+                allowed_models=["openai/gpt-5.4"],
+            ),
+            "evaluation": InferenceScopeConfig(
+                token_env="VERO_EVALUATION_TOKEN", allowed_models=["target"]
+            ),
+        }
+    )
+    with pytest.raises(ValueError, match="resolve_gateway_config"):
+        create_inference_gateway_app(config=config, upstream_api_key="k")
+
+    environ = {
+        "VERO_PRODUCER_TOKEN": "p-token",
+        "VERO_EVALUATION_TOKEN": "e-token",
+        "VERO_PRODUCER_SCOPE": json.dumps(
+            {"allowed_models": ["claude-opus-5"], "model_aliases": {"a": "b"}}
+        ),
+    }
+    resolved = resolve_gateway_config(config, environ)
+    assert resolved.scopes["producer"].token_sha256 == token_digest("p-token")
+    assert resolved.scopes["evaluation"].token_sha256 == token_digest("e-token")
+    assert resolved.scopes["producer"].allowed_models == ["claude-opus-5"]
+    assert resolved.scopes["producer"].model_aliases == {"a": "b"}
+    assert resolved.scopes["evaluation"].allowed_models == ["target"]
+    # The compiled config is untouched, and a later change to the environment
+    # does not reach the resolved one.
+    assert config.scopes["producer"].allowed_models == ["openai/gpt-5.4"]
+    environ["VERO_PRODUCER_SCOPE"] = json.dumps({"allowed_models": ["other"]})
+    assert resolved.scopes["producer"].allowed_models == ["claude-opus-5"]
+
+    environ["VERO_PRODUCER_SCOPE"] = ""
+    assert resolve_gateway_config(config, environ).scopes["producer"].allowed_models == [
+        "openai/gpt-5.4"
+    ]
+    with pytest.raises(RuntimeError, match="VERO_EVALUATION_TOKEN"):
+        resolve_gateway_config(config, {"VERO_PRODUCER_TOKEN": "p"})
+    with pytest.raises(RuntimeError, match="may only set"):
+        resolve_gateway_config(
+            config, {**environ, "VERO_PRODUCER_SCOPE": json.dumps({"max_tokens": 1})}
+        )
+    with pytest.raises(ValueError, match="token_sha256 or token_env"):
+        InferenceScopeConfig(allowed_models=["x"])

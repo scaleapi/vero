@@ -7,7 +7,7 @@ agent_repo: target
 task_source: scale-ai/swe-atlas-qna@sha256:0e26bc0313ae2fc6f912b67b928e648c7f20d17d91f765f702a93042ce5be0e4
 task_manifest: ../partitions/manifest.json
 agent_import_path: atlas_agent.agent:AtlasAgent
-harbor_requirement: harbor[modal]==0.20.0
+harbor_requirement: harbor==0.20.0
 
 partition_files:
   development: ../partitions/development.json
@@ -31,10 +31,9 @@ selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    # Measured on THIS target model, not inherited: build.yaml's floor was
-    # measured on fireworks_ai/gpt-oss-120b and says nothing about gpt-5.4-mini
-    # -- a delta against it would be a model comparison dressed up as an
-    # optimization result. Pinned via
+    # Measured on this target model rather than inherited from build.yaml; using
+    # a different model's floor would turn the result into a model comparison.
+    # Pinned via
     #   rescore_candidate.py --seed --benchmark swe-atlas-qna --model gpt-5.4-mini
     # (the same path that produced every other pinned baseline).
     #
@@ -67,49 +66,16 @@ rescore_top_k: 3
 rescore_attempts: 1
 
 model: gpt-5.4-mini
-environment_name: ${inner_env:-modal}
-# inner eval sandboxes share a dedicated Modal app instead of the __harbor__ default.
-# keepalive: these images set ENTRYPOINT ["/bin/bash"], which Modal prepends to the
-# sandbox command; harbor's default keepalive ["sh","-c","sleep infinity"] then dies
-# instantly (bash interprets the sh binary as a script) and every trial fails with
-# "Sandbox already shut down". Passing bash's own args keeps the sandbox alive.
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
+# These images set a Bash entrypoint, which exits Harbor's default keepalive at once.
 extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600", "--ek", 'keepalive=["-c","sleep infinity"]']
-# Concurrent cells each `npm install -g` their harness at once, which saturates the
-# link: harbor's agent-setup budget is 360s and FOUR of five cells died on it on
-# 2026-07-30 (AgentSetupTimeoutError at 360.0s, mid `npm install -g
-# @anthropic-ai/claude-code` / the claude-code bootstrap curl), across all four
-# harnesses and all five models. A single atlas cell run alone survives, which is
-# why the smoke never caught it. x4 gives 24 minutes to get installed.
-# This is the OUTER trial's budget, hence optimizer_harbor_args and not
-# extra_harbor_args (which tunes the nested eval). Setup budget only: agent
-# execution, case and verifier timeouts are untouched, so measured scores stay
-# comparable. swe-bench-pro's grid config has carried this since 07-29; atlas was
-# simply never given it.
+# Allow enough setup time when several optimizer cells start together.
 optimizer_harbor_args: ["--agent-setup-timeout-multiplier", "4"]
 harbor_python_version: "3.12"
 n_attempts: 1
-# Retries are kept at the sibling value but are near-idle on this target:
-# gpt-5.4-mini resolves to azure_ai/gpt-5.4-mini, NOT the fireworks pool, and
-# gaia has run 51 rounds against it at a 0.5% upstream error rate versus 47%
-# for gpt-oss-120b on 2026-07-30. Original gpt-oss rationale, kept for history:
-# the old target was fireworks_ai/gpt-oss-120b, on the SAME org-wide
-# fireworks quota that swe-bench-pro measured as bursty (429 on 11 of 12
-# sequential calls, then 1 of 4 a minute later). That is a provider-level limit,
-# not this key's, so it cannot be tuned away from here and has to be ridden out.
-# swe-bench-pro went 1 -> 5 after a single retry proved insufficient there; atlas
-# was left at 1. Retries only cover infrastructure/rate-limit errors, so this does
-# not change any measured score.
+# Retry transient request failures without changing candidate-caused outcomes.
 max_retries: 5
 infrastructure_max_attempts: 3
-# 20 -> 5, matching every sibling (gaia, officeqa, tau3, browsecomp-plus,
-# swe-bench-pro all pin 5). 20 was this file's own invention and it is pure dead
-# wall clock on a 429-heavy path: the live 2026-07-30 sonnet5 run logged 6713
-# rate-limit rejections out of 13697 gateway calls, so a 4x longer backoff is a
-# 4x longer wait on roughly half of all traffic. The attempt budget stays at 5
-# (still 5x the siblings' 1), so success probability is unchanged in kind; only
-# the gap between attempts shrinks, and these rejections are bursty rather than
-# sustained. Retries only cover infrastructure/rate-limit errors, so no measured
-# score moves.
 infrastructure_retry_delay_seconds: 5
 aggregate_attempts: best
 feedback_transcripts: true
@@ -131,39 +97,12 @@ error_rate_threshold: 0.1
 # Unreachable: worst-case finalize (75600) + worst-case rescore_top_k=3
 # validation rescore (75600). A verifier timeout loses the score outright.
 verifier_timeout_seconds: 176400
-# Limits on the OUTER optimizer trial: the Modal sandbox the optimizer itself runs
-# in, not the nested evaluation. Every value reproduces what ran implicitly before
-# 2026-09, now written down so the task states its own bounds.
-#   sandbox timeout: Harbor's Modal default of 24 h. When it fires the sandbox is
-#   destroyed with no verifier and no archive, so the trial is lost.
+# Limits on the outer optimizer trial. The agent timeout leaves time for final
+# scoring before the hard sandbox deadline.
 optimizer_sandbox_timeout_seconds: 86400
-#   idle timeout: reclaims a sandbox whose optimizer died with no running command.
-#   The inner evaluation app has used 3600 since July; the outer sandbox had none.
 optimizer_sandbox_idle_timeout_seconds: 3600
-#   agent clock: Harbor stops the optimizer here and STILL runs the verifier, so a
-#   runaway is scored and archived instead of lost at the sandbox timeout. Clean
-#   cells finish in 8-17 h; the longest finalization seen was ~3.5 h, which is
-#   what the 4 h gap to the sandbox timeout is for.
 optimizer_agent_timeout_seconds: 72000
-#   Harbor's default resolves to public internet; stated rather than inherited.
 optimizer_allow_internet: true
-#   optimizer_cpus / optimizer_memory_mb / optimizer_storage_mb are left unset on
-#   purpose: that is Modal's default (0.125-core / 128 MiB reservation, bursting to
-#   the host), which is what every August cell ran under. Set them once the first
-#   rebuttal wave has been read off the Modal dashboard.
-secrets:
-  - MODAL_TOKEN_ID
-  - MODAL_TOKEN_SECRET
-  - MODAL_ENVIRONMENT  # which Modal environment the sandboxes land in; unset = workspace default
-  - WANDB_API_KEY
-  - WANDB_BASE_URL  # self-hosted or cloud W&B
-
-wandb:
-  project: harness-engineering-bench  # one project for the whole suite
-  group: swe-atlas-qna  # keeps the benchmark distinguishable in the shared project
-  name: ${wandb_run:-swe-atlas-qna}  # per-launch label, e.g. --param wandb_run=swe-atlas-qna__claude-sonnet-5
-  tags: [swe-atlas-qna]
-  log_traces: true
 
 inference_gateway:
   upstream_api_key_env: OPENAI_API_KEY
@@ -176,26 +115,9 @@ inference_gateway:
   # this run is a per-case cost number for the mini-vs-nano decision.
   request_log_attribution: true
   producer:
-    # BOTH spellings, prefixed and bare. The gateway compares the requested model
-    # against this list as an exact string (gateway/inference.py: `model not in
-    # scope.allowed_models`), and the agent harnesses strip the provider prefix
-    # before calling it. With only the prefixed form here, every openai- and
-    # anthropic-routed optimizer gets a 403 "model is not allowed for this scope"
-    # on its very first call. swe-bench-pro's grid config already carries both
-    # after that cost a whole run; this one still had a single entry.
-    # A third entry for the harness's auxiliary model. opencode issues one
-    # summarisation/title call per session on a small model of the same provider
-    # family, and it sends the DATED id: the live 2026-07-30 sonnet5 run logged
-    # exactly one `claude-haiku-4-5-20251001` producer request and it came back
-    # 403 model_denied, while all 190 `claude-sonnet-5` calls passed. Non-fatal
-    # (1 call in 191) and not a speed lever, but it is invisible outside the
-    # gateway request log. CONFIGURATION.md names the bare `claude-haiku-4-5` /
-    # `gpt-5.4-nano`; the gateway compares exact strings, so the dated spelling
-    # that actually goes on the wire is what has to be here. Parameterised
-    # because the name varies by provider family.
+    # Include an auxiliary model when the optimizer harness uses one.
     allowed_models:
-      - "${optimizer_model:-openai/gpt-5.4}"
-      - "${optimizer_model_bare:-gpt-5.4}"
+      - "${optimizer_model:-gpt-5.4}"
       - "${optimizer_aux_model:-gpt-5.4-nano}"
     max_concurrency: 8
   # See officeqa/baseline/build.yaml for the sizing rationale: the case budget is
@@ -213,34 +135,18 @@ inference_gateway:
     max_concurrency: 64
 instruct_multifidelity: true
 instruct_exhaust_budget: true
-# The rubric judge runs inside the Modal task container and cannot reach the
-# compose-internal gateway; it gets the real upstream on OPENAI_* while the
-# candidate agent keeps the metered gateway on VERO_AGENT_INFERENCE_*.
+# The rubric judge needs direct endpoint access while the candidate agent stays
+# on its metered, allow-listed gateway scope.
 task_services_use_upstream: true
 # ACCEPTED EXPOSURE (non-adversarial optimizer): with isolation off, candidate
 # harness code shares the sidecar uid, so it could read the upstream key and
 # the held-out session state. Runs using this config get a post-run leakage
 # audit of every candidate version. Proper fix: per-role egress isolation.
 harness_user: null
-# Optimizer-agent env (forwarded to the harbor claude-code agent as --ae KEY=VALUE).
-# Claude Code's Bash tool caps a single call at BASH_MAX_TIMEOUT_MS (default
-# 600000=10min), well under one inner eval, which pushed the officeqa optimizer
-# into --detach + background-poll + end-turn -- and a headless --print run is
-# never re-woken, so the search died there. Raise the cap so a whole eval fits in
-# one blocking call. The background-task vars are defence in depth only: they gate
-# *automatic* backgrounding and do NOT remove the Bash tool's run_in_background
-# parameter, which the model can still choose. The instruction forbids that.
+# Allow one full evaluation to complete in a foreground tool call.
 agent_env:
-  # Above this benchmark's widest single eval: a full validation pass is
-  # ceil(49/24) x 10800 = 32400s worst case.
   BASH_MAX_TIMEOUT_MS: "39600000"
-  BASH_DEFAULT_TIMEOUT_MS: "39600000"  # same as max: an un-timed eval must still block
+  BASH_DEFAULT_TIMEOUT_MS: "39600000"
   ENABLE_BACKGROUND_TASKS: "0"
   FORCE_AUTO_BACKGROUND_TASKS: "0"
-  # Harnesses installed with `uv tool install` (mini-swe-agent, swe-agent)
-  # default to symlinking their entry point into /usr/local/bin, which the
-  # unprivileged optimizer user cannot write: "Failed to install executable
-  # ... Permission denied". npm/nvm-based harnesses (claude-code, opencode)
-  # are unaffected, so this only bites when the harness changes.
   UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
-

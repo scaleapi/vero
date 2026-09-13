@@ -32,10 +32,10 @@ Each benchmark pins its target, dataset, split, budgets, and scoring protocol in
 
 | Benchmark | Editable target | Dataset | Split |
 | --- | --- | --- | --- |
-| [GAIA](gaia/baseline/) | Tool-using multimodal agent | GAIA | 20% / 40% / 40% |
-| [OfficeQA](officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
-| [BrowseComp-Plus](browsecomp-plus/baseline/) | Fixed-corpus research agent | BrowseComp-Plus | 20% / 40% / 40% |
-| [Terminal-Bench](terminal-bench/baseline/) | Shell-based terminal agent | Terminal-Bench 2.1 | 20% / 40% / 40% |
+| [GAIA](gaia/) | Tool-using multimodal agent | GAIA | 20% / 40% / 40% |
+| [OfficeQA](officeqa/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
+| [BrowseComp-Plus](browsecomp-plus/) | Fixed-corpus research agent | BrowseComp-Plus | 20% / 40% / 40% |
+| [Terminal-Bench](terminal-bench/) | Shell-based terminal agent | Terminal-Bench 2.1 | 20% / 40% / 40% |
 
 Additional benchmarks that were implemented but are not part of the reported
 suite live under [`archive/`](archive/).
@@ -66,14 +66,15 @@ uv run vero harbor run \
   --env-file <your>.env \
   --agent <optimizer-harness> \
   --model <optimizer-model> \
+  --param inner_env=<evaluation-environment> \
   --param optimizer_model=<optimizer-model-as-the-harness-sends-it> \
   -o ../runs/<run-name>/jobs
 ```
 
-The env file holds your model-endpoint key, execution-environment tokens and
-telemetry credentials; keep it outside the benchmark definition. The two model
-arguments differ because some harnesses rewrite the model name before sending
-it, and the gateway only accepts the name it was told to expect. The runbook,
+The env file holds credentials required by your inference and execution
+services; keep it outside the benchmark definition. Some harnesses rewrite the
+model name before sending it, so `optimizer_model` must match that final value.
+The runbook,
 [`skills/run-benchmark/SKILL.md`](skills/run-benchmark/SKILL.md), covers that
 rule, the preflight and the health checks. Before launching a full experiment,
 use [`vero/examples/harness-conformance/`](../vero/examples/harness-conformance/)
@@ -101,6 +102,7 @@ inspect the generated task:
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
+  --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ```
 

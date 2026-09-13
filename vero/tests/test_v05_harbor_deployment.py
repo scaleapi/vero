@@ -343,3 +343,47 @@ async def test_wandb_init_failure_is_recorded_in_the_session_artifacts(tmp_path)
     assert recorded["project"] == "vero-tests"
     assert recorded["error_type"] == "ValueError"
     assert "valid URL" in recorded["error"]
+
+
+def test_sidecar_resolves_gateway_tokens_from_its_environment_once(tmp_path):
+    from vero.harbor.backend import HarborBackendConfig
+    from vero.harbor.deployment import producer_scope_override, resolve_runtime_secrets
+
+    cases = tmp_path / "v.jsonl"
+    cases.write_text('{"case_id": "a"}\n')
+    config = HarborBackendConfig(
+        task_source="org/tasks@1",
+        agent_import_path="a.b:C",
+        cases_path=str(cases),
+        harbor_requirement="harbor==0.1",
+        evaluation_set_name="v",
+        partition="validation",
+        inference_gateway_url="http://inference-gateway:8001",
+        inference_gateway_token_env="VERO_EVALUATION_TOKEN",
+        inference_gateway_finalization_token_env="VERO_FINALIZATION_TOKEN",
+    )
+    resolved = resolve_runtime_secrets(
+        config, {"VERO_EVALUATION_TOKEN": "e", "VERO_FINALIZATION_TOKEN": "f"}
+    )
+    assert resolved.inference_gateway_token == "e"
+    assert resolved.inference_gateway_finalization_token == "f"
+    assert config.inference_gateway_token is None  # the compiled config is untouched
+    import pytest as _pytest
+
+    with _pytest.raises(RuntimeError, match="VERO_FINALIZATION_TOKEN"):
+        resolve_runtime_secrets(config, {"VERO_EVALUATION_TOKEN": "e"})
+    # A url with neither a token nor a token variable is still rejected.
+    with _pytest.raises(ValueError, match="must be set together"):
+        HarborBackendConfig(
+            task_source="org/tasks@1",
+            agent_import_path="a.b:C",
+            cases_path=str(cases),
+            harbor_requirement="harbor==0.1",
+            evaluation_set_name="v",
+            partition="validation",
+            inference_gateway_url="http://inference-gateway:8001",
+        )
+    assert producer_scope_override({}) is None
+    assert producer_scope_override(
+        {"VERO_PRODUCER_SCOPE": json.dumps({"allowed_models": ["m"]})}
+    ) == {"allowed_models": ["m"]}

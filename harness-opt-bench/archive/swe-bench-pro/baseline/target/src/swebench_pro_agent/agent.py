@@ -31,12 +31,7 @@ class _BinaryOutputError(Exception):
 
 
 def _is_reasoning_model(model: str) -> bool:
-    """Whether `model` is an OpenAI reasoning model.
-
-    Capability, not provider: Azure gpt-4o is not Fireworks yet still rejects
-    `reasoning`, and every gpt-5 model accepts it. Fireworks-served open models
-    match none of these prefixes, so they keep the legacy shape.
-    """
+    """Whether `model` uses the reasoning-model request fields."""
     name = model.lower()
     return name.startswith(("gpt-5", "o1", "o3", "o4")) or "codex" in name
 

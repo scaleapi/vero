@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
@@ -24,6 +27,7 @@ from vero.evaluation import (
 from vero.evaluation.backends.command import CommandBackend, CommandBackendConfig
 from vero.evaluation.engine import EvaluationEngine
 from vero.harbor.backend import HarborBackend, HarborBackendConfig
+from vero.layout import LAYOUT
 from vero.models import StrictModel
 from vero.runtime.artifacts import ArtifactStore
 from vero.sandbox import LocalSandbox
@@ -113,7 +117,53 @@ everything above this line — disclosure, budgets, verification — is unchange
 def _build_backend(config: DeploymentBackendConfig) -> EvaluationBackend:
     if isinstance(config, CommandBackendConfig):
         return CommandBackend(config)
-    return HarborBackend(config)
+    return HarborBackend(resolve_runtime_secrets(config))
+
+
+def resolve_runtime_secrets(
+    config: HarborBackendConfig, environ: Mapping[str, str] | None = None
+) -> HarborBackendConfig:
+    """Fill the gateway tokens from the environment the sidecar started with.
+
+    Read once, here, at component build; a running container's environment
+    cannot change, so the tokens are fixed for the run. A named variable that is
+    unset is an error rather than a silent fall-back to the evaluation scope.
+    """
+    environ = os.environ if environ is None else environ
+    update: dict[str, str] = {}
+    for field, env_field in (
+        ("inference_gateway_token", "inference_gateway_token_env"),
+        ("inference_gateway_finalization_token", "inference_gateway_finalization_token_env"),
+    ):
+        name = getattr(config, env_field)
+        if name is None or getattr(config, field) is not None:
+            continue
+        value = environ.get(name, "")
+        if not value.strip():
+            raise RuntimeError(f"{env_field} names {name}, which is not set")
+        update[field] = value
+    return config.model_copy(update=update) if update else config
+
+
+def producer_scope_override(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, JsonValue] | None:
+    """The launcher's producer allow-list, if it supplied one.
+
+    Same variable and same shape the gateway reads (``LAYOUT.producer_scope_env``),
+    so the budget the sidecar shows the optimizer names the same models the
+    gateway will accept.
+    """
+    environ = os.environ if environ is None else environ
+    raw = environ.get(LAYOUT.producer_scope_env, "")
+    if not raw.strip():
+        return None
+    override = json.loads(raw)
+    if not isinstance(override, dict) or set(override) - {"allowed_models", "model_aliases"}:
+        raise RuntimeError(
+            f"{LAYOUT.producer_scope_env} may only set allowed_models and model_aliases"
+        )
+    return override
 
 
 class HarborDeploymentConfig(StrictModel):
@@ -269,6 +319,12 @@ def _ledger(
 async def build_harbor_components(config: dict) -> SidecarComponents:
     """Build the standard compiled-task topology from trusted JSON config."""
     parsed = HarborDeploymentConfig.model_validate(config)
+    override = producer_scope_override()
+    if override is not None and "producer" in parsed.inference_limits:
+        parsed.inference_limits["producer"] = {
+            **parsed.inference_limits["producer"],
+            **override,
+        }
     session_dir = Path(parsed.session_dir)
     session_dir.mkdir(parents=True, exist_ok=True)
     # The session dir holds the trusted state — held-out evaluation records and

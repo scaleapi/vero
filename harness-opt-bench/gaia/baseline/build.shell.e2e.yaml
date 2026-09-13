@@ -1,38 +1,52 @@
 # Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
 # cover only what is specific to this benchmark.
-name: vero/optimize-gaia-baseline
+name: vero/optimize-gaia-shell-e2e
 description: >-
-  Improve a tool-using GAIA agent while preserving the Harbor agent interface.
-  The target must answer canonical GAIA tasks by writing /app/answer.txt.
-agent_repo: target
+  The program must answer canonical GAIA tasks: general-knowledge questions that
+  may need research, computation, or inspection of attached files. How it does
+  that is yours to decide -- the approach, what the agent can do, how it uses its
+  environment, how many model calls it takes, and when it stops. Preserve the
+  Harbor agent interface and the class import path. The grader reads the exact
+  answer from /app/answer.txt.
+instruction_template: instruction.shell.md.j2
+agent_repo: target-shell
 task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
 task_manifest: ../partitions/manifest.json
 agent_import_path: gaia_agent.agent:GaiaAgent
 harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
 
+# E2E SMOKE VARIANT of build.shell.yaml. Same seed, same target, same gateway
+# scopes; eight cases in total, tiny budgets, and a 25-minute agent clock so the
+# run reaches finalization quickly. It exists to prove the trial machinery end to
+# end (compile, tokens, evaluations, agent timeout -> verifier, session archive)
+# after a change to vero, not to measure anything. Never report its score.
 partition_files:
-  development: ../partitions/development.json
-  validation: ../partitions/validation.json
-  test: ../partitions/test.json
+  development: ../partitions-e2e/development.json
+  validation: ../partitions-e2e/validation.json
+  test: ../partitions-e2e/test.json
 
 agent_access:
   - partition: development
     disclosure: full
     expose_case_resources: true
-    total_runs: 100
-    total_cases: 132
+    total_runs: 6
+    total_cases: 12
   - partition: validation
     disclosure: aggregate
     expose_case_resources: false
-    min_aggregate_cases: 5
-    total_runs: 100
-    total_cases: 264
+    min_aggregate_cases: 1
+    total_runs: 6
+    total_cases: 18
 
 selection_partition: validation
 targets:
   - partition: test
     reward_key: reward
-    baseline_reward: 0.6205  # re-pinned 0.554 / 0.625 / 0.682 (sd 0.0524); was 0.5736. See runs/BASELINES.md
+    # Zero by construction, not by measurement: the skeleton writes an empty
+    # answer, so every case is scored and wrong. Confirm with one baseline round
+    # before quoting deltas -- the number is a claim about the seed, not a
+    # measurement of it.
+    baseline_reward: 0.0
     failure_value: 0.0
     max_attempts: 1
     n_attempts: 3
@@ -46,7 +60,7 @@ objective:
 reward_mode: submit  # agent picks; falls back to auto_best, then current version
 baseline_floor: false  # gates on validation while reward is on test; opt-in only
 score_baseline: false
-rescore_top_k: 3
+rescore_top_k: 1
 rescore_attempts: 1
 
 # GAIA includes image inputs, so the target must be multimodal. Keep this name
@@ -64,16 +78,19 @@ aggregate_attempts: best
 feedback_transcripts: true
 feedback_max_bytes: 16000
 expose_attempt_detail: false
-# Above the 5,400-second worst case at the configured concurrency.
-timeout_seconds: 7200
+# This smoke variant intentionally uses shorter overall limits.
+timeout_seconds: 1800
 case_timeout_seconds: 600
 task_agent_timeout_seconds: 600
 max_concurrency: 24
 error_rate_threshold: 0.1
-verifier_timeout_seconds: 14400
-optimizer_sandbox_timeout_seconds: 86400
-optimizer_sandbox_idle_timeout_seconds: 3600
-optimizer_agent_timeout_seconds: 72000
+verifier_timeout_seconds: 3600
+optimizer_sandbox_timeout_seconds: 14400
+optimizer_sandbox_idle_timeout_seconds: 1800
+# 25 minutes: long enough for the optimizer to run a few evaluations, short
+# enough that Harbor stops it and hands over to the verifier within the hour,
+# which is the path this variant exists to exercise.
+optimizer_agent_timeout_seconds: 1500
 optimizer_allow_internet: true
 
 secrets:
@@ -86,8 +103,8 @@ secrets:
 wandb:
   project: harness-engineering-bench
   group: gaia
-  name: ${wandb_run:-gaia}
-  tags: [gaia]
+  name: ${wandb_run:-gaia-shell-e2e}
+  tags: [gaia, shell-seed, e2e-smoke]
   log_traces: true
 
 harness_user: harness
@@ -108,7 +125,7 @@ inference_gateway:
   evaluation:
     allowed_models: [gpt-5.4-mini]
     max_requests: 200000
-    max_tokens: 2000000000  # 396 agent case-runs (132 dev + 264 validation)
+    max_tokens: 200000000  # 30 agent case-runs at most
     max_concurrency: 64
   finalization:
     allowed_models: [gpt-5.4-mini]

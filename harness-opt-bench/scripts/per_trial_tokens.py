@@ -18,8 +18,8 @@ Harbor trials they served, without any harness cooperation:
    the envelope.
 
 Coverage note: on **stamped** logs (``request_log.attribution: true``) every
-turn inherits its conversation's thread_id, so stateful APIs (OpenAI
-responses' ``previous_response_id``) attribute fully. On **legacy** logs the
+turn inherits its conversation's thread_id, so stateful APIs that use a
+``previous_response_id`` attribute fully. On **legacy** logs the
 fallback recovers only each conversation's root turn — chained follow-ups
 with empty bodies are unrecoverable and land in the residual. Enable
 attribution at build time for complete coverage.

@@ -1,20 +1,26 @@
-# BrowseComp-Plus baseline
+# BrowseComp-Plus editable target
 
-This editable target is a Responses API deep-research agent with three tools:
-search the pinned BM25 index, open a document, and submit a formatted response.
-The optimization agent may change its prompts, control flow, tool use, or
-dependencies, but not the dataset, index, split, evaluated model, or verifier.
+The seed is a research agent with three tools:
 
-Build the generated tasks first as described in the parent
-[`README.md`](../README.md), then compile from the repository root:
+- search the pinned BM25 index;
+- open a document;
+- submit a response in the benchmark's required format.
 
-```bash
+The optimizer may change prompts, tool use, control flow, and dependencies in
+`target/`. It cannot change the corpus, index, partitions, target model, or
+verifier.
+
+Prepare the generated tasks as described in the
+[benchmark overview](../README.md), then compile from the repository root:
+
+~~~bash
 cd vero
 VERO_SKIP_SECRET_CHECK=1 uv run vero harbor build \
   --config ../harness-opt-bench/browsecomp-plus/baseline/build.yaml \
-  --output ../harness-opt-bench/browsecomp-plus/baseline/compiled
-```
+  --param inner_env=<evaluation-environment> \
+  --output <output-directory>
+~~~
 
-For a real run, copy `secrets.env.example` to the ignored `secrets.env`, fill it
-in, and use `vero harbor run` in the same way as the other harness-engineering
-benchmarks.
+The `VERO_SKIP_SECRET_CHECK` setting is appropriate only for compile-time
+validation. For a real optimization run, use a local credential file and follow
+the shared [`run-benchmark` guide](../../skills/run-benchmark/SKILL.md).

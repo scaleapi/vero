@@ -97,6 +97,10 @@ not affect candidate selection.
 | [BrowseComp-Plus](browsecomp-plus/baseline/build.yaml) | `deepseek-v4-flash` | 33 / 66 / 66 | 0.462 ± 0.028 |
 | [Terminal-Bench](terminal-bench/baseline/build.yaml) | `grok-build-0.1` | 17 / 36 / 36 | 0.241 ± 0.013 |
 
+Target models are named without a provider. Each build maps the name to a
+deployment under the evaluation scope's `model_aliases`; pass
+`--param target_model_route=<provider/model>` to use a different one.
+
 Each baseline is the mean of three independent test rounds; the reported
 uncertainty is the standard deviation of those round means. GAIA uses a
 multimodal target because some held-out cases contain images. The reported GAIA
@@ -194,6 +198,51 @@ Some tasks depend on external services of their own and therefore use a reduced
 isolation profile. That limitation must be declared in the benchmark configuration
 and considered before running with an adversarial optimizer.
 
+### Deployment settings
+
+A few fields describe the services a run depends on rather than the benchmark
+itself. They are the same in every build file, and the build files do not
+repeat their meaning.
+
+- `harbor_requirement` names the Harbor package the evaluation service installs.
+  It carries the extra for the evaluation environment and can be overridden with
+  `--param harbor_requirement=`.
+- `secrets` lists the environment variable names the run needs for its execution
+  and telemetry services. Every name must be present in the env file; the
+  compiler refuses to compile otherwise. Edit the list and the env file together.
+- `wandb` configures telemetry and is optional. Remove the block to run without it.
+- `extra_harbor_args` passes options to the evaluation sandboxes. The defaults
+  group them under one application and reclaim idle ones; remove them for an
+  environment that does not accept those options.
+- `inference_gateway.request_log_attribution` stamps each gateway request with the
+  trial it served, which is what makes per-trial usage attribution reliable.
+- `agent_env` raises the optimizer's tool-call time limit so one full evaluation
+  can complete inside a single foreground call, and disables background tasks.
+
+The remaining shared values, such as attempts, budgets, time limits and
+isolation, follow the rules above; a build file comments only on what is
+specific to its benchmark.
+
+## Compiled tasks
+
+`vero harbor build` turns a `build.yaml` into a self-contained task directory,
+and two compiles of the same sources produce identical output. Nothing specific
+to one run is written into the compiled task: the per-run access tokens and the
+optimizer model are supplied by the launcher through the environment and read
+once when the services start, so a running evaluation cannot be altered from
+outside.
+
+Each reported benchmark commits `baseline/compiled.manifest.json`, a checksum of
+every compiled file. `vero harbor build --check <manifest>` recompiles and fails
+if a checkout no longer reproduces the recorded task. The manifests are written
+with `inner_env=modal`; pass the same parameter when checking. Regenerate the manifest
+whenever the seed, the partitions, or the build configuration changes.
+
+By default the compiled task carries a copy of the VeRO source tree so its
+images can be built without a package index. Setting `vero_requirement` to an
+exact published version (for example `scaleapi-vero==0.6.0`) installs that
+release instead; the version must match the VeRO doing the compiling.
+
 ## Adding or changing a benchmark
 
 1. Update the benchmark's `baseline/build.yaml`.
@@ -215,6 +264,7 @@ uv run pytest tests/test_v05_benchmark_configs.py
 
 uv run vero harbor build \
   --config ../harness-opt-bench/<benchmark>/baseline/build.yaml \
+  --param inner_env=<evaluation-environment> \
   --output <output-directory>
 ```
 
