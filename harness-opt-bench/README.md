@@ -86,30 +86,13 @@ then scores a subset of the benchmark without saying so.
 
 ## Benchmarks
 
-Promoted benchmarks live at the top level. The four the paper reports on are
-GAIA, OfficeQA, BrowseComp-Plus and Terminal-Bench; SWE-Atlas-QnA and tau3 are
-wired and runnable but their held-out rewards did not resolve the field, so they
-are not in the paper's tables.
-
-### Promoted
+The four benchmarks the paper reports on live at the top level. Three more that
+were wired and run but are not in the paper sit under [`archive/`](archive/),
+with the reason for each in its README.
 
 | Benchmark | Editable target | Dataset | Split |
 | --- | --- | --- | --- |
 | [GAIA baseline](gaia/baseline/) | Tool-using Responses API agent | Harbor `gaia/gaia` | 20% / 40% / 40% |
 | [OfficeQA baseline](officeqa/baseline/) | Grounded document-QA agent | Treasury Bulletin corpus | 20% / 40% / 40% |
-| [SWE-Atlas-QnA baseline](swe-atlas-qna/baseline/) | Codebase investigation agent | Harbor `scale-ai/swe-atlas-qna` | 20% / 40% / 40% |
-| [tau3 baseline](tau3/baseline/) | MCP customer-service agent | Harbor `sierra-research/tau3-bench` | 20% / 40% / 40% |
 | [BrowseComp-Plus baseline](browsecomp-plus/baseline/) | Fixed-corpus deep-research agent | Pinned local Harbor tasks | 20% / 40% / 40% |
 | [Terminal-Bench baseline](terminal-bench/baseline/) | Shell-loop terminal agent | Harbor `terminal-bench/terminal-bench-2-1` | 20% / 40% / 40% |
-
-**`swe-bench-pro/` is at the top level but is not promoted, and its numbers are
-not comparable to the five above.** It predates the normalization pass those five
-went through and still differs on most of it: case budgets are 1x the partition
-size rather than 4x, the held-out target has no `n_attempts: 3` / `mean`
-override so it is scored once, there is no pinned `baseline_reward` (and
-`score_baseline: true` adds a second full held-out pass), the agent clock runs at
-0.6x the declared case timeout, gateway request and token caps are 20-30x tighter
-than the sizing convention, there is no `agent_env` block, and telemetry goes to
-its own W&B project. Treat it as a work in progress: launching it will produce a
-number, but not a measurement of the same quantity. `CONFIGURATION.md` documents
-the conventions it is missing.

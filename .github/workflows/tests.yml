@@ -74,9 +74,6 @@ jobs:
           - browsecomp-plus
           - gaia
           - officeqa
-          - swe-atlas-qna
-          - swe-bench-pro
-          - tau3
     steps:
       # No `submodules: recursive`: the only submodule is the BrowseComp-Plus
       # upstream corpus, which no test reads.

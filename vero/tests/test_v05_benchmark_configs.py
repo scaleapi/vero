@@ -29,10 +29,7 @@ BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-opt-bench"
 BENCHMARKS = [
     "gaia",
     "officeqa",
-    "swe-atlas-qna",
-    "tau3",
     "browsecomp-plus",
-    "swe-bench-pro",
 ]
 
 # Names that would let a task reach the upstream provider directly, bypassing

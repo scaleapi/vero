@@ -77,11 +77,9 @@ benchmark can be checked against the others at a glance.
   interchangeable there. See the optimizer-harness note below for why that bites
   with opencode. deepseek-v4-flash was
   chosen over gpt-oss-120b and gpt-5.4-mini from a 10-trial per-benchmark probe:
-  it matches or beats both on tau3 (0.875) and is ~2–3× gpt-oss on the
-  grounded-reasoning benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss
-  cost — far cheaper than mini. `swe-atlas-qna` is pinned to
-  `fireworks_ai/gpt-oss-120b`, the one benchmark where deepseek is weaker
-  (0.30 vs 0.59 mean rubric) and gpt-oss is both cheaper and stronger. `gaia` is
+  it matches or beats both and is ~2–3× gpt-oss on the grounded-reasoning
+  benchmarks (officeqa/browsecomp 0.60) at roughly gpt-oss cost — far cheaper
+  than mini. `gaia` is
   pinned to `gpt-5.4-mini` for a different reason: it is the one multimodal
   benchmark, 5 of its 66 held-out tasks send image inputs, and deepseek-v4-flash
   rejects those outright (`This model does not support image inputs`), capping
@@ -180,25 +178,25 @@ benchmark can be checked against the others at a glance.
 
 ## Per-benchmark values
 
-| | gaia | officeqa | swe-atlas-qna | tau3 | browsecomp-plus | terminal-bench | swe-bench-pro |
-|---|---|---|---|---|---|---| --- |
-| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | gpt-oss-120b (alt: gpt-5.4-mini) | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ | gpt-4o ◈ |
-| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.067 ±0.025 (agg 0.632); alt 0.122 ±0.018 | 0.732 ±0.010 | 0.462 ±0.028 | 0.241 ±0.013 | 0.294 ±0.008 ◈ |
-| split dev/val/test | 33/66/66 | 49/98/99 | 25/49/50 | 75/150/150 | 33/66/66 | 17/36/36 | 146/292/293 ◈ |
-| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 100 | 100 / 300 | 100 / 132 | 100 / 68 | 100 / 146 ◈ |
-| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 196 | 100 / 600 | 100 / 264 | 100 / 144 | 100 / 292 ◈ |
-| gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 4 B | 2 B | 1.2 B / 0.7 B | 100 M |
-| max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 | 24 | 24 | 8 ◈ |
-| timeout_seconds (per eval) ‖ | 7200 | 28800 | 90000 | 79200 | 39600 | 43200 | 28800 |
-| case_timeout_seconds = declared † | 600 | 1800 | 10800 | 3600 | 3600 | 900 ✦ | 1800 ◈ |
-| task_agent_timeout_seconds (declared) | 600 | 1800 | 10800 | 3600 | 3600 | 900 ✦ | 3000 |
-| declared `[verifier] timeout_sec` | 300 | 300 | 900 | 300 | 300 | 360–12000 ✦ | n/a (registry dataset) |
-| declared `build_timeout_sec` | 300 | 600 | 600 | 600 | 7200 | 600 | n/a (registry dataset) |
-| verifier_timeout_seconds ‖ | 14400 | 54000 | 176400 | 158400 | 75600 | 64800 | 28800 |
-| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 39600 s | 32400 s | 14400 s | 28800 s | n/a |
-| harness_user | harness | harness | null ‡ | null ‡ | null ‡ | harness | harness |
-| task_services_use_upstream | false | false | true (rubric judge) | true (user-sim + grader) | true (answer judge) | false (own tests) | false |
-| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | `keepalive` --ek (ENTRYPOINT images) | `TAU2_*` model pins | pinned 2.2 GB BM25 index | per-task declared timeouts ✦ | registry dataset; `expose_case_resources: false`; sampled variant ◈ |
+| | gaia | officeqa | browsecomp-plus | terminal-bench |
+|---|---|---|---|---|
+| target model | gpt-5.4-mini ◇ | deepseek-v4-flash | deepseek-v4-flash | grok-build-0.1 ✦ |
+| held-out baseline (K=3) ◆ | 0.621 ±0.052 | 0.341 ±0.033 | 0.462 ±0.028 | 0.241 ±0.013 |
+| split dev/val/test | 33/66/66 | 49/98/99 | 33/66/66 | 17/36/36 |
+| dev budget (runs / cases) | 100 / 132 | 100 / 196 | 100 / 132 | 100 / 68 |
+| val budget (runs / cases) | 100 / 264 | 100 / 392 | 100 / 264 | 100 / 144 |
+| gateway max_tokens (evaluation, finalization each) ¶ | 2 B | 3 B | 2 B | 1.2 B / 0.7 B |
+| max_concurrency (cases in flight) § | 24 | 24 | 24 | 24 |
+| timeout_seconds (per eval) ‖ | 7200 | 28800 | 39600 | 43200 |
+| case_timeout_seconds = declared † | 600 | 1800 | 3600 | 900 ✦ |
+| task_agent_timeout_seconds (declared) | 600 | 1800 | 3600 | 900 ✦ |
+| declared `[verifier] timeout_sec` | 300 | 300 | 300 | 360–12000 ✦ |
+| declared `build_timeout_sec` | 300 | 600 | 7200 | 600 |
+| verifier_timeout_seconds ‖ | 14400 | 54000 | 75600 | 64800 |
+| BASH_MAX_TIMEOUT_MS (tool) ¤ | 3600 s | 10800 s | 14400 s | 28800 s |
+| harness_user | harness | harness | null ‡ | harness |
+| task_services_use_upstream | false | false | true (answer judge) | false (own tests) |
+| task-specific extras | — | `--no-force-build` (prebuilt corpus image) | pinned 2.2 GB BM25 index | per-task declared timeouts ✦ |
 
 ## Choosing an optimizer harness
 
@@ -312,11 +310,11 @@ build's own comment): 3.3–5.1× the worst measured cost of 1.33M/case-run for 
   this was derived: at the previous 7200 s it would have died ~46% through a
   ~4.3 h finalize.
 - **These bounds are coupled to `max_concurrency` (§).** Lowering concurrency
-  raises the wave count and both timeouts must be recomputed. All five are sized
+  raises the wave count and both timeouts must be recomputed. All four are sized
   for `max_concurrency: 24` and for `n_attempts: 3` on the held-out target, so
   raising a benchmark to a 3× finalize needs no timeout change.
 - **Case budgets** are 4× the partition size, i.e. four full passes.
-- **Optimizer `agent_env`** (now on all five): inner evals take 15–30 min, but
+- **Optimizer `agent_env`** (on every benchmark): inner evals take 15–30 min, but
   Claude Code caps a single Bash call at `BASH_MAX_TIMEOUT_MS` (default
   600000=10min), which forces the agent into `--detach` + background-poll +
   end-turn — and in headless `--print` mode, ending the turn ends the run. Set
@@ -359,81 +357,19 @@ attempts the same way, so the floor must pay the same tax; a trial the
 *platform* killed is dropped — retries cannot score a trial that never ran, and
 zero-filling infra bakes outage luck into the pin. The classification lives in
 `runs/recompute.py`; unclassified exception types are a hard error there. Under
-this convention only three floors moved (swe-atlas both builds, terminal-bench
-— the two seeds with material defect rates); the deepseek pins' rare failures
-were all platform-side. The pin is reported in every run's
+this convention only terminal-bench's floor moved — the one seed with a material
+defect rate; the deepseek pins' rare failures were all platform-side. The pin is reported in every run's
 `finalize.json` under `baseline_rewards`, so the improvement delta is recorded
 alongside the reward rather than joined by hand against this table. (Runs before
 2026-07-28 carry an empty `baseline_rewards`: the verifier read the pin only
-inside its `score_baseline` branch, so `false` meant nothing was reported.) swe-atlas's
-`reward` is a binary pass/fail over a rubric and sits near the floor (0.097);
-the continuous `agg_score` (0.632, sd 0.011) is the far more informative
-signal — a candidate `reward_key` switch, pending the verifier emitting
-`agg_score` as a selectable key. Measured with each benchmark's target model
-(deepseek-v4-flash; gpt-oss-120b on swe-atlas; gpt-5.4-mini on gaia): the three
-deepseek benchmarks logged zero exceptions over 945 trials, swe-atlas lost
-5/150 to gpt-oss 128k context overflow, and gaia lost 4/198 (infra) after the
-agent's reason/search-only-turn crash was fixed.
+inside its `score_baseline` branch, so `false` meant nothing was reported.)
+Measured with each benchmark's target model (deepseek-v4-flash; gpt-5.4-mini on
+gaia): the deepseek benchmarks logged zero exceptions over 945 trials, and gaia
+lost 4/198 (infra) after the agent's reason/search-only-turn crash was fixed.
 
-swe-atlas also carries a second pinned target build,
-`baseline/build.gpt54mini.yaml`: **gpt-5.4-mini at 0.122 ±0.018** (n=148, K=3:
-0.100 / 0.122 / 0.143, measured 2026-07-31 with the same `--seed` path). The
-two pins are per-build, not interchangeable — each build's delta is against its
-own target's floor, never the other's. 12 of its 150 trials raised the seed's
-"neither an answer nor a tool call" RuntimeError (~8%) and score 0 in the pin
-per the failed-trial convention — seed headroom in the same sense as
-terminal-bench's timeouts; 2 more fell to platform-side failures (one
-RateLimitError, one VerifierTimeoutError) and are excluded.
+**Re-pin these whenever a seed agent changes.** The first set went stale because the seed agents moved 4-10 commits afterwards -- one commit touched every seed -- and nothing recorded the dependency. Re-measured 2026-07-28 with `scripts/rescore_candidate.py --seed`, which reuses the original path exactly. Every re-measured value shifted inside its own noise.
 
-**Re-pin these whenever a seed agent changes.** The first set went stale because the seed agents moved 4-10 commits afterwards -- one commit touched all five -- and nothing recorded the dependency. Re-measured 2026-07-28 with `scripts/rescore_candidate.py --seed`, which reuses the original path exactly. Only tau3 moved materially (+0.121 against an sd of 0.0099, so a genuine seed improvement); the other four shifted inside their own noise.
-
-**gaia and tau3 are too noisy for single-run comparisons.** gaia's own three rounds spanned 0.554-0.682 (sd 0.052), and tau3's optimizer scored one *unchanged* harness at 0.800 and 0.547 on development -- its user-simulator and NL-assertion grader are both LLMs, so their variance rides on every eval. Treat a gaia or tau3 delta under ~0.1 as unresolved. Their splits are not the problem: domain mix matches to the percentage point across all three partitions (airline 13%, banking 26%, retail 30%, telecom 31%), as does telecom persona difficulty.
-
-◈ swe-bench-pro is the newest benchmark and the only one with **two** configs.
-The column above describes the canonical `baseline/build.yaml` (full 731-instance
-dataset, split 146/292/293). Alongside it sits `baseline/build.sample.yaml`, a
-subsampled variant for optimizer runs; the canonical config is unchanged by it.
-
-*Why a variant.* The full split is unaffordable for an optimizer loop: each case
-builds a real repository and runs its test suite, so the held-out baseline alone
-cost ~7.8h of wall clock for three rounds, and an optimizer evaluates candidates
-many times over. The variant is 33/66/66, matching gaia and browsecomp-plus, on
-`fireworks_ai/deepseek-v4-flash`, `max_concurrency: 24`, 4x case budgets
-(132/264), and `case_timeout_seconds: 3000`.
-
-*The sample is nested.* The full split is computed first and each partition is
-then narrowed within itself (`partition_swe_bench_pro.py --sample`), so
-`partitions/sample/test.json` is a strict subset of `partitions/test.json`. No
-instance can migrate from test into development, and the baseline needed no
-re-measuring: **0.292 ±0.033** over the 66 sampled cases is the same K=3 trials
-that produced the full-partition 0.294 ±0.008, recomputed. The point estimate
-barely moves; the spread widens roughly fourfold because n falls 293 → 66, which
-matters when reading a candidate's margin over that floor.
-
-*Three known inconsistencies in the canonical config*, all pre-existing and left
-alone here rather than silently changed:
-
-- `case_timeout_seconds: 1800` against `task_agent_timeout_seconds: 3000` implies
-  a 0.6 multiplier, but the pinned 0.294 was measured at **1.0**: all 879 sampled
-  trial configs record `agent_timeout_multiplier=1.0`. The config value is wrong,
-  not the measurement. Every sibling has these two equal.
-- `model: gpt-4o`, but the 0.294 baseline was measured against
-  **qwen-3.6-27b**. So the recomputed 0.292 the variant pins is also a qwen
-  number while the variant targets deepseek; treat it as provisional until a K=3
-  deepseek pass over the 66 replaces it (~1.8h at `max_concurrency: 24`).
-- **The pinned 0.294 was measured on a different agent than the one in the tree**,
-  which is the same staleness the note above describes, in its strongest form. The
-  qwen-era agent was 630 lines on Chat Completions with an explicit local
-  `messages` list and edited files on 571 of 879 cases (write_file 1108,
-  apply_patch 899, submit 85). The committed seed is Responses-only, delegates its
-  conversation to `previous_response_id`, and edits nothing: over 66 sampled cases
-  it called write_file, apply_patch, and submit **zero** times and scored 0.0000.
-  So this benchmark is the one the re-pin above did not cover, and it needs
-  `scripts/rescore_candidate.py --seed` more than any of the five that did.
-
-Also unlike the siblings, swe-bench-pro's canonical config still has
-`score_baseline: true`, so it re-measures the seed every run instead of pinning
-it. The variant sets `false` and pins, as everything else does.
+**gaia is too noisy for single-run comparisons.** Its own three rounds spanned 0.554-0.682 (sd 0.052). Treat a gaia delta under ~0.1 as unresolved.
 
 ◇ gaia is the exception to the deepseek-v4-flash default: it is multimodal and
 that model is text-only. Verified against the same litellm endpoint the gateway
@@ -447,21 +383,19 @@ would deny it.
 
 † **Taken from the dataset, not chosen by us.** Each value is that dataset's
 declared `[agent] timeout_sec`, read from its `task.toml` — the hub packages under
-`~/.cache/harbor/tasks/packages/` for gaia (`gaia/gaia`), swe-atlas-qna
-(`scale-ai`) and tau3 (`sierra-research`), and the vendored task dirs for officeqa
-and browsecomp-plus. Every dataset declares **uniformly** across its tasks (246
+`~/.cache/harbor/tasks/packages/` for gaia (`gaia/gaia`), and the vendored task
+dirs for officeqa and browsecomp-plus. Every dataset declares **uniformly** across its tasks (246
 officeqa tasks all at 1800, 830 browsecomp tasks all at 3600), so a single value
 per benchmark loses nothing.
 
 This supersedes two earlier rounds of sizing-by-measurement. The first was a
 codex probe, far too tight for the real target agents. The second used
 held-out-baseline wall-time distributions (gaia p99≈608 → 900; officeqa
-p99≈640/max≈1076 → 1200; swe-atlas → 1800; tau3 p99≈643/max≈1122 → 1200;
+p99≈640/max≈1076 → 1200;
 browsecomp p99≈1479/max≈1771 → 2100), which fixed the unfairness — the prior
 180/300/900 caps would have killed ~9/13/26% of gaia/officeqa/browsecomp candidate
 cases — but still second-guessed the benchmark. The deviations were large and
-inconsistent in direction: swe-atlas ran at **0.17×** its declared clock while
-gaia ran at **1.5×**. Adopting the declared value makes gaia *tighter* (900 → 600,
+inconsistent in direction: gaia, for one, ran at **1.5×** its declared clock. Adopting the declared value makes gaia *tighter* (900 → 600,
 newly clipping ~1% of cases whose p99 sat at 608); that is the benchmark's
 intent, and suggestively the gaia agent's own `MAX_TURNS` cap lands right at
 ~608 s, i.e. it was written against the declared 600.

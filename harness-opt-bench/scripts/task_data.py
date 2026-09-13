@@ -72,8 +72,6 @@ BENCHMARKS = [
     ),
     # No local task data: the build pins a registry digest and Harbor fetches it.
     Benchmark("gaia", "*", None, "", "registry task_source, nothing to vendor"),
-    Benchmark("tau3", "*", None, "", "registry task_source, nothing to vendor"),
-    Benchmark("swe-atlas-qna", "*", None, "", "registry task_source, nothing to vendor"),
 ]
 
 

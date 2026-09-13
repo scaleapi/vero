@@ -28,7 +28,7 @@ final state — and were always inside the pin.)
 terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
 ```
 
-Registry-sourced like GAIA, tau3 and SWE-Atlas-QnA, so **nothing needs vendoring**
+Registry-sourced like GAIA, so **nothing needs vendoring**
 and a fresh checkout can run it — unlike OfficeQA and BrowseComp-Plus, whose task
 data lives outside the repository.
 

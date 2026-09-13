@@ -357,9 +357,6 @@ before launching. Held-out baselines are the pinned `baseline_reward`.
 | `officeqa` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.3412 | 196 / 392 |
 | `browsecomp-plus` | **local, gitignored** | `fireworks_ai/deepseek-v4-flash` | 0.4619 | 132 / 264 |
 | `gaia` | registry digest | `gpt-5.4-mini` | 0.6205 | 132 / 264 |
-| `tau3` | registry digest | `fireworks_ai/deepseek-v4-flash` | 0.7321 | 300 / 600 |
-| `swe-atlas-qna` | registry digest | `fireworks_ai/gpt-oss-120b` | 0.0676 | 100 / 196 |
-| `swe-bench-pro` | registry | `gpt-4o` | not pinned | 146 / 292 |
 
 All share the same shape: `selection_partition: validation`, `reward_mode: submit`,
 `baseline_floor: false`, global `n_attempts: 1` with the **test** target overridden
