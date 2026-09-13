@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/vero-banner.png" alt="Illustration of VeRO's iterative optimization loop" width="100%">
+  <img src="vero/docs/assets/vero-banner.png" alt="Illustration of VeRO's iterative optimization loop" width="100%">
 </p>
 
 <h1 align="center">VeRO</h1>
@@ -24,7 +24,7 @@ VeRO was introduced to optimize agents, and the same version / evaluate / select
 loop applies to any of these.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/scaleapi/vero/main/vero/docs/assets/loop.png" alt="The VeRO loop: the optimizer proposes a candidate, the evaluator scores it, and the score and diagnostics return to the optimizer" width="720">
+  <img src="vero/docs/assets/loop.png" alt="The VeRO loop: the optimizer proposes a candidate, the evaluator scores it, and the score and diagnostics return to the optimizer" width="720">
 </p>
 
 The optimizer is a coding agent, a command, or a custom strategy, running
