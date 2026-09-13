@@ -403,6 +403,53 @@ def _outer_app_name_args(
     return ["--ek", f"app_name={slug or 'vero'}"]
 
 
+def _harness_version_args(
+    agent: str, config, extra: tuple[str, ...], pin: bool
+) -> list[str]:
+    """Install the optimizer harness at the release the build records, on request.
+
+    Harbor's installed-agent adapters take ``version`` as an agent kwarg and
+    install exactly that release (npm ``@version``, PyPI ``==version``, or the
+    claude installer's version argument). Left unset they install the current
+    one, which is the default here. ``--pin-harness`` asks for the release in
+    the build's ``optimizer_harness_versions`` instead, so a result can be
+    replicated with the harness it was produced with; a harness the build does
+    not record is refused rather than silently unpinned. A caller's own
+    ``--ak version=`` wins either way.
+
+    goose is the odd one out: harbor fetches ``download_cli.sh`` from the
+    release tag named by ``version``, but that script installs the *stable*
+    release unless ``GOOSE_VERSION`` is set, so the pin is delivered both ways.
+    """
+    overrides = [
+        value.removeprefix("version=")
+        for flag, value in zip(extra, extra[1:])
+        if flag == "--ak" and value.startswith("version=")
+    ]
+    if overrides:
+        version, args = overrides[-1], []
+    elif not pin:
+        return []
+    else:
+        versions = getattr(config, "optimizer_harness_versions", None) or {}
+        version = versions.get(agent)
+        if version is None:
+            raise click.ClickException(
+                f"the build records no release for optimizer harness {agent!r}; "
+                "add it to optimizer_harness_versions or pass --ak version=<release>"
+            )
+        args = ["--ak", f"version={version}"]
+    if agent == "goose" and not any(
+        flag == "--ae" and value.startswith("GOOSE_VERSION=")
+        for flag, value in zip(extra, extra[1:])
+    ):
+        tag = version if version.startswith("v") else f"v{version}"
+        if not overrides:
+            args = ["--ak", f"version={tag}"]
+        args += ["--ae", f"GOOSE_VERSION={tag}"]
+    return args
+
+
 def _outer_sandbox_args(
     environment: str, config, extra: tuple[str, ...]
 ) -> list[str]:
@@ -924,6 +971,14 @@ def _preflight_models(config) -> None:
 )
 @click.option("--agent", required=True, help="Harbor optimizer agent.")
 @click.option("--model", help="Model used by the optimizer agent.")
+@click.option(
+    "--pin-harness",
+    is_flag=True,
+    help=(
+        "Install the optimizer harness at the release recorded in the build's "
+        "optimizer_harness_versions instead of the current one."
+    ),
+)
 @click.option("--environment", default="modal", show_default=True)
 @click.option(
     "--env-file",
@@ -937,7 +992,9 @@ def _preflight_models(config) -> None:
 )
 @_PARAM_OPTION
 @click.argument("extra", nargs=-1, type=click.UNPROCESSED)
-def run_command(config_path, agent, model, environment, params, env_file, extra):
+def run_command(
+    config_path, agent, model, pin_harness, environment, params, env_file, extra
+):
     """Compile to a temporary directory and invoke `harbor run`."""
     from vero.harbor.build import (
         compile_harbor_task,
@@ -994,6 +1051,7 @@ def run_command(config_path, agent, model, environment, params, env_file, extra)
         ]
         if model is not None:
             command.extend(["-m", model])
+        command.extend(_harness_version_args(agent, config, extra, pin_harness))
         # Forward the build's declared agent env to the optimizer agent's shell.
         # Harbor's `--ae KEY=VALUE` populates the agent's extra_env, which harbor
         # injects into the agent's setup/install exec (scoped_exec_env). Sorted

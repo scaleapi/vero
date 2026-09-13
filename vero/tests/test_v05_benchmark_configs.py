@@ -17,6 +17,7 @@ between fields, not what today's values happen to be.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -287,3 +288,15 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
             f"the gaia shell seed calls {call} -- it is no longer a shell, and its "
             f"baseline_reward of 0.0 is no longer true"
         )
+
+
+def test_every_build_pins_every_optimizer_harness():
+    """A harness installed at trial start drifts unless the build names its release."""
+    harnesses = {"claude-code", "codex", "opencode", "kimi-cli", "goose", "mini-swe-agent"}
+    builds = sorted(BENCHMARK_ROOT.glob("*/baseline/build*.yaml"))
+    assert builds
+    for path in builds:
+        pins = yaml.safe_load(path.read_text(encoding="utf-8")).get("optimizer_harness_versions") or {}
+        assert set(pins) == harnesses, f"{path} pins {sorted(pins)}"
+        for version in pins.values():
+            assert re.fullmatch(r"\d+\.\d+\.\d+", str(version)), f"{path}: {version!r}"

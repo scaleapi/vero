@@ -338,6 +338,11 @@ class _HarborEvaluationFields(StrictModel):
 _HARBOR_ONLY_FIELDS = frozenset(_HarborEvaluationFields.model_fields)
 
 
+# An exact release: `1.18.10`, `v1.45.0`, `2.1.220-beta.1`. Not `latest`, `*`
+# or a range, which harbor would forward to the registry as a moving target.
+_RELEASE_VERSION = re.compile(r"v?\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.+-]+)?")
+
+
 class _OptimizerTrialFields(StrictModel):
     """Limits on the outer trial the optimizer itself runs in.
 
@@ -364,6 +369,12 @@ class _OptimizerTrialFields(StrictModel):
             declarations for the outer sandbox (``[environment]``). None leaves
             the field undeclared, which is Modal's default: a reservation of
             0.125 cores and 128 MiB that bursts to whatever the host has.
+        optimizer_harness_versions: Release of each optimizer harness the
+            build's reported results were produced with (harbor agent name ->
+            version). Harbor installs the harness at trial start from its
+            public registry, so this is a record, not a constraint: a plain
+            `vero harbor run` installs the current release, and
+            ``--pin-harness`` installs the recorded one to replicate a result.
     """
 
     # Limits on the outer optimizer trial. Every default below is what ran
@@ -375,6 +386,19 @@ class _OptimizerTrialFields(StrictModel):
     optimizer_cpus: int | None = Field(default=None, ge=1)
     optimizer_memory_mb: int | None = Field(default=None, ge=1)
     optimizer_storage_mb: int | None = Field(default=None, ge=1)
+    optimizer_harness_versions: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("optimizer_harness_versions")
+    @classmethod
+    def validate_optimizer_harness_versions(cls, value: dict[str, str]) -> dict[str, str]:
+        for agent, version in value.items():
+            if not agent.strip() or not _RELEASE_VERSION.fullmatch(version):
+                raise ValueError(
+                    f"optimizer_harness_versions[{agent!r}] must be an exact release, "
+                    f"got {version!r}"
+                )
+        return value
+
     @model_validator(mode="after")
     def validate_optimizer_clocks(self):
         agent = self.optimizer_agent_timeout_seconds
