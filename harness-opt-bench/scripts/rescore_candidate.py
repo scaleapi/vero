@@ -183,7 +183,8 @@ def harbor_command(
         "--python", str(build.get("harbor_python_version", "3.12")),
         "--no-config", "--no-env-file",
         "--project", str(workspace),
-        "--with", build.get("harbor_requirement", "harbor==0.20.0"),
+        # resolve the `${harbor_requirement:-...}` placeholder the September builds use
+        "--with", resolve_param(str(build.get("harbor_requirement", "harbor==0.20.0")), params),
         "harbor", "run", "--yes",
         *source_args,
         "--agent-import-path", build["agent_import_path"],
