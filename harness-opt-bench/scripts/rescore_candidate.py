@@ -164,6 +164,7 @@ def harbor_command(
     concurrency: int,
     model: str,
     params: dict[str, str],
+    agent_env: list[str] | None = None,
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -196,6 +197,10 @@ def harbor_command(
     ]
     for task in tasks:
         command.extend(["-i", task])
+    # agent-container env (harbor --ae NAME=VALUE); e.g. the BrowseComp-Plus agent
+    # insists on VERO_AGENT_INFERENCE_* and refuses to fall back to OPENAI_*.
+    for kv in agent_env or []:
+        command.extend(["--ae", kv])
     command.extend(str(a) for a in build.get("extra_harbor_args", []))
     return command
 
@@ -253,6 +258,8 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=24)
     parser.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                         help="build parameter, e.g. inner_env=modal (repeatable)")
+    parser.add_argument("--agent-env", action="append", default=[], metavar="NAME=VALUE",
+                        help="extra env for the agent container (harbor --ae); repeatable")
     parser.add_argument("--output", help="output dir (default: a temp dir)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -316,6 +323,7 @@ def main() -> int:
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
             model=routed_model(build, args.model or build["model"], params),
+            agent_env=args.agent_env,
             params=params,
         )
         if args.dry_run:
