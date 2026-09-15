@@ -48,10 +48,10 @@ def log(message: str) -> None:
     print(f"[rescore] {message}", flush=True)
 
 
-def load_build(benchmark: str) -> tuple[dict, Path]:
+def load_build(benchmark: str, build_file: str = "build.yaml") -> tuple[dict, Path]:
     import yaml  # provided by the vero environment
 
-    path = BENCH_ROOT / benchmark / "baseline" / "build.yaml"
+    path = BENCH_ROOT / benchmark / "baseline" / build_file
     if not path.is_file():
         sys.exit(f"no build.yaml for benchmark {benchmark!r} at {path}")
     return yaml.safe_load(path.read_text()), path
@@ -234,6 +234,8 @@ def main() -> int:
         ),
     )
     parser.add_argument("--benchmark", required=True)
+    parser.add_argument("--build-file", default="build.yaml",
+                        help="build yaml under <benchmark>/baseline/ (e.g. build.routed.yaml)")
     parser.add_argument("--version", help="candidate sha (default: the shipped one)")
     parser.add_argument("--partition", default="test")
     parser.add_argument(
@@ -256,7 +258,7 @@ def main() -> int:
     args = parser.parse_args()
     params = dict(item.split("=", 1) for item in args.param)
 
-    build, build_path = load_build(args.benchmark)
+    build, build_path = load_build(args.benchmark, args.build_file)
     outdir = Path(args.output).resolve() if args.output else Path(
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)
