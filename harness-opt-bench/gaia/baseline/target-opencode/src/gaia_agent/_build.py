@@ -50,15 +50,33 @@ def tree_hash(root: Path) -> str:
 
 
 def _bun() -> str:
+    """A Bun of the pinned version: on PATH, in ~/.bun, or fetched from GitHub.
+
+    The official install script needs curl and unzip on the host; the evaluation
+    host is not guaranteed either, so fetch the release zip with the standard
+    library and unpack it ourselves.
+    """
     found = shutil.which("bun") or str(Path.home() / ".bun" / "bin" / "bun")
     if Path(found).exists():
         return found
-    subprocess.run(
-        ["bash", "-c", f"curl -fsSL https://bun.sh/install | bash -s bun-v{BUN_VERSION}"],
-        check=True, capture_output=True, text=True,
-        env={**os.environ, "BUN_INSTALL": str(Path.home() / ".bun")},
-    )
-    return str(Path.home() / ".bun" / "bin" / "bun")
+    import io
+    import urllib.request
+    import zipfile
+
+    system = platform.system().lower()  # linux / darwin
+    arch = {"x86_64": "x64", "amd64": "x64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine().lower()]
+    name = f"bun-{system}-{arch}"
+    url = f"https://github.com/oven-sh/bun/releases/download/bun-v{BUN_VERSION}/{name}.zip"
+    _log(f"fetching {url}")
+    with urllib.request.urlopen(url, timeout=300) as response:
+        payload = response.read()
+    target = Path.home() / ".bun" / "bin"
+    target.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        with archive.open(f"{name}/bun") as src, (target / "bun").open("wb") as dst:
+            shutil.copyfileobj(src, dst)
+    (target / "bun").chmod(0o755)
+    return str(target / "bun")
 
 
 def _log(message: str) -> None:
