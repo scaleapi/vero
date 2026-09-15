@@ -221,20 +221,21 @@ def test_terminal_bench_routed_variant_differs_only_by_the_model_alias():
     assert "other-model" not in other.inference_gateway.producer.model_aliases
 
 
-def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell():
+@pytest.mark.parametrize("benchmark", ["gaia", "terminal-bench"])
+def test_shell_variant_shares_the_measurement_substrate_and_stays_a_shell(benchmark):
     """build.shell.yaml must differ from build.yaml only in what makes it a shell.
 
     The point of the variant is to ask what an optimizer does with no working
     seed. That only means something if everything *else* is held fixed: same
     cases, same target model, same gateway scoping. If the substrate drifts, the
-    shell run stops being comparable to the seeded gaia run and the comparison
+    shell run stops being comparable to the seeded run and the comparison
     it exists to support is gone.
 
     The second half asserts the seed is actually empty. Nothing else in the
     suite would notice an implementation quietly reappearing in the skeleton,
     and a shell that scores above zero is not a shell.
     """
-    baseline = BENCHMARK_ROOT / "gaia" / "baseline"
+    baseline = BENCHMARK_ROOT / benchmark / "baseline"
     params = {"inner_env": "test"}
     seeded = load_harbor_build_config(baseline / "build.yaml", params=params)
     shell = load_harbor_build_config(baseline / "build.shell.yaml", params=params)
@@ -249,7 +250,7 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
     for scope in ("evaluation", "finalization"):
         assert getattr(shell.inference_gateway, scope).allowed_models == getattr(
             seeded.inference_gateway, scope
-        ).allowed_models, f"{scope} scope drifted from the seeded gaia config"
+        ).allowed_models, f"{scope} scope drifted from the seeded {benchmark} config"
     assert not shell.task_services_use_upstream
 
     # What makes it the shell variant.
@@ -260,7 +261,7 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
     template = Path(shell.instruction_template)
     assert template.is_file()
     assert seeded.instruction_template is None, (
-        "the seeded gaia config should keep the built-in instruction"
+        "the seeded config should keep the built-in instruction"
     )
     body = template.read_text(encoding="utf-8")
     assert '{% extends "instruction.md.j2" %}' in body, (
@@ -285,7 +286,7 @@ def test_gaia_shell_variant_shares_the_measurement_substrate_and_stays_a_shell()
     text = "\n".join(path.read_text(encoding="utf-8") for path in sources)
     for call in (".responses.create(", ".chat.completions.create(", ".messages.create("):
         assert call not in text, (
-            f"the gaia shell seed calls {call} -- it is no longer a shell, and its "
+            f"the {benchmark} shell seed calls {call} -- it is no longer a shell, and its "
             f"baseline_reward of 0.0 is no longer true"
         )
 
