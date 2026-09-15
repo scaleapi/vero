@@ -11,7 +11,7 @@ score is a pass rate.
 | Task source | Terminal-Bench 2.1, pinned by content digest |
 | Cases | 89 |
 | Development / validation / test | 17 / 36 / 36 |
-| Editable harness | `baseline/target/` (working seed); `baseline/target-shell/` (skeleton) |
+| Editable harness | `baseline/target/` (working seed); `baseline/target-shell/` (skeleton); `baseline/target-opencode/` (opencode source) |
 | Target model | `grok-build-0.1` |
 | Pinned seed baselines | 0.2407 ± 0.0131 working target; 0.0 shell target |
 
@@ -68,12 +68,21 @@ headroom and requires no special scoring rule.
 | `baseline/build.yaml` | Standard benchmark: improve the working seed agent |
 | `baseline/build.routed.yaml` | Same benchmark with one explicit optimizer-model alias |
 | `baseline/build.shell.yaml` | Non-solving skeleton seed: build the agent from scratch |
+| `baseline/build.opencode.yaml` | Full-harness seed: opencode, vendored as source in `baseline/target-opencode/opencode/` and compiled per candidate |
 
 The configuration tests ensure the routed variant differs only by that alias,
 and that the shell variant shares the tasks, model, budgets and evaluation policy
 of the standard build and differs only in its seed and framing. The shell seed
 runs no commands, so its baseline is zero by construction; confirm it with one
 baseline round before quoting deltas against it.
+
+Together the three seeds form a ladder of starting complexity -- nothing, a
+hand-written loop, a full coding harness -- on the same tasks, model and budget.
+The opencode seed is a git submodule pinned to one upstream commit; run
+`git submodule update --init` before compiling. Its wrapper subclasses harbor's
+opencode runner and, instead of installing the npm release, compiles the vendored
+tree on the evaluation host (Bun, cached by source hash) and uploads the binary
+into each task container, so edits anywhere in the source are what gets scored.
 
 Compile from the repository root:
 

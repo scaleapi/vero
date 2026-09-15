@@ -12,7 +12,7 @@ files and images, run shell commands, and submit an exact answer.
 | Development / validation / test | 33 / 66 / 66 |
 | Split strategy | GAIA level and attachment presence |
 | Target model | `gpt-5.4-mini` |
-| Pinned seed baselines | 0.6205 working target; 0.0 shell target |
+| Pinned seed baselines | 0.6205 working target; 0.0 shell target; opencode target unpinned (measure before use) |
 | Scoring | Canonical task verifier |
 
 Development cases expose full results and task resources. Validation exposes
@@ -25,6 +25,7 @@ aggregate scores, and test remains hidden until final scoring.
 | `baseline/build.yaml` | Working tool-using agent | Measure harness improvement |
 | `baseline/build.shell.yaml` | Minimal non-solving skeleton | Measure harness construction from scratch |
 | `baseline/build.shell.e2e.yaml` | Skeleton with eight cases | Exercise the complete pipeline quickly |
+| `baseline/build.opencode.yaml` | opencode, vendored as source and compiled per candidate | Measure improvement of a full coding harness |
 
 The full and shell builds use the same tasks, model, budgets, and evaluation
 policy. See [the baseline guide](baseline/README.md) for their editable surfaces
@@ -52,6 +53,7 @@ regenerate the partitions, and review the manifest before using new results.
 | `baseline/build*.yaml` | Benchmark variants and evaluation settings |
 | `baseline/target/` | Working editable agent |
 | `baseline/target-shell/` | Minimal editable skeleton |
+| `baseline/target-opencode/` | opencode source (git submodule) plus a thin wrapper |
 | `partitions/` | Reported development, validation, and test split |
 | `partitions-e2e/` | Small smoke-test split |
 | `scripts/partition_gaia.py` | Split verification and regeneration |

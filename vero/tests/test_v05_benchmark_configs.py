@@ -291,6 +291,45 @@ def test_shell_variant_shares_the_measurement_substrate_and_stays_a_shell(benchm
         )
 
 
+@pytest.mark.parametrize("benchmark", ["gaia", "terminal-bench"])
+def test_opencode_variant_shares_the_measurement_substrate_and_vendors_the_source(benchmark):
+    """build.opencode.yaml must differ from build.yaml only in its seed.
+
+    The variant asks what an optimizer does with a full, mature harness as the
+    seed. As with the shell variant, that only means something if the cases, the
+    target model and the gateway scoping are the ones the seeded run used. The
+    second half checks the seed is what it claims: the opencode source is present
+    (a submodule that is not checked out compiles to a hollow baseline) and the
+    wrapper is a subclass of harbor's opencode runner rather than a reimplementation.
+    """
+    baseline = BENCHMARK_ROOT / benchmark / "baseline"
+    params = {"inner_env": "test"}
+    seeded = load_harbor_build_config(baseline / "build.yaml", params=params)
+    variant = load_harbor_build_config(baseline / "build.opencode.yaml", params=params)
+
+    assert variant.task_source == seeded.task_source
+    assert variant.agent_import_path == seeded.agent_import_path
+    assert variant.selection_partition == seeded.selection_partition
+    assert variant.model == seeded.model
+    for scope in ("evaluation", "finalization"):
+        assert getattr(variant.inference_gateway, scope).allowed_models == getattr(
+            seeded.inference_gateway, scope
+        ).allowed_models, f"{scope} scope drifted from the seeded {benchmark} config"
+
+    agent_repo = Path(variant.agent_repo)
+    assert agent_repo.name == "target-opencode"
+    assert (agent_repo / "opencode" / "package.json").is_file(), (
+        "the vendored opencode source is missing; run `git submodule update --init`"
+    )
+    assert (agent_repo / "opencode" / "packages" / "opencode" / "script" / "build.ts").is_file()
+    sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted((agent_repo / "src").rglob("*.py"))
+    )
+    assert "from harbor.agents.installed.opencode import OpenCode" in sources, (
+        "the wrapper must build on harbor's opencode runner so trajectories stay comparable"
+    )
+
+
 def test_every_build_pins_every_optimizer_harness():
     """A harness installed at trial start drifts unless the build names its release."""
     harnesses = {"claude-code", "codex", "opencode", "kimi-cli", "goose", "mini-swe-agent"}
