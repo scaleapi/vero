@@ -9,8 +9,11 @@ anywhere in the source is what gets evaluated.
 
 Inference goes through the OpenAI-compatible endpoint the environment provides
 (``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``): the target model is registered under
-opencode's ``openai`` provider with that base URL, and the bare model name is what
-the gateway allow-lists.
+opencode's ``openai`` provider with that base URL. Because the agent runs inside
+the task container, the build sets ``task_services_use_upstream`` so that endpoint
+is the public upstream proxy rather than the compose-internal metered gateway; the
+target model is therefore fixed by this wrapper, and its use is checked after the
+fact from the proxy's per-key request log.
 """
 
 from __future__ import annotations
@@ -42,11 +45,15 @@ def _bare_model(model_name: str) -> str:
 
 
 def _base_url() -> str | None:
-    return os.environ.get("VERO_AGENT_INFERENCE_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+    # opencode runs inside the task container, so it needs an endpoint the container
+    # can reach. Under `task_services_use_upstream` VeRO puts the public upstream in
+    # OPENAI_BASE_URL; the VERO_AGENT_INFERENCE_* gateway is compose-internal and is
+    # deliberately not used here.
+    return os.environ.get("OPENAI_BASE_URL")
 
 
 def _api_key() -> str | None:
-    return os.environ.get("VERO_AGENT_INFERENCE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+    return os.environ.get("OPENAI_API_KEY")
 
 
 class GaiaAgent(OpenCode):
@@ -90,22 +97,30 @@ class GaiaAgent(OpenCode):
 
     @override
     async def install(self, environment: BaseEnvironment) -> None:
-        # stdbuf for the run pipeline; no node/npm: the binary is self-contained.
-        await self.ensure_system_dependencies(environment, ("bash", "coreutils"))
+        # The run pipeline pipes through `stdbuf` (coreutils); most images have it.
+        # No node/npm: the binary is self-contained. harbor 0.20.0 (the sidecar's
+        # version) has no ensure_system_dependencies, so do it by hand.
+        await self.exec_as_root(
+            environment,
+            command=(
+                "command -v stdbuf >/dev/null 2>&1 || "
+                "(apt-get update -qq && apt-get install -y -qq coreutils) || "
+                "apk add --no-cache coreutils || true"
+            ),
+        )
         if GaiaAgent._build_lock is None:
             GaiaAgent._build_lock = asyncio.Lock()
         async with GaiaAgent._build_lock:
             binary = await asyncio.to_thread(_build.build_binary)
-        await environment.upload_file(binary, REMOTE_BINARY)
-        await self.exec_as_root(environment, command=f"chmod 755 {shlex.quote(REMOTE_BINARY)}")
+        staged = "/tmp/opencode.upload"
+        await environment.upload_file(binary, staged)
+        await self.exec_as_root(
+            environment,
+            command=f"mv {shlex.quote(staged)} {shlex.quote(REMOTE_BINARY)} && chmod 755 {shlex.quote(REMOTE_BINARY)}",
+        )
 
     @override
     async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        # The stock runner reads the key and base URL from the model connection;
-        # make sure the gateway pair is what reaches the container even when the
-        # host only exports the VERO_AGENT_INFERENCE_* names.
-        if _api_key() and not os.environ.get("OPENAI_API_KEY"):
-            os.environ["OPENAI_API_KEY"] = _api_key()  # type: ignore[arg-type]
-        if _base_url() and not os.environ.get("OPENAI_BASE_URL"):
-            os.environ["OPENAI_BASE_URL"] = _base_url()  # type: ignore[arg-type]
+        # The stock runner copies OPENAI_API_KEY / OPENAI_BASE_URL from this process
+        # into the container for the `openai` provider; nothing to remap.
         await super().run(ANSWER_FILE_INSTRUCTION + instruction, environment, context)

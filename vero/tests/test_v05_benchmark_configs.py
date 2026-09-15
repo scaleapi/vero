@@ -316,6 +316,13 @@ def test_opencode_variant_shares_the_measurement_substrate_and_vendors_the_sourc
             seeded.inference_gateway, scope
         ).allowed_models, f"{scope} scope drifted from the seeded {benchmark} config"
 
+    # The agent runs inside the task container, which cannot reach the compose-
+    # internal gateway; the build must hand the container the public upstream.
+    assert variant.task_services_use_upstream, (
+        "build.opencode.yaml must set task_services_use_upstream: an in-container "
+        "agent cannot reach the evaluation gateway"
+    )
+
     agent_repo = Path(variant.agent_repo)
     assert agent_repo.name == "target-opencode"
     assert (agent_repo / "opencode" / "package.json").is_file(), (

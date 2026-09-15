@@ -112,7 +112,15 @@ wandb:
 max_concurrency: 24
 error_rate_threshold: 0.1
 
-harness_user: harness
+# opencode runs inside the task container, which cannot reach the compose-internal
+# evaluation gateway. This hands the container the public upstream (OPENAI_*), as
+# task-owned services already get; the metered gateway stays on VERO_AGENT_INFERENCE_*
+# for in-process agents. Consequence: the target model is fixed by the wrapper, not by
+# the gateway allow-list, and its use is audited from the upstream per-key request log.
+task_services_use_upstream: true
+# Required by the flag above (as in browsecomp-plus): the isolated harness user
+# would otherwise see the raw upstream credential in its environment.
+harness_user: null
 agent_env:
   BASH_MAX_TIMEOUT_MS: "28800000"
   BASH_DEFAULT_TIMEOUT_MS: "28800000"
