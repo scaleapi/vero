@@ -123,7 +123,13 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
                 raise ValueError(f"unsafe path in Git archive: {member.name!r}")
             if member.issym() or member.islnk():
                 link = PurePosixPath(member.linkname)
-                if link.is_absolute() or ".." in link.parts:
+                # A relative link may climb, as long as it stays inside the archive
+                # root once resolved against its own directory (vendored trees link
+                # shared assets across packages that way). Absolute links and links
+                # that escape the root are rejected; filter="data" below enforces
+                # the same boundary at extraction time.
+                resolved = PurePosixPath(os.path.normpath(str(path.parent / link)))
+                if link.is_absolute() or resolved.is_absolute() or resolved.parts[:1] == ("..",):
                     raise ValueError(f"unsafe link in Git archive: {member.linkname!r}")
         # filter="data" strips device files / setuid bits and neutralizes unsafe
         # links, matching extract_harbor_session_archive's defensive posture.
