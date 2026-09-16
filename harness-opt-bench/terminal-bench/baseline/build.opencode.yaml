@@ -65,7 +65,7 @@ rescore_attempts: 1
 # optimization. See ../README.md for the benchmark-level results.
 model: grok-build-0.1
 environment_name: ${inner_env:?set inner_env to a Harbor environment}
-extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=14400"]
 harbor_python_version: "3.12"
 n_attempts: 1
 max_retries: 4
@@ -85,7 +85,7 @@ task_agent_timeout_seconds: 900
 timeout_seconds: 43200
 verifier_timeout_seconds: 64800
 optimizer_sandbox_timeout_seconds: 86400
-optimizer_sandbox_idle_timeout_seconds: 3600
+optimizer_sandbox_idle_timeout_seconds: 14400
 optimizer_agent_timeout_seconds: 72000
 optimizer_allow_internet: true
 optimizer_harness_versions:
