@@ -279,8 +279,11 @@ def main() -> int:
         workspace = outdir / "seed"
         if workspace.exists():
             shutil.rmtree(workspace)
+        # node_modules/dist are host build state, not part of the seed (the opencode
+        # targets carry a 2.8 GB install); the binary comes from VERO_OPENCODE_BINARY
+        # or is rebuilt on demand.
         shutil.copytree(origin, workspace, ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", ".venv", ".git"))
+            "__pycache__", "*.pyc", ".venv", ".git", "node_modules", "dist", ".turbo"))
         version = "seed"
         log(f"seed harness from {origin}")
     else:
