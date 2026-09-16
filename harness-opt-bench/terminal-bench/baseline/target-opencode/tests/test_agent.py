@@ -10,7 +10,7 @@ import pytest
 from harbor.agents.installed.opencode import OpenCode
 
 from terminal_bench_agent import _build
-from terminal_bench_agent.agent import TerminalBenchAgent, _bare_model
+from terminal_bench_agent.agent import WIRE_PROVIDER_ID, TerminalBenchAgent, _bare_model
 
 
 def test_agent_is_the_stock_opencode_runner_with_a_vendored_binary(tmp_path, monkeypatch):
@@ -18,11 +18,16 @@ def test_agent_is_the_stock_opencode_runner_with_a_vendored_binary(tmp_path, mon
     monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.test/v1")
     agent = TerminalBenchAgent(logs_dir=tmp_path / "logs", model_name="xai/grok-build-0.1")
     assert isinstance(agent, OpenCode)
-    # The gateway allow-lists the bare name; opencode sees it under the openai provider.
-    assert agent.model_name == "openai/grok-build-0.1"
-    provider = agent._opencode_config["provider"]["openai"]
+    # The gateway allow-lists the bare name; opencode sees it under a provider id it
+    # has no builtin (Responses-API-forcing) loader for.
+    assert agent.model_name == f"{WIRE_PROVIDER_ID}/grok-build-0.1"
+    provider = agent._opencode_config["provider"][WIRE_PROVIDER_ID]
     assert "grok-build-0.1" in provider["models"]
+    # The proxy's model_group for this model is registered under the
+    # vendor-prefixed form, not the bare name.
+    assert provider["models"]["grok-build-0.1"]["id"] == "xai/grok-build-0.1"
     assert provider["options"]["baseURL"] == "https://gateway.test/v1"
+    assert provider["options"]["apiKey"] == "test-key"
 
 
 def test_agent_requires_model(tmp_path):

@@ -8,12 +8,14 @@ host (see ``_build``) and uploads that binary into the task container, so an edi
 anywhere in the source is what gets evaluated.
 
 Inference goes through the OpenAI-compatible endpoint the environment provides
-(``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``): the target model is registered under
-opencode's ``openai`` provider with that base URL. Because the agent runs inside
-the task container, the build sets ``task_services_use_upstream`` so that endpoint
-is the public upstream proxy rather than the compose-internal metered gateway; the
-target model is therefore fixed by this wrapper, and its use is checked after the
-fact from the proxy's per-key request log.
+(``OPENAI_BASE_URL`` / ``OPENAI_API_KEY``). The target model is registered under
+a provider id opencode has no builtin loader for (see ``WIRE_PROVIDER_ID``) so it
+gets a plain Chat Completions client instead of one of opencode's vendor-specific
+loaders. Because the agent runs inside the task container, the build sets
+``task_services_use_upstream`` so that endpoint is the public upstream litellm
+proxy rather than the compose-internal metered gateway; the target model is
+therefore fixed by this wrapper, and its use is checked after the fact from the
+proxy's per-key request log.
 """
 
 from __future__ import annotations
@@ -25,7 +27,6 @@ from typing import Any, override
 
 from harbor.agents.installed.opencode import OpenCode
 from harbor.environments.base import BaseEnvironment
-from harbor.models.agent.context import AgentContext
 
 from terminal_bench_agent import _build
 
@@ -49,6 +50,33 @@ def _api_key() -> str | None:
     return os.environ.get("OPENAI_API_KEY")
 
 
+def _wire_model_id(bare: str) -> str:
+    """The model string actually sent to the upstream endpoint.
+
+    Harbor passes the bare name (``grok-build-0.1``) as ``model_name``, but the
+    litellm proxy's model_group for it is registered under the vendor-prefixed
+    form (``xai/grok-build-0.1``); the bare name 401s ("key not allowed to
+    access model") and litellm's error for it misleadingly claims the key can
+    only reach a model_group named "default" - that group has no healthy
+    deployment and is a red herring. opencode's config lets a model declare a
+    separate wire id (``models.<key>.id``) while keeping ``bare`` as the
+    routing key everywhere else (CLI --model, prompt selection, logging), so
+    only the outgoing request string changes. Overridable for other envs.
+    """
+    return os.environ.get("VERO_OPENCODE_WIRE_MODEL_ID", f"xai/{bare}")
+
+
+# A provider id opencode has no special-cased behaviour for. opencode's builtin
+# "openai" provider loader unconditionally sends every request through the
+# Responses API (`sdk.responses(modelID)`, see provider/provider.ts), which the
+# upstream litellm proxy 400s on for this model/key ("no healthy deployments
+# for this model" at /v1/responses). Registering under a provider id opencode
+# doesn't recognize falls back to the plain @ai-sdk/openai-compatible client,
+# which talks Chat Completions instead - the endpoint the proxy actually has a
+# healthy deployment for.
+WIRE_PROVIDER_ID = "opencode-target"
+
+
 class TerminalBenchAgent(OpenCode):
     """opencode, built from this repository, as the Terminal-Bench agent."""
 
@@ -64,15 +92,23 @@ class TerminalBenchAgent(OpenCode):
         if model_name is None:
             raise ValueError("Terminal-Bench agent requires a Harbor model")
         bare = _bare_model(model_name)
-        # Register the model under the openai provider pointed at the gateway, so
-        # opencode neither consults models.dev for it nor talks to a vendor directly.
-        provider: dict[str, Any] = {"models": {bare: {}}}
+        wire_id = _wire_model_id(bare)
+        # Register the model under a provider id opencode has no builtin loader for
+        # (see WIRE_PROVIDER_ID), so opencode neither consults models.dev for it nor
+        # talks to a vendor directly, and defaults to a plain Chat Completions client.
+        model_config: dict[str, Any] = {"id": wire_id} if wire_id != bare else {}
+        provider: dict[str, Any] = {"npm": "@ai-sdk/openai-compatible", "models": {bare: model_config}}
+        options: dict[str, Any] = {}
         if _base_url():
-            provider["options"] = {"baseURL": _base_url()}
-        kwargs["model_name"] = f"openai/{bare}"
+            options["baseURL"] = _base_url()
+        if _api_key():
+            options["apiKey"] = _api_key()
+        if options:
+            provider["options"] = options
+        kwargs["model_name"] = f"{WIRE_PROVIDER_ID}/{bare}"
         kwargs.setdefault("opencode_config", {})
         kwargs["opencode_config"] = {
-            **{"provider": {"openai": provider}},
+            **{"provider": {WIRE_PROVIDER_ID: provider}},
             **kwargs["opencode_config"],
         }
         super().__init__(*args, **kwargs)
@@ -104,9 +140,3 @@ class TerminalBenchAgent(OpenCode):
             environment,
             command=f"mv {shlex.quote(staged)} {shlex.quote(REMOTE_BINARY)} && chmod 755 {shlex.quote(REMOTE_BINARY)}",
         )
-
-    @override
-    async def run(self, instruction: str, environment: BaseEnvironment, context: AgentContext) -> None:
-        # The stock runner copies OPENAI_API_KEY / OPENAI_BASE_URL from this process
-        # into the container for the `openai` provider; nothing to remap.
-        await super().run(instruction, environment, context)
