@@ -80,6 +80,9 @@ error_rate_threshold: 0.1
 verifier_timeout_seconds: 14400
 optimizer_sandbox_timeout_seconds: 86400
 optimizer_sandbox_idle_timeout_seconds: 14400
+# The vendored opencode image takes 10-23 min to start on Modal; the 1800 s default
+# timed out ~10 launches (EnvironmentStartTimeoutError).
+build_timeout_seconds: 5400
 optimizer_agent_timeout_seconds: 72000
 optimizer_allow_internet: true
 optimizer_harness_versions:
