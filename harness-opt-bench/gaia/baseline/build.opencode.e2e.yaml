@@ -1,0 +1,149 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
+name: vero/optimize-gaia-opencode-e2e
+description: >-
+  Improve opencode -- a full open-source coding agent, vendored as source under
+  opencode/ and compiled for each candidate -- as a GAIA agent, while preserving
+  the Harbor agent interface of the wrapper in src/. The target must answer
+  canonical GAIA tasks by writing the exact answer to /app/answer.txt; the wrapper
+  tells opencode so. Anything in the opencode source is editable: prompts, tools,
+  the agent loop, provider handling, defaults.
+agent_repo: target-opencode
+task_source: gaia/gaia@sha256:bbc356f476e0b70ba77da11a9be7d6345918d1e4a2daade0d6dfb82ee6f7b761
+task_manifest: ../partitions/manifest.json
+agent_import_path: gaia_agent.agent:GaiaAgent
+harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+vero_requirement: scaleapi-vero==0.6.0
+
+# E2E SMOKE VARIANT of build.opencode.yaml. Same seed, same target, same gateway
+# scopes; eight cases in total, tiny budgets, and a 25-minute agent clock so the
+# run reaches finalization quickly. It exists to prove the opencode seed end to end
+# (submodule snapshot, Bun build on the evaluation host, binary upload, run, session
+# archive), not to measure anything. Never report its score.
+partition_files:
+  development: ../partitions-e2e/development.json
+  validation: ../partitions-e2e/validation.json
+  test: ../partitions-e2e/test.json
+
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 6
+    total_cases: 12
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 1
+    total_runs: 6
+    total_cases: 18
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # TODO(seed-complexity): measure with rescore_candidate.py --seed --build-file
+    # build.opencode.yaml (K=3) and pin here before quoting deltas.
+    baseline_reward: 0.0
+    failure_value: 0.0
+    max_attempts: 1
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: gaia
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 1
+rescore_attempts: 1
+
+# GAIA includes image inputs, so the target must be multimodal. Keep this name
+# aligned with the exact value sent by the agent.
+model: gpt-5.4-mini
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 4
+retry_max_wait_seconds: 120
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+# This smoke variant intentionally uses shorter overall limits.
+timeout_seconds: 1800
+case_timeout_seconds: 600
+task_agent_timeout_seconds: 600
+max_concurrency: 24
+error_rate_threshold: 0.1
+verifier_timeout_seconds: 3600
+optimizer_sandbox_timeout_seconds: 14400
+optimizer_sandbox_idle_timeout_seconds: 1800
+# 25 minutes: long enough for the optimizer to build opencode once and run an
+# evaluation or two, short enough that Harbor hands over to the verifier within
+# the hour, which is the path this variant exists to exercise.
+optimizer_agent_timeout_seconds: 1500
+optimizer_allow_internet: true
+optimizer_harness_versions:
+  claude-code: 2.1.220
+  codex: 0.146.0
+  opencode: 1.18.11
+  kimi-cli: 1.49.0
+  goose: 1.45.0
+  mini-swe-agent: 2.4.6
+
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - MODAL_ENVIRONMENT
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+wandb:
+  project: harness-engineering-bench
+  group: gaia
+  name: ${wandb_run:-gaia-opencode-e2e}
+  tags: [gaia, opencode-seed, e2e-smoke]
+  log_traces: true
+
+# opencode runs inside the task container, which cannot reach the compose-internal
+# evaluation gateway. This hands the container the public upstream (OPENAI_*), as
+# task-owned services already get; the metered gateway stays on VERO_AGENT_INFERENCE_*
+# for in-process agents. Consequence: the target model is fixed by the wrapper, not by
+# the gateway allow-list, and its use is audited from the upstream per-key request log.
+task_services_use_upstream: true
+# Required by the flag above (as in browsecomp-plus): the isolated harness user
+# would otherwise see the raw upstream credential in its environment.
+harness_user: null
+agent_env:
+  BASH_MAX_TIMEOUT_MS: "3600000"
+  BASH_DEFAULT_TIMEOUT_MS: "3600000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 200000000  # 30 agent case-runs at most
+    max_concurrency: 64
+  finalization:
+    allowed_models: [gpt-5.4-mini]
+    max_requests: 200000
+    max_tokens: 2000000000  # 66 test cases x3 attempts + rescore headroom
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true

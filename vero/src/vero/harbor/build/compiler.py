@@ -123,7 +123,13 @@ def _safe_extract_tar(payload: bytes, destination: Path) -> None:
                 raise ValueError(f"unsafe path in Git archive: {member.name!r}")
             if member.issym() or member.islnk():
                 link = PurePosixPath(member.linkname)
-                if link.is_absolute() or ".." in link.parts:
+                # A relative link may climb, as long as it stays inside the archive
+                # root once resolved against its own directory (vendored trees link
+                # shared assets across packages that way). Absolute links and links
+                # that escape the root are rejected; filter="data" below enforces
+                # the same boundary at extraction time.
+                resolved = PurePosixPath(os.path.normpath(str(path.parent / link)))
+                if link.is_absolute() or resolved.is_absolute() or resolved.parts[:1] == ("..",):
                     raise ValueError(f"unsafe link in Git archive: {member.linkname!r}")
         # filter="data" strips device files / setuid bits and neutralizes unsafe
         # links, matching extract_harbor_session_archive's defensive posture.
@@ -161,6 +167,47 @@ def _with_extras(requirement: str, extras: str) -> str:
     return f"{name}[{extras}]=={version}"
 
 
+def _materialise_submodules(root: Path, relative: Path, destination: Path) -> None:
+    """Copy checked-out submodule trees that `git archive` left as empty dirs.
+
+    A submodule is a gitlink (mode 160000) in the superproject: `git archive`
+    emits it as an empty directory, so a seed that vendors a third-party harness
+    as a submodule would compile to a hollow baseline. Each gitlink under the
+    target is archived from the submodule's own checkout at its recorded HEAD,
+    which is the commit the superproject pins. An un-initialised submodule is an
+    error rather than a silent omission.
+    """
+    treeish = "HEAD" if str(relative) == "." else f"HEAD:{relative.as_posix()}"
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-r", "-z", treeish],
+        capture_output=True,
+    )
+    if listing.returncode != 0:
+        return
+    for entry in listing.stdout.split(b"\0"):
+        if not entry.startswith(b"160000 "):
+            continue
+        sub_path = entry.split(b"\t", 1)[1].decode("utf-8")
+        checkout = root / relative / sub_path if str(relative) != "." else root / sub_path
+        if not (checkout / ".git").exists():
+            raise RuntimeError(
+                f"agent_repo contains submodule {sub_path!r} that is not checked out; "
+                "run `git submodule update --init --recursive` before compiling"
+            )
+        archived = subprocess.run(
+            ["git", "-C", str(checkout), "archive", "--format=tar", "HEAD"],
+            capture_output=True,
+        )
+        if archived.returncode != 0:
+            raise RuntimeError(
+                f"git archive of submodule {sub_path!r} failed: "
+                + archived.stderr.decode("utf-8", errors="replace").strip()
+            )
+        target = destination / sub_path
+        target.mkdir(parents=True, exist_ok=True)
+        _safe_extract_tar(archived.stdout, target)
+
+
 #: Every compiled baseline commit is stamped with this instant, not the wall
 #: clock, so its hash is a function of the seed's contents only.
 BASELINE_COMMIT_DATE = "2000-01-01T00:00:00Z"
@@ -192,6 +239,7 @@ def _prepare_baseline_repo(
                 + archived.stderr.decode("utf-8", errors="replace").strip()
             )
         _safe_extract_tar(archived.stdout, destination)
+        _materialise_submodules(root, relative, destination)
     else:
         shutil.copytree(
             source,

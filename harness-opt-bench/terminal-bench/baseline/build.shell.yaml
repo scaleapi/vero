@@ -1,0 +1,146 @@
+# Field meanings and the shared rules are in ../../CONFIGURATION.md; comments here
+# cover only what is specific to this benchmark.
+name: vero/optimize-terminal-bench-shell
+description: >-
+  The program must solve Terminal-Bench 2.1 tasks: each task gives the agent a
+  Linux container and a goal, and the task's own tests grade the container's
+  final state. How it does that is yours to decide -- the approach, what the
+  agent can do, how it uses its environment, how many model calls it takes, and
+  when it stops. Preserve the Harbor agent interface and the class import path.
+instruction_template: instruction.shell.md.j2
+
+# Target model matches build.yaml. baseline_reward is zero by construction (see targets).
+
+agent_repo: target-shell
+task_source: terminal-bench/terminal-bench-2-1@sha256:7d7bdc1cbedad549fc1140404bd4dc45e5fd0ea7c4186773687d177ad3a0699a
+task_manifest: ../partitions/manifest.json
+agent_import_path: terminal_bench_agent.agent:TerminalBenchAgent
+harbor_requirement: ${harbor_requirement:-harbor[modal]==0.20.0}
+vero_requirement: scaleapi-vero==0.6.0
+
+partition_files:
+  development: ../partitions/development.json
+  validation: ../partitions/validation.json
+  test: ../partitions/test.json
+
+# total_cases = 4 full passes per partition (dev 17*4, validation 36*4).
+agent_access:
+  - partition: development
+    disclosure: full
+    expose_case_resources: true
+    total_runs: 100
+    total_cases: 68
+  - partition: validation
+    disclosure: aggregate
+    expose_case_resources: false
+    min_aggregate_cases: 5
+    total_runs: 100
+    total_cases: 144
+
+selection_partition: validation
+targets:
+  - partition: test
+    reward_key: reward
+    # Zero by construction, not by measurement: the skeleton runs no commands,
+    # so every task's tests grade an untouched container. Confirm with one
+    # baseline round before quoting deltas -- the number is a claim about the
+    # seed, not a measurement of it.
+    baseline_reward: 0.0
+    failure_value: 0.0
+    max_attempts: 1
+    n_attempts: 3
+    aggregate_attempts: mean
+
+evaluation_set_name: terminal-bench
+objective:
+  selector:
+    metric: score
+  direction: maximize
+reward_mode: submit  # agent picks; falls back to auto_best, then current version
+baseline_floor: false  # gates on validation while reward is on test; opt-in only
+score_baseline: false
+rescore_top_k: 3
+rescore_attempts: 1
+
+# Selected from a development-set probe for strong performance with room for
+# optimization. See ../README.md for the benchmark-level results.
+model: grok-build-0.1
+environment_name: ${inner_env:?set inner_env to a Harbor environment}
+extra_harbor_args: ["--ek", "app_name=harness-opt-bench", "--ek", "sandbox_idle_timeout_secs=3600"]
+harbor_python_version: "3.12"
+n_attempts: 1
+max_retries: 4
+retry_max_wait_seconds: 120
+infrastructure_max_attempts: 3
+infrastructure_retry_delay_seconds: 5
+aggregate_attempts: best
+feedback_transcripts: true
+feedback_max_bytes: 16000
+expose_attempt_detail: false
+
+# Equal values preserve each task's own declared timeout through Harbor's ratio.
+case_timeout_seconds: 900
+task_agent_timeout_seconds: 900
+
+# Above the 36,000-second worst case at the configured concurrency.
+timeout_seconds: 43200
+verifier_timeout_seconds: 64800
+optimizer_sandbox_timeout_seconds: 86400
+optimizer_sandbox_idle_timeout_seconds: 3600
+optimizer_agent_timeout_seconds: 72000
+optimizer_allow_internet: true
+optimizer_harness_versions:
+  claude-code: 2.1.220
+  codex: 0.146.0
+  opencode: 1.18.10
+  kimi-cli: 1.49.0
+  goose: 1.45.0
+  mini-swe-agent: 2.4.6
+
+secrets:
+  - MODAL_TOKEN_ID
+  - MODAL_TOKEN_SECRET
+  - MODAL_ENVIRONMENT
+  - WANDB_API_KEY
+  - WANDB_BASE_URL
+
+wandb:
+  project: harness-engineering-bench
+  group: terminal-bench
+  name: ${wandb_run:-terminal-bench-shell}
+  tags: [terminal-bench, shell-seed]
+  log_traces: true
+max_concurrency: 24
+error_rate_threshold: 0.1
+
+harness_user: harness
+agent_env:
+  BASH_MAX_TIMEOUT_MS: "28800000"
+  BASH_DEFAULT_TIMEOUT_MS: "28800000"
+  ENABLE_BACKGROUND_TASKS: "0"
+  FORCE_AUTO_BACKGROUND_TASKS: "0"
+  UV_TOOL_BIN_DIR: "/home/agent/.local/bin"
+
+inference_gateway:
+  upstream_api_key_env: OPENAI_API_KEY
+  upstream_base_url_env: OPENAI_BASE_URL
+  request_log_attribution: true
+  producer:
+    allowed_models: ["${optimizer_model:-gpt-5.4}"]
+    max_concurrency: 8
+  evaluation:
+    allowed_models: [grok-build-0.1]
+    model_aliases:
+      grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
+    max_requests: 200000
+    max_tokens: 1200000000
+    max_concurrency: 64
+  finalization:
+    allowed_models: [grok-build-0.1]
+    model_aliases:
+      grok-build-0.1: ${target_model_route:-xai/grok-build-0.1}
+    max_requests: 200000
+    max_tokens: 1100000000
+    max_concurrency: 64
+instruct_multifidelity: true
+instruct_exhaust_budget: true

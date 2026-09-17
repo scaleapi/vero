@@ -1,3 +1,9 @@
 [submodule "browsecomp-plus-upstream"]
 	path = harness-opt-bench/browsecomp-plus/upstream
 	url = https://github.com/texttron/BrowseComp-Plus.git
+[submodule "opencode-terminal-bench"]
+	path = harness-opt-bench/terminal-bench/baseline/target-opencode/opencode
+	url = https://github.com/anomalyco/opencode
+[submodule "opencode-gaia"]
+	path = harness-opt-bench/gaia/baseline/target-opencode/opencode
+	url = https://github.com/anomalyco/opencode

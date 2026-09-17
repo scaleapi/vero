@@ -48,10 +48,10 @@ def log(message: str) -> None:
     print(f"[rescore] {message}", flush=True)
 
 
-def load_build(benchmark: str) -> tuple[dict, Path]:
+def load_build(benchmark: str, build_file: str = "build.yaml") -> tuple[dict, Path]:
     import yaml  # provided by the vero environment
 
-    path = BENCH_ROOT / benchmark / "baseline" / "build.yaml"
+    path = BENCH_ROOT / benchmark / "baseline" / build_file
     if not path.is_file():
         sys.exit(f"no build.yaml for benchmark {benchmark!r} at {path}")
     return yaml.safe_load(path.read_text()), path
@@ -164,6 +164,8 @@ def harbor_command(
     concurrency: int,
     model: str,
     params: dict[str, str],
+    agent_env: list[str] | None = None,
+    agent_setup_timeout_multiplier: float | None = None,
 ) -> list[str]:
     """Mirror vero/src/vero/harbor/backend.py::_command and the baseline runs.
 
@@ -183,7 +185,8 @@ def harbor_command(
         "--python", str(build.get("harbor_python_version", "3.12")),
         "--no-config", "--no-env-file",
         "--project", str(workspace),
-        "--with", build.get("harbor_requirement", "harbor==0.20.0"),
+        # resolve the `${harbor_requirement:-...}` placeholder the September builds use
+        "--with", resolve_param(str(build.get("harbor_requirement", "harbor==0.20.0")), params),
         "harbor", "run", "--yes",
         *source_args,
         "--agent-import-path", build["agent_import_path"],
@@ -195,6 +198,13 @@ def harbor_command(
     ]
     for task in tasks:
         command.extend(["-i", task])
+    # agent-container env (harbor --ae NAME=VALUE); e.g. the BrowseComp-Plus agent
+    # insists on VERO_AGENT_INFERENCE_* and refuses to fall back to OPENAI_*.
+    for kv in agent_env or []:
+        command.extend(["--ae", kv])
+    # setup-only (install/upload) budget; the agent execution timeout stays at 1.0
+    if agent_setup_timeout_multiplier is not None:
+        command.extend(["--agent-setup-timeout-multiplier", str(agent_setup_timeout_multiplier)])
     command.extend(str(a) for a in build.get("extra_harbor_args", []))
     return command
 
@@ -233,6 +243,8 @@ def main() -> int:
         ),
     )
     parser.add_argument("--benchmark", required=True)
+    parser.add_argument("--build-file", default="build.yaml",
+                        help="build yaml under <benchmark>/baseline/ (e.g. build.routed.yaml)")
     parser.add_argument("--version", help="candidate sha (default: the shipped one)")
     parser.add_argument("--partition", default="test")
     parser.add_argument(
@@ -250,12 +262,17 @@ def main() -> int:
     parser.add_argument("--concurrency", type=int, default=24)
     parser.add_argument("--param", action="append", default=[], metavar="NAME=VALUE",
                         help="build parameter, e.g. inner_env=modal (repeatable)")
+    parser.add_argument("--agent-env", action="append", default=[], metavar="NAME=VALUE",
+                        help="extra env for the agent container (harbor --ae); repeatable")
+    parser.add_argument("--agent-setup-timeout-multiplier", type=float,
+                        help="harbor --agent-setup-timeout-multiplier (default 1.0 = 360 s); "
+                             "raise it when the agent uploads a large binary from this host")
     parser.add_argument("--output", help="output dir (default: a temp dir)")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     params = dict(item.split("=", 1) for item in args.param)
 
-    build, build_path = load_build(args.benchmark)
+    build, build_path = load_build(args.benchmark, args.build_file)
     outdir = Path(args.output).resolve() if args.output else Path(
         tempfile.mkdtemp(prefix=f"rescore-{args.benchmark}-"))
     outdir.mkdir(parents=True, exist_ok=True)
@@ -269,8 +286,11 @@ def main() -> int:
         workspace = outdir / "seed"
         if workspace.exists():
             shutil.rmtree(workspace)
+        # node_modules/dist are host build state, not part of the seed (the opencode
+        # targets carry a 2.8 GB install); the binary comes from VERO_OPENCODE_BINARY
+        # or is rebuilt on demand.
         shutil.copytree(origin, workspace, ignore=shutil.ignore_patterns(
-            "__pycache__", "*.pyc", ".venv", ".git"))
+            "__pycache__", "*.pyc", ".venv", ".git", "node_modules", "dist", ".turbo"))
         version = "seed"
         log(f"seed harness from {origin}")
     else:
@@ -313,6 +333,8 @@ def main() -> int:
             build=build, build_path=build_path, workspace=workspace, tasks=tasks,
             jobs_dir=jobs_dir, attempts=args.attempts, concurrency=args.concurrency,
             model=routed_model(build, args.model or build["model"], params),
+            agent_env=args.agent_env,
+            agent_setup_timeout_multiplier=args.agent_setup_timeout_multiplier,
             params=params,
         )
         if args.dry_run:

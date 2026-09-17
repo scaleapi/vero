@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+opencode/node_modules/
+opencode/**/node_modules/
+opencode/**/dist/
