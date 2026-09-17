@@ -38,6 +38,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The opencode seeds vendor anomalyco/opencode as submodules and a config
+      # test checks the source is really there (an unpopulated submodule compiles
+      # to a hollow seed). Shallow, and only these two: the BrowseComp-Plus
+      # upstream corpus is not read by any test.
+      - name: Check out the vendored opencode source
+        run: |
+          git submodule update --init --depth 1 \
+            harness-opt-bench/terminal-bench/baseline/target-opencode/opencode \
+            harness-opt-bench/gaia/baseline/target-opencode/opencode
+
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh

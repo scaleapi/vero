@@ -18,6 +18,7 @@ between fields, not what today's values happen to be.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,8 @@ import yaml
 from vero.harbor import load_harbor_build_config
 
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "harness-opt-bench"
+# anomalyco/opencode commit both seeds vendor (see .gitmodules and the seed READMEs).
+OPENCODE_PIN = "e03db9bc6908f75c9334d8aa997deeaac81c0298"
 
 BENCHMARKS = [
     "gaia",
@@ -325,9 +328,17 @@ def test_opencode_variant_shares_the_measurement_substrate_and_vendors_the_sourc
 
     agent_repo = Path(variant.agent_repo)
     assert agent_repo.name == "target-opencode"
-    assert (agent_repo / "opencode" / "package.json").is_file(), (
-        "the vendored opencode source is missing; run `git submodule update --init`"
-    )
+    # The pin is what the repository guarantees: a gitlink at the vendored commit.
+    # Whether the tree is populated depends on the checkout (CI initialises it;
+    # a plain clone does not), so the file checks skip rather than fail there.
+    gitlink = subprocess.run(
+        ["git", "ls-files", "-s", "--", str(agent_repo / "opencode")],
+        cwd=agent_repo, capture_output=True, text=True, check=True,
+    ).stdout.split()
+    assert gitlink[:1] == ["160000"], "opencode must be registered as a git submodule"
+    assert gitlink[1] == OPENCODE_PIN, f"opencode submodule drifted from the pinned commit {OPENCODE_PIN}"
+    if not (agent_repo / "opencode" / "package.json").is_file():
+        pytest.skip("vendored opencode source not checked out; run `git submodule update --init`")
     assert (agent_repo / "opencode" / "packages" / "opencode" / "script" / "build.ts").is_file()
     sources = "\n".join(
         path.read_text(encoding="utf-8") for path in sorted((agent_repo / "src").rglob("*.py"))
